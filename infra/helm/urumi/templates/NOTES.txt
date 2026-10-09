@@ -1,0 +1,4 @@
+This chart is an intentionally empty Day 1 skeleton.
+On Day 2 add the MariaDB, WordPress and WooCommerce resources.
+On later days add the gateway, dashboard, MCP services and MongoDB.
+Do not claim the chart deploys the stack yet.

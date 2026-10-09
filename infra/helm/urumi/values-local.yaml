@@ -1,0 +1,6 @@
+global:
+  environment: local
+  dashboardHost: dashboard.localhost
+  storeHost: store.localhost
+  gatewayHost: gateway.localhost
+  storageClassName: standard

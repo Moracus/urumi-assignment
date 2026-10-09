@@ -1,0 +1,12 @@
+global:
+  environment: local
+  ingressClassName: nginx
+  storageClassName: standard
+  dashboardHost: dashboard.localhost
+  storeHost: store.localhost
+  gatewayHost: gateway.localhost
+images:
+  gateway: urumi/gateway:dev
+  dashboard: urumi/dashboard:dev
+# Actual Deployment/Service/Ingress/PVC/Secret templates will be added with each workload.
+# Never put raw credentials in values files.
