@@ -8,5 +8,49 @@ global:
 images:
   gateway: urumi/gateway:dev
   dashboard: urumi/dashboard:dev
-# Actual Deployment/Service/Ingress/PVC/Secret templates will be added with each workload.
+mariadb:
+  enabled: true
+
+  image:
+    repository: mariadb
+    tag: "11.4"
+
+  database: wordpress
+  username: wordpress
+
+  secretName: urumi-db-secret
+
+  storage:
+    size: 5Gi
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 768Mi
+wordpress:
+  enabled: true
+
+  image:
+    repository: wordpress
+    tag: "php8.3-apache"
+
+  database:
+    host: urumi-mariadb
+    name: wordpress
+    user: wordpress
+    secretName: urumi-db-secret
+
+  storage:
+    size: 5Gi
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 768Mi
 # Never put raw credentials in values files.

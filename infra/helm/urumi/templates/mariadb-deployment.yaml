@@ -1,0 +1,92 @@
+{{- if .Values.mariadb.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: urumi-mariadb
+
+spec:
+  replicas: 1
+
+  strategy:
+    type: Recreate
+
+  selector:
+    matchLabels:
+      app: urumi-mariadb
+
+  template:
+    metadata:
+      labels:
+        app: urumi-mariadb
+
+    spec:
+      containers:
+        - name: mariadb
+
+          image: "{{ .Values.mariadb.image.repository }}:{{ .Values.mariadb.image.tag }}"
+
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - name: mysql
+              containerPort: 3306
+
+          env:
+            - name: MARIADB_DATABASE
+              value: {{ .Values.mariadb.database | quote }}
+
+            - name: MARIADB_USER
+              value: {{ .Values.mariadb.username | quote }}
+
+            - name: MARIADB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.mariadb.secretName }}
+                  key: database-password
+
+            - name: MARIADB_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.mariadb.secretName }}
+                  key: root-password
+
+          volumeMounts:
+            - name: mariadb-storage
+              mountPath: /var/lib/mysql
+
+          resources:
+            {{- toYaml .Values.mariadb.resources | nindent 12 }}
+
+          startupProbe:
+            exec:
+              command:
+                - healthcheck.sh
+                - --connect
+                - --innodb_initialized
+            periodSeconds: 10
+            failureThreshold: 30
+
+          readinessProbe:
+            exec:
+              command:
+                - healthcheck.sh
+                - --connect
+                - --innodb_initialized
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          livenessProbe:
+            exec:
+              command:
+                - healthcheck.sh
+                - --connect
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+      volumes:
+        - name: mariadb-storage
+          persistentVolumeClaim:
+            claimName: urumi-mariadb-pvc
+{{- end }}

@@ -1,0 +1,17 @@
+{{- if .Values.wordpress.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+
+metadata:
+  name: urumi-wordpress-pvc
+
+spec:
+  accessModes:
+    - ReadWriteOnce
+
+  storageClassName: {{ .Values.global.storageClassName | quote }}
+
+  resources:
+    requests:
+      storage: {{ .Values.wordpress.storage.size }}
+{{- end }}

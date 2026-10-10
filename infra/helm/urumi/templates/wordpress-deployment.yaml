@@ -1,0 +1,86 @@
+{{- if .Values.wordpress.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+
+metadata:
+  name: urumi-wordpress
+
+spec:
+  replicas: 1
+
+  strategy:
+    type: Recreate
+
+  selector:
+    matchLabels:
+      app: urumi-wordpress
+
+  template:
+    metadata:
+      labels:
+        app: urumi-wordpress
+
+    spec:
+      containers:
+        - name: wordpress
+
+          image: "{{ .Values.wordpress.image.repository }}:{{ .Values.wordpress.image.tag }}"
+
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - name: http
+              containerPort: 80
+
+          env:
+            - name: WORDPRESS_DB_HOST
+              value: {{ .Values.wordpress.database.host | quote }}
+
+            - name: WORDPRESS_DB_NAME
+              value: {{ .Values.wordpress.database.name | quote }}
+
+            - name: WORDPRESS_DB_USER
+              value: {{ .Values.wordpress.database.user | quote }}
+
+            - name: WORDPRESS_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.wordpress.database.secretName }}
+                  key: database-password
+
+          volumeMounts:
+            - name: wordpress-storage
+              mountPath: /var/www/html
+
+          resources:
+            {{- toYaml .Values.wordpress.resources | nindent 12 }}
+
+          startupProbe:
+            httpGet:
+              path: /wp-includes/css/dashicons.min.css
+              port: 80
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 30
+
+          readinessProbe:
+            httpGet:
+             path: /wp-includes/css/dashicons.min.css
+             port: 80
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          livenessProbe:
+            tcpSocket:
+              port: 80
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+      volumes:
+        - name: wordpress-storage
+          persistentVolumeClaim:
+            claimName: urumi-wordpress-pvc
+
+{{- end }}
