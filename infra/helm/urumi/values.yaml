@@ -53,4 +53,29 @@ wordpress:
     limits:
       cpu: 500m
       memory: 768Mi
+
+woocommerceMcp:
+  enabled: true
+
+  image:
+    repository: urumi/woocommerce-mcp
+    tag: dev
+    pullPolicy: IfNotPresent
+
+  port: 3001
+
+  secretName: urumi-woocommerce-api
+
+  wordpressUrl: http://localhost:8080
+  wordpressInternalUrl: http://urumi-wordpress
+
+  allowedHosts: "localhost,127.0.0.1,urumi-woocommerce-mcp,urumi-woocommerce-mcp.urumi.svc.cluster.local"
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
 # Never put raw credentials in values files.

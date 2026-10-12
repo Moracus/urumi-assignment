@@ -1,0 +1,19 @@
+{{- if .Values.woocommerceMcp.enabled }}
+apiVersion: v1
+kind: Service
+
+metadata:
+  name: urumi-woocommerce-mcp
+
+spec:
+  type: ClusterIP
+
+  selector:
+    app: urumi-woocommerce-mcp
+
+  ports:
+    - name: http
+      port: {{ .Values.woocommerceMcp.port }}
+      targetPort: http
+
+{{- end }}

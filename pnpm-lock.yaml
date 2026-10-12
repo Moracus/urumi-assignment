@@ -278,6 +278,9 @@ importers:
 
   apps/woocommerce-mcp:
     dependencies:
+      '@modelcontextprotocol/fastify':
+        specifier: ^2.0.1
+        version: 2.0.1(@modelcontextprotocol/server@2.3.1)(fastify@5.12.5)
       '@modelcontextprotocol/node':
         specifier: ^2.0.0
         version: 2.1.1(@modelcontextprotocol/server@2.3.1)
@@ -591,6 +594,13 @@ packages:
   '@modelcontextprotocol/core@2.3.1':
     resolution: {integrity: sha512-laVmIhPGpWi7rG9q+0UigblRN0Hws/Yjlb6qLFtVqryXVLkc4h+yN8z731POD2LnAGQlFe7/tXhUm7Bi0YB91g==}
     engines: {node: '>=20'}
+
+  '@modelcontextprotocol/fastify@2.0.1':
+    resolution: {integrity: sha512-tqfYC5zV7c5lu+B8NtXSzD2yyjF0ABJNCQi6cTI++cOVB6pCWPBiJuzICEfCFhLhZViyVeikWhcm0p0DjSKSwg==}
+    engines: {node: '>=20'}
+    peerDependencies:
+      '@modelcontextprotocol/server': ^2.3.0
+      fastify: ^5.2.0
 
   '@modelcontextprotocol/node@2.1.1':
     resolution: {integrity: sha512-EY92OAXN2xYL7tNS/MVsWJW1v8VHAPwl9B4Ca3pCrjmvqyC+S1C/6UHsMxF2GoFPraS5Yyg56vFz9brVpFojMA==}
@@ -1493,6 +1503,11 @@ snapshots:
   '@modelcontextprotocol/core@2.3.1':
     dependencies:
       zod: 4.6.5
+
+  '@modelcontextprotocol/fastify@2.0.1(@modelcontextprotocol/server@2.3.1)(fastify@5.12.5)':
+    dependencies:
+      '@modelcontextprotocol/server': 2.3.1
+      fastify: 5.12.5
 
   '@modelcontextprotocol/node@2.1.1(@modelcontextprotocol/server@2.3.1)':
     dependencies:
