@@ -78,4 +78,44 @@ woocommerceMcp:
     limits:
       cpu: 500m
       memory: 512Mi
+
+calculatorMcp:
+  enabled: true
+
+  image:
+    repository: urumi/calculator-mcp
+    tag: dev
+    pullPolicy: IfNotPresent
+
+  port: 3002
+
+  allowedHosts: "localhost,127.0.0.1,urumi-calculator-mcp,urumi-calculator-mcp.urumi.svc.cluster.local"
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
+
+timeMcp:
+  enabled: true
+
+  image:
+    repository: urumi/time-mcp
+    tag: dev
+    pullPolicy: IfNotPresent
+
+  port: 3003
+
+  allowedHosts: "localhost,127.0.0.1,urumi-time-mcp,urumi-time-mcp.urumi.svc.cluster.local"
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 250m
+      memory: 256Mi
 # Never put raw credentials in values files.

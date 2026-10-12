@@ -1,0 +1,81 @@
+{{- if .Values.timeMcp.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+
+metadata:
+  name: urumi-time-mcp
+
+spec:
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: urumi-time-mcp
+
+  template:
+    metadata:
+      labels:
+        app: urumi-time-mcp
+
+    spec:
+      containers:
+        - name: time-mcp
+
+          image: "{{ .Values.timeMcp.image.repository }}:{{ .Values.timeMcp.image.tag }}"
+
+          imagePullPolicy: {{ .Values.timeMcp.image.pullPolicy }}
+
+          ports:
+            - name: http
+              containerPort: {{ .Values.timeMcp.port }}
+
+          env:
+            - name: NODE_ENV
+              value: "production"
+
+            - name: PORT
+              value: {{ .Values.timeMcp.port | quote }}
+
+            - name: HOST
+              value: "0.0.0.0"
+
+            - name: MCP_ALLOWED_HOSTS
+              value: {{ .Values.timeMcp.allowedHosts | quote }}
+
+          resources:
+            {{- toYaml .Values.timeMcp.resources | nindent 12 }}
+
+          startupProbe:
+            httpGet:
+              path: /health/live
+              port: http
+              httpHeaders:
+                - name: Host
+                  value: urumi-time-mcp
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 24
+
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+              httpHeaders:
+                - name: Host
+                  value: urumi-time-mcp
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: http
+              httpHeaders:
+                - name: Host
+                  value: urumi-time-mcp
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+{{- end }}

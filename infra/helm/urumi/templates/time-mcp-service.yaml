@@ -1,0 +1,19 @@
+{{- if .Values.timeMcp.enabled }}
+apiVersion: v1
+kind: Service
+
+metadata:
+  name: urumi-time-mcp
+
+spec:
+  type: ClusterIP
+
+  selector:
+    app: urumi-time-mcp
+
+  ports:
+    - name: http
+      port: {{ .Values.timeMcp.port }}
+      targetPort: http
+
+{{- end }}

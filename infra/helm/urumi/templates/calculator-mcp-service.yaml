@@ -1,0 +1,19 @@
+{{- if .Values.calculatorMcp.enabled }}
+apiVersion: v1
+kind: Service
+
+metadata:
+  name: urumi-calculator-mcp
+
+spec:
+  type: ClusterIP
+
+  selector:
+    app: urumi-calculator-mcp
+
+  ports:
+    - name: http
+      port: {{ .Values.calculatorMcp.port }}
+      targetPort: http
+
+{{- end }}

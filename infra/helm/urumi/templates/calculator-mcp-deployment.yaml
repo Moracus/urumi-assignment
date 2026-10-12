@@ -1,0 +1,81 @@
+{{- if .Values.calculatorMcp.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+
+metadata:
+  name: urumi-calculator-mcp
+
+spec:
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: urumi-calculator-mcp
+
+  template:
+    metadata:
+      labels:
+        app: urumi-calculator-mcp
+
+    spec:
+      containers:
+        - name: calculator-mcp
+
+          image: "{{ .Values.calculatorMcp.image.repository }}:{{ .Values.calculatorMcp.image.tag }}"
+
+          imagePullPolicy: {{ .Values.calculatorMcp.image.pullPolicy }}
+
+          ports:
+            - name: http
+              containerPort: {{ .Values.calculatorMcp.port }}
+
+          env:
+            - name: NODE_ENV
+              value: "production"
+
+            - name: PORT
+              value: {{ .Values.calculatorMcp.port | quote }}
+
+            - name: HOST
+              value: "0.0.0.0"
+
+            - name: MCP_ALLOWED_HOSTS
+              value: {{ .Values.calculatorMcp.allowedHosts | quote }}
+
+          resources:
+            {{- toYaml .Values.calculatorMcp.resources | nindent 12 }}
+
+          startupProbe:
+            httpGet:
+              path: /health/live
+              port: http
+              httpHeaders:
+                - name: Host
+                  value: urumi-calculator-mcp
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 24
+
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+              httpHeaders:
+                - name: Host
+                  value: urumi-calculator-mcp
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: http
+              httpHeaders:
+                - name: Host
+                  value: urumi-calculator-mcp
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+{{- end }}
