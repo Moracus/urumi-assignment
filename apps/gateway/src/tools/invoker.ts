@@ -4,7 +4,9 @@ import type {
   UpstreamInvoker,
 } from "../execution/types.js";
 
-import type { UpstreamRegistry } from "../upstream/registry.js";
+import type {
+  UpstreamRegistry,
+} from "../upstream/registry.js";
 
 import {
   UpstreamUnavailableError,
@@ -12,48 +14,65 @@ import {
   UpstreamCallError,
 } from "./errors.js";
 
-export class McpUpstreamInvoker implements UpstreamInvoker {
-  constructor(private readonly registry: UpstreamRegistry) {}
+export class McpUpstreamInvoker
+  implements UpstreamInvoker {
+
+  constructor(
+    private readonly registry: UpstreamRegistry,
+  ) {}
 
   async invoke(
     tool: ResolvedTool,
     args: Record<string, unknown>,
   ): Promise<ToolExecutionResult> {
-    const upstream = this.registry.getState(tool.upstreamName);
+    const upstream = this.registry.getState(
+      tool.upstreamName,
+    );
 
-    // Never invoke a disabled or disconnected server.
     if (
       !upstream ||
       !upstream.config.enabled ||
       upstream.status !== "connected"
     ) {
-      throw new UpstreamUnavailableError(tool.upstreamName);
+      throw new UpstreamUnavailableError(
+        tool.upstreamName,
+      );
     }
 
-    const client = this.registry.getClient(tool.upstreamName);
+    const client = this.registry.getClient(
+      tool.upstreamName,
+    );
 
     if (!client) {
-      throw new UpstreamUnavailableError(tool.upstreamName);
+      throw new UpstreamUnavailableError(
+        tool.upstreamName,
+      );
     }
 
-    // Defense in depth: confirm the discovered upstream
-    // actually provides the requested original tool.
+    const expectedPublicName =
+      `${tool.upstreamName}.${tool.upstreamToolName}`;
+
+    if (tool.publicName !== expectedPublicName) {
+      throw new UpstreamCallError(
+        tool.upstreamName,
+      );
+    }
+
     const toolExists = upstream.tools.some(
-      (registeredTool) => registeredTool.name === tool.upstreamToolName,
+      (registeredTool) =>
+        registeredTool.name === tool.upstreamToolName,
     );
 
     if (!toolExists) {
-      throw new UpstreamCallError(tool.upstreamName);
+      throw new UpstreamCallError(
+        tool.upstreamName,
+      );
     }
 
-    const expectedPublicName = `${tool.upstreamName}.${tool.upstreamToolName}`;
-
-    if (tool.publicName !== expectedPublicName) {
-      throw new UpstreamCallError(tool.upstreamName);
-    }
+    let result: unknown;
 
     try {
-      const result = await client.callTool(
+      result = await client.callTool(
         {
           name: tool.upstreamToolName,
           arguments: args,
@@ -62,26 +81,63 @@ export class McpUpstreamInvoker implements UpstreamInvoker {
           timeout: 10_000,
         },
       );
-
-      // The MCP client may return either tool content or
-      // a result object that includes additional fields.
-      // Preserve the upstream MCP result without converting
-      // successful tool errors into transport exceptions.
-      if (!result || !("content" in result) || !Array.isArray(result.content)) {
-        throw new Error("Invalid MCP tool result");
-      }
-
-      return result as ToolExecutionResult;
     } catch (error) {
-      if (
+      const timedOut =
         error instanceof Error &&
-        (error.name === "TimeoutError" ||
-          /timed out|timeout/i.test(error.message))
-      ) {
-        throw new UpstreamTimeoutError(tool.upstreamName);
+        (
+          error.name === "TimeoutError" ||
+          /timed out|timeout/i.test(error.message)
+        );
+
+      // The connection might be unhealthy.
+      // Use a generic reason rather than logging
+      // the original exception or internal URL.
+      await this.registry.markUnreachable(
+        tool.upstreamName,
+        timedOut
+          ? "Tool request timed out"
+          : "MCP request failed",
+        client,
+      );
+
+      if (timedOut) {
+        throw new UpstreamTimeoutError(
+          tool.upstreamName,
+        );
       }
 
-      throw new UpstreamCallError(tool.upstreamName);
+      throw new UpstreamCallError(
+        tool.upstreamName,
+      );
     }
+
+    // Validate the MCP response structure.
+    if (
+      !result ||
+      typeof result !== "object" ||
+      !("content" in result) ||
+      !Array.isArray(result.content) ||
+      !result.content.every(
+        (item) =>
+          item !== null &&
+          typeof item === "object" &&
+          "type" in item &&
+          typeof item.type === "string"
+      )
+    ) {
+      await this.registry.markUnreachable(
+        tool.upstreamName,
+        "Invalid MCP response",
+        client,
+      );
+
+      throw new UpstreamCallError(
+        tool.upstreamName,
+      );
+    }
+
+    // Preserve the successful MCP protocol result,
+    // including isError and structuredContent.
+    return result as ToolExecutionResult;
   }
 }

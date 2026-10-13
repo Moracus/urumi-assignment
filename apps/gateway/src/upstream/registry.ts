@@ -17,6 +17,9 @@ export class UpstreamRegistry {
 
   private refreshTimer: ReturnType<typeof setInterval> | null = null;
 
+  private maintenance = new Map<string, Promise<void>>();
+  private refreshRunning = false;
+
   register(config: UpstreamConfig): void {
     if (this.upstreams.has(config.name)) {
       throw new Error(`Upstream already registered: ${config.name}`);
@@ -46,6 +49,25 @@ export class UpstreamRegistry {
     });
   }
 
+  private async runMaintenance(
+    name: string,
+    operation: () => Promise<void>,
+  ): Promise<void> {
+    const previous = this.maintenance.get(name) ?? Promise.resolve();
+
+    const current = previous.catch(() => {}).then(operation);
+
+    this.maintenance.set(name, current);
+
+    try {
+      await current;
+    } finally {
+      if (this.maintenance.get(name) === current) {
+        this.maintenance.delete(name);
+      }
+    }
+  }
+
   private async closeConnection(name: string): Promise<void> {
     const connection = this.connections.get(name);
 
@@ -63,21 +85,7 @@ export class UpstreamRegistry {
   }
 
   async connect(name: string): Promise<void> {
-    const existing = this.inFlight.get(name);
-
-    if (existing) {
-      return existing;
-    }
-
-    const task = this.connectInternal(name);
-
-    this.inFlight.set(name, task);
-
-    try {
-      await task;
-    } finally {
-      this.inFlight.delete(name);
-    }
+    return this.runMaintenance(name, () => this.connectInternal(name));
   }
 
   private async connectInternal(name: string): Promise<void> {
@@ -141,7 +149,7 @@ export class UpstreamRegistry {
     }
   }
 
-  async refresh(name: string): Promise<void> {
+  private async refreshInternal(name: string): Promise<void> {
     const state = this.upstreams.get(name);
 
     if (!state || !state.config.enabled) {
@@ -149,12 +157,14 @@ export class UpstreamRegistry {
     }
 
     if (state.status !== "connected" || !state.client) {
-      await this.connect(name);
+      await this.connectInternal(name);
       return;
     }
 
     try {
-      const result = await state.client.listTools();
+      const result = await state.client.listTools(undefined, {
+        timeout: 5_000,
+      });
 
       state.tools = result.tools.map((tool) => ({
         name: tool.name,
@@ -184,8 +194,33 @@ export class UpstreamRegistry {
 
   async refreshAll(): Promise<void> {
     await Promise.allSettled(
-      [...this.upstreams.keys()].map((name) => this.refresh(name)),
+      [...this.upstreams.keys()].map((name) => this.refreshInternal(name)),
     );
+  }
+
+  async markUnreachable(
+    name: string,
+    reason = "Upstream request failed",
+    failedClient?: Client,
+  ): Promise<void> {
+    await this.runMaintenance(name, async () => {
+      const state = this.upstreams.get(name);
+
+      if (!state || !state.config.enabled) {
+        return;
+      }
+
+      if (failedClient && state.client !== failedClient) {
+        return;
+      }
+
+      state.status = "unreachable";
+      state.lastError = reason;
+
+      await this.closeConnection(name);
+
+      console.warn(`[Registry] ${name}: ${reason}`);
+    });
   }
 
   startRefresh(intervalMs = 30_000): void {
@@ -194,7 +229,19 @@ export class UpstreamRegistry {
     }
 
     this.refreshTimer = setInterval(() => {
-      void this.refreshAll();
+      if (this.refreshRunning) {
+        return;
+      }
+
+      this.refreshRunning = true;
+
+      void this.refreshAll()
+        .catch(() => {
+          console.error("[Registry] Periodic refresh failed");
+        })
+        .finally(() => {
+          this.refreshRunning = false;
+        });
     }, intervalMs);
   }
 

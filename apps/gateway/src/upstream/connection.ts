@@ -41,10 +41,8 @@ export async function disconnectFromUpstream(
   connection: UpstreamConnection,
 ): Promise<void> {
   try {
-    await connection.transport.terminateSession();
+    await connection.client.close();
   } catch {
-    // Continue closing even if session termination fails.
+    // Local connection cleanup is best-effort.
   }
-
-  await connection.client.close();
 }
