@@ -1,0 +1,96 @@
+{{- if .Values.gateway.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+
+metadata:
+  name: urumi-gateway
+
+spec:
+  replicas: 1
+
+  selector:
+    matchLabels:
+      app: urumi-gateway
+
+  template:
+    metadata:
+      labels:
+        app: urumi-gateway
+
+    spec:
+      containers:
+        - name: gateway
+
+          image: "{{ .Values.gateway.image.repository }}:{{ .Values.gateway.image.tag }}"
+
+          imagePullPolicy: {{ .Values.gateway.image.pullPolicy }}
+
+          ports:
+            - name: http
+              containerPort: {{ .Values.gateway.port }}
+
+          env:
+            - name: NODE_ENV
+              value: "production"
+
+            - name: PORT
+              value: {{ .Values.gateway.port | quote }}
+
+            - name: HOST
+              value: "0.0.0.0"
+
+            - name: MCP_ALLOWED_HOSTS
+              value: {{ .Values.gateway.allowedHosts | quote }}
+
+            - name: GATEWAY_BOOTSTRAP_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.gateway.secretName }}
+                  key: bootstrap-key
+
+            - name: WOOCOMMERCE_MCP_URL
+              value: {{ .Values.gateway.upstreams.woocommerce | quote }}
+
+            - name: CALCULATOR_MCP_URL
+              value: {{ .Values.gateway.upstreams.calculator | quote }}
+
+            - name: TIME_MCP_URL
+              value: {{ .Values.gateway.upstreams.time | quote }}
+
+          resources:
+            {{- toYaml .Values.gateway.resources | nindent 12 }}
+
+          startupProbe:
+            httpGet:
+              path: /health/live
+              port: http
+              httpHeaders:
+                - name: Host
+                  value: urumi-gateway
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 24
+
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+              httpHeaders:
+                - name: Host
+                  value: urumi-gateway
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: http
+              httpHeaders:
+                - name: Host
+                  value: urumi-gateway
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+{{- end }}

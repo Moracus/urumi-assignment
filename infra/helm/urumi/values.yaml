@@ -118,4 +118,31 @@ timeMcp:
     limits:
       cpu: 250m
       memory: 256Mi
+gateway:
+  enabled: true
+
+  image:
+    repository: urumi/gateway
+    tag: dev
+    pullPolicy: IfNotPresent
+
+  port: 3000
+
+  secretName: urumi-gateway-auth
+
+  allowedHosts: "localhost,127.0.0.1,urumi-gateway,urumi-gateway.urumi.svc.cluster.local,gateway.localhost"
+
+  upstreams:
+    woocommerce: http://urumi-woocommerce-mcp:3001/mcp
+    calculator: http://urumi-calculator-mcp:3002/mcp
+    time: http://urumi-time-mcp:3003/mcp
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+
+    limits:
+      cpu: 500m
+      memory: 512Mi
 # Never put raw credentials in values files.
