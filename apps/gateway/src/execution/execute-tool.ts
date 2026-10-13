@@ -1,11 +1,6 @@
-import type {
-  AuditLogger,
-  AuditOutcome,
-} from "../audit/logger.js";
+import type { AuditLogger, AuditOutcome } from "../audit/logger.js";
 
-import {
-  authorizeTool,
-} from "../security/authorization.js";
+import { authorizeTool } from "../security/authorization.js";
 
 import type {
   ToolExecutionRequest,
@@ -13,6 +8,11 @@ import type {
   ToolResolver,
   UpstreamInvoker,
 } from "./types.js";
+
+import {
+  UpstreamUnavailableError,
+  UpstreamTimeoutError,
+} from "../tools/errors.js";
 
 export class ToolNotFoundError extends Error {
   constructor() {
@@ -39,15 +39,10 @@ export async function executeTool(
 
   try {
     // 1. Authorization
-    authorizeTool(
-      request.identity,
-      request.toolName,
-    );
+    authorizeTool(request.identity, request.toolName);
 
     // 2. Tool resolution
-    const tool = await dependencies.resolver.resolve(
-      request.toolName,
-    );
+    const tool = await dependencies.resolver.resolve(request.toolName);
 
     if (!tool) {
       throw new ToolNotFoundError();
@@ -56,29 +51,28 @@ export async function executeTool(
     upstreamName = tool.upstreamName;
 
     // 3. Upstream execution
-    const result = await dependencies.invoker.invoke(
-      tool,
-      request.arguments,
-    );
+    const result = await dependencies.invoker.invoke(tool, request.arguments);
 
     // MCP tools can return errors as successful
     // protocol responses with isError: true.
-    outcome = result.isError
-      ? "tool_error"
-      : "success";
+    outcome = result.isError ? "tool_error" : "success";
 
     return {
       requestId: request.requestId,
       result,
     };
   } catch (error) {
-    if (
-      error instanceof Error &&
-      error.name === "AuthorizationError"
-    ) {
+    if (error instanceof UpstreamUnavailableError) {
+      upstreamName = error.upstreamName;
+    }
+    if (error instanceof Error && error.name === "AuthorizationError") {
       outcome = "unauthorized";
     } else if (error instanceof ToolNotFoundError) {
       outcome = "not_found";
+    } else if (error instanceof UpstreamUnavailableError) {
+      outcome = "upstream_unavailable";
+    } else if (error instanceof UpstreamTimeoutError) {
+      outcome = "upstream_timeout";
     } else {
       outcome = "upstream_error";
     }
@@ -105,9 +99,7 @@ export async function executeTool(
       // A durable audit queue/persistence policy comes later.
       console.error(
         "Audit logging failed",
-        auditError instanceof Error
-          ? auditError.name
-          : "Unknown error",
+        auditError instanceof Error ? auditError.name : "Unknown error",
       );
     }
   }

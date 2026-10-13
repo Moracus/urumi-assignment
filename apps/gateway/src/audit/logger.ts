@@ -3,8 +3,9 @@ export type AuditOutcome =
   | "tool_error"
   | "unauthorized"
   | "not_found"
-  | "upstream_error";
-
+  | "upstream_error"
+  | "upstream_unavailable"
+  | "upstream_timeout";
 export interface AuditRecord {
   requestId: string;
 
