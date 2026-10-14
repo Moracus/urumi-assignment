@@ -145,4 +145,12 @@ gateway:
     limits:
       cpu: 500m
       memory: 512Mi
+ingress:
+  enabled: true
+
+  gateway:
+    enabled: true
+
+  wordpress:
+    enabled: true
 # Never put raw credentials in values files.

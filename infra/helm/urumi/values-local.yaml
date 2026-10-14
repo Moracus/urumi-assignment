@@ -1,6 +1,12 @@
 global:
   environment: local
+  ingressClassName: traefik
+
   dashboardHost: dashboard.localhost
   storeHost: store.localhost
   gatewayHost: gateway.localhost
+
   storageClassName: standard
+woocommerceMcp:
+  wordpressUrl: http://store.localhost
+  wordpressInternalUrl: http://urumi-wordpress

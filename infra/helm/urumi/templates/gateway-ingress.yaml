@@ -1,0 +1,25 @@
+{{- if and .Values.ingress.enabled .Values.ingress.gateway.enabled .Values.gateway.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+
+metadata:
+  name: urumi-gateway
+
+spec:
+  ingressClassName: {{ .Values.global.ingressClassName | quote }}
+
+  rules:
+    - host: {{ .Values.global.gatewayHost | quote }}
+
+      http:
+        paths:
+          - path: /mcp
+            pathType: Exact
+
+            backend:
+              service:
+                name: urumi-gateway
+                port:
+                  number: {{ .Values.gateway.port }}
+
+{{- end }}
