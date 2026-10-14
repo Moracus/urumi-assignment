@@ -14,7 +14,7 @@ This document describes source at commit [`f740f55`](https://github.com/Moracus/
 - Upstream discovery, namespaced tool aggregation, schema forwarding, and routing to the original upstream tool name.
 - Independent upstream connections, request timeouts, periodic discovery, and reconnection attempts.
 - JSON tool-execution audit records on standard output.
-- MongoDB-backed users, transaction-validated startup, database-aware health, and one-time administrator CLI setup. See [identity setup](docs/identity-setup.md) for the required local replica set and operator steps.
+- MongoDB-backed users, transaction-validated startup, database-aware health, one-time administrator CLI setup, and [secure dashboard login/logout](docs/dashboard-sessions.md). See [identity setup](docs/identity-setup.md) for the required local replica set and operator steps.
 - Five WooCommerce tools backed by the WooCommerce REST API, plus arithmetic and timezone tools.
 - Dockerfiles for the gateway and upstream services; Helm Deployments, ClusterIP Services, health probes, resource settings, and persistent volumes for WordPress and MariaDB.
 - Gateway `/mcp` and storefront `/` Ingress routes, plus ingress restrictions between platform components.
@@ -54,7 +54,7 @@ Gateway names include the upstream prefix. Direct upstream endpoints use the unp
 | `calculator.calculate` | `operation`: `add`, `subtract`, `multiply`, or `divide`; numeric `a` and `b`. Rejects division by zero and non-finite results. |
 | `time.current` | Current time in an IANA `timezone` (default `UTC`), with date, local time, UTC ISO timestamp, and Unix timestamp. |
 
-Admin authorization permits all registered tools. The member policy permits the three WooCommerce read tools, calculator, and time, but rejects product creation and order updates. **HTTP authentication currently always creates the bootstrap admin identity**; there is no member login or member API-key issuance flow.
+Admin authorization permits all registered tools. The member policy permits the three WooCommerce read tools, calculator, and time, but rejects product creation and order updates. **MCP bearer authentication currently always creates the bootstrap admin identity**; dashboard login resolves real user accounts separately; member API-key issuance remains later work.
 
 ## Repository layout
 
@@ -238,6 +238,9 @@ Port-forwarding is administrative access and is not evidence that pod-to-pod Net
 | `MCP_ALLOWED_HOSTS` | Backends | Comma-separated allowed HTTP hostnames. |
 | `GATEWAY_BOOTSTRAP_KEY` | Gateway | Required bearer credential; maps to one admin identity. |
 | `MONGODB_URI` | Gateway and setup CLI | Required transaction-capable identity database; Helm reads Secret key `uri`. |
+| `DASHBOARD_TRUSTED_ORIGINS` | Gateway | Exact trusted public origins for dashboard login/logout; empty denies both. |
+| `DASHBOARD_ALLOW_HTTP` | Gateway | Explicit development HTTP mode; defaults false and is rejected in production. |
+| `DASHBOARD_TRUSTED_PROXIES` | Gateway | Exact proxy IP addresses trusted for forwarded client IP/HTTPS headers; defaults empty. |
 | `GATEWAY_BOOTSTRAP_KEY_FILE` | Setup CLI only | Optional configured bootstrap secret file; takes precedence over the environment key for setup. |
 | `WOOCOMMERCE_MCP_URL` | Gateway | WooCommerce MCP endpoint. |
 | `CALCULATOR_MCP_URL` | Gateway | Calculator MCP endpoint. |
@@ -261,7 +264,7 @@ helm template urumi infra/helm/urumi -n urumi \
   -f infra/helm/urumi/values-local.yaml
 ```
 
-The automated gateway tests include real MongoDB CLI setup, concurrent/durable consumption, transaction/index validation, outages and reconnection, plus MCP SDK discovery and calls against controlled upstreams. The runner provisions disposable MongoDB containers; no Kubernetes or commerce services are needed. `createGatewayApp()` accepts upstream configurations, an audit logger, and an optional `mongodbUri`; it validates storage, connects and refreshes the registry, returns an unlistening Fastify app, and releases MCP/registry/database resources on `app.close()`. The process entry point owns listening and signal shutdown. Normal MCP bootstrap authentication and console audits remain until later tickets replace or extend them.
+The automated gateway tests include real MongoDB CLI setup, concurrent/durable consumption, transaction/index validation, outages and reconnection, dashboard login/me/logout, session expiry/restart/device independence, Origin/CSRF, shared throttling, proxy/cookie modes, plus MCP SDK discovery and calls against controlled upstreams. The runner provisions disposable MongoDB containers; no Kubernetes or commerce services are needed. `createGatewayApp()` accepts upstream configurations, an audit logger, and an optional `mongodbUri`; it validates storage, connects and refreshes the registry, returns an unlistening Fastify app, and releases MCP/registry/database resources on `app.close()`. The process entry point owns listening and signal shutdown. Normal MCP bootstrap authentication and console audits remain until later tickets replace or extend them.
 
 With all three upstream endpoints reachable and the gateway URL variables set as in the local setup:
 
@@ -279,12 +282,12 @@ Verify network isolation using ordinary test Pods: unrelated Pods should be deni
 
 ## Current limitations
 
-- Normal MCP still uses one environment-backed bootstrap admin credential. Users and one-time CLI setup are persisted, but login, sessions, persistent API keys, revocation, and operator recovery remain later tickets. Digest comparison is not persisted hashed-key management.
+- Normal MCP still uses one environment-backed bootstrap admin credential. Users, one-time CLI setup, independent eight-hour dashboard sessions, and shared login throttling are persisted. Persistent MCP API keys, account lifecycle management, and operator recovery remain later tickets. Digest comparison is not persisted hashed-key management.
 - Registry, discovery cache, and connections are in memory. No registry CRUD API or persisted upstream configuration.
 - Audits are console records, with no durable audit database, queue, query API, or dashboard. Authentication failures and SDK-level validation failures do not necessarily reach the execution audit boundary.
 - NetworkPolicies cover ingress only. They do not restrict egress and require an enforcing network plugin. Controller namespace and workload-label selectors are broader than cryptographic service identity.
 - No upstream bearer authentication or mutual TLS; upstream access relies on cluster networking and policy.
-- No TLS block in the Ingress templates, request rate limiting, or automatic retry of failed tool calls. Failed writes can have uncertain outcomes and need inspection before retrying.
+- No TLS block in the Ingress templates, broader request rate limiting beyond dashboard login, or automatic retry of failed tool calls. Failed writes can have uncertain outcomes and need inspection before retrying.
 - Single-replica workloads; database and WordPress persistence use PVCs with `Recreate` Deployments. Backups, high availability, restore automation, and production hardening are not supplied.
 - WooCommerce installation and store configuration are manual. Health probes do not prove that store APIs or checkout work.
 - Dashboard remains a local scaffold with no Helm workload or Ingress template. A dashboard hostname/image value alone does not deploy it.

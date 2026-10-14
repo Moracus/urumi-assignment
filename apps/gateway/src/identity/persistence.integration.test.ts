@@ -8,6 +8,7 @@ import { createMcpFastifyApp } from "@modelcontextprotocol/fastify";
 import { toNodeHandler } from "@modelcontextprotocol/node";
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import { createGatewayApp } from "../app.js";
+import { hashPassword } from "./passwords.js";
 
 const baseUri = process.env.MONGODB_TEST_URI;
 assert.ok(baseUri, "Use the real-database integration runner");
@@ -76,6 +77,16 @@ test("standalone MongoDB is rejected by actual transaction validation", async (t
 });
 
 test("database outage fails readiness and MCP safely while liveness stays healthy, then recovers", async (t) => {
+  const previousOrigins = process.env.DASHBOARD_TRUSTED_ORIGINS;
+  const previousHttp = process.env.DASHBOARD_ALLOW_HTTP;
+  process.env.DASHBOARD_TRUSTED_ORIGINS = "http://localhost:3000";
+  process.env.DASHBOARD_ALLOW_HTTP = "true";
+  t.after(() => {
+    if (previousOrigins === undefined) delete process.env.DASHBOARD_TRUSTED_ORIGINS;
+    else process.env.DASHBOARD_TRUSTED_ORIGINS = previousOrigins;
+    if (previousHttp === undefined) delete process.env.DASHBOARD_ALLOW_HTTP;
+    else process.env.DASHBOARD_ALLOW_HTTP = previousHttp;
+  });
   const previousKey = process.env.GATEWAY_BOOTSTRAP_KEY;
   process.env.GATEWAY_BOOTSTRAP_KEY = "test-setup-secret";
   t.after(() => {
@@ -85,8 +96,13 @@ test("database outage fails readiness and MCP safely while liveness stays health
   const uri = databaseUri();
   const container = process.env.MONGODB_TEST_CONTAINER;
   assert.ok(container, "Use the isolated integration runner for outage tests");
+  const docker = promisify(execFile);
+  let paused = false;
   const db = await mongoose.createConnection(uri, { serverSelectionTimeoutMS: 2000 }).asPromise();
-  t.after(async () => { await db.dropDatabase(); await db.close(); });
+  t.after(async () => {
+    if (paused) { await docker("docker", ["unpause", container]); paused = false; }
+    await db.dropDatabase(); await db.close();
+  });
   const upstream = createMcpFastifyApp({ host: "127.0.0.1" });
   const handler = createMcpHandler(() => {
     const server = new McpServer({ name: "controlled", version: "1.0.0" });
@@ -104,11 +120,16 @@ test("database outage fails readiness and MCP safely while liveness stays health
     upstreams: [{ name: "time", url: `${address}/mcp`, enabled: true }],
   });
   t.after(() => app.close());
+  await db.collection("users").insertOne({ email: "outage@example.com", role: "member", status: "active",
+    requiredPasswordChange: false, passwordHash: await hashPassword("outage test password"), createdAt: new Date(), updatedAt: new Date() });
+  const login = await app.inject({ method: "POST", url: "/api/auth/login", headers: { origin: "http://localhost:3000" },
+    payload: { email: "outage@example.com", password: "outage test password" } });
+  assert.equal(login.statusCode, 200);
+  const cookie = String(login.headers["set-cookie"]).split(";")[0];
   assert.equal((await app.inject({ url: "/health/ready" })).statusCode, 200);
-  const docker = promisify(execFile);
-  await docker("docker", ["stop", "--time", "1", container]);
-  // Register restoration immediately; recovery runs even if an assertion fails.
-  t.after(async () => { await docker("docker", ["start", container]); });
+  // Pause preserves tmpfs data; stopping this disposable container discards its sessions.
+  await docker("docker", ["pause", container]);
+  paused = true;
   assert.equal((await app.inject({ url: "/health/live" })).statusCode, 200);
   const start = Date.now();
   const unavailable = await app.inject({ url: "/health/ready" });
@@ -118,7 +139,20 @@ test("database outage fails readiness and MCP safely while liveness stays health
   assert.equal(mcp.statusCode, 503);
   assert.deepEqual(mcp.json(), { error: "Authentication unavailable" });
   assert.ok(Date.now() - start < 10000);
-  await docker("docker", ["start", container]);
+  for (const request of [
+    { url: "/api/auth/me", headers: { cookie } },
+    { method: "POST" as const, url: "/api/auth/logout", headers: { cookie, origin: "http://localhost:3000", "x-csrf-token": login.json().csrfToken } },
+    { method: "POST" as const, url: "/api/auth/login", headers: { origin: "http://localhost:3000" }, payload: { email: "outage@example.com", password: "outage test password" } },
+  ]) {
+    const requestStart = Date.now();
+    const response = await app.inject(request);
+    assert.equal(response.statusCode, 503);
+    assert.deepEqual(response.json(), { error: "Authentication unavailable" });
+    assert.ok(Date.now() - requestStart < 7000);
+    assert.equal(response.headers["set-cookie"], undefined);
+  }
+  await docker("docker", ["unpause", container]);
+  paused = false;
   const deadline = Date.now() + 20000;
   let ready = 503;
   while (Date.now() < deadline && ready !== 200) {
@@ -128,4 +162,5 @@ test("database outage fails readiness and MCP safely while liveness stays health
   assert.equal(ready, 200);
   assert.equal((await app.inject({ url: "/health/live" })).statusCode, 200);
   assert.equal((await app.inject({ url: "/mcp" })).statusCode, 401);
+  assert.equal((await app.inject({ url: "/api/auth/me", headers: { cookie } })).statusCode, 200);
 });

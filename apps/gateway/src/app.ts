@@ -36,6 +36,8 @@ import {
 import type { AuditLogger } from "./audit/logger.js";
 import type { UpstreamConfig } from "./upstream/types.js";
 import { connectIdentityStorage } from "./identity/storage.js";
+import { dashboardConfig } from "./identity/dashboard-config.js";
+import { registerDashboardRoutes } from "./identity/dashboard-routes.js";
 
 export interface GatewayAppOptions {
   host?: string;
@@ -47,6 +49,7 @@ export interface GatewayAppOptions {
 
 // Construction owns MCP and registry resources; the caller owns listening.
 export async function createGatewayApp(options: GatewayAppOptions = {}) {
+  const dashboard = dashboardConfig();
   const host = options.host ?? process.env.HOST ?? "127.0.0.1";
   const allowedHosts = options.allowedHosts ?? (
     process.env.MCP_ALLOWED_HOSTS ?? "localhost,127.0.0.1"
@@ -125,6 +128,8 @@ export async function createGatewayApp(options: GatewayAppOptions = {}) {
       host,
       allowedHosts,
     });
+
+    await registerDashboardRoutes(app, identityStorage, dashboard);
 
     // ------------------------------------------
     // 5. Health endpoints

@@ -6,3 +6,6 @@ global:
   storeHost: store.example.com
   gatewayHost: gateway.example.com
 # Placeholder hostnames. Supply real production values at deployment time.
+gateway:
+  dashboard:
+    trustedOrigins: ["https://gateway.example.com"]

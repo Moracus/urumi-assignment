@@ -120,6 +120,14 @@ timeMcp:
       memory: 256Mi
 gateway:
   enabled: true
+  nodeEnv: production
+
+  dashboard:
+    # Exact public origins (scheme, host, port); empty denies all login/logout.
+    trustedOrigins: []
+    allowHttp: false
+    # Exact proxy IP addresses; no wildcard or implicit forwarded-header trust.
+    trustedProxies: []
 
   image:
     repository: urumi/gateway

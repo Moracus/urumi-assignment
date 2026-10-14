@@ -1,6 +1,6 @@
 # Persistent identity storage and initial administrator setup (#3)
 
-This ticket implements storage, passwords, one-time CLI enrollment, and database health. It does not implement login, sessions, persistent MCP keys, account management, operator recovery, dashboard UI, dynamic upstream persistence, or durable audits. Normal MCP requests still use `GATEWAY_BOOTSTRAP_KEY` and the bootstrap identity until the persistent MCP authentication ticket replaces them. Creating an administrator does not yet make that account usable for MCP or dashboard login. This is an incremental development slice, not a production completion claim.
+This ticket implements storage, passwords, one-time CLI enrollment, and database health. Dashboard login and sessions are now implemented by [ticket #4](dashboard-sessions.md). Persistent MCP keys, account management, operator recovery, dashboard UI, dynamic upstream persistence, and durable audits remain later work. Normal MCP requests still use `GATEWAY_BOOTSTRAP_KEY` and the bootstrap identity until the persistent MCP authentication ticket replaces them. Creating an administrator makes it usable for dashboard login with the configuration in ticket #4; it does not yet make it usable for MCP. This is an incremental development slice, not a production completion claim.
 
 ## Local replica set
 
@@ -64,7 +64,7 @@ pnpm build
 pnpm --filter @urumi/gateway test:integration
 ```
 
-The integration runner provisions separate ephemeral databases on loopback ports 27417 (replica set) and 27418 (standalone), runs compiled gateway tests, and removes its containers on exit. It uses the reserved Compose project `urumi-identity-integration`; do not reuse that project for application data. Test files run serially because the outage test stops and restarts the test replica container. CLI concurrency is exercised by independent processes within one test. Tests use unique database names and drop only those databases. Existing MCP SDK, execution, authorization, discovery, schema, and audit tests are included. No Kubernetes or WooCommerce instance is needed.
+The integration runner provisions separate ephemeral databases on loopback ports 27417 (replica set) and 27418 (standalone), runs compiled gateway tests, and removes its containers on exit. It uses the reserved Compose project `urumi-identity-integration`; do not reuse that project for application data. Test files run serially because the outage test pauses and resumes the test replica container, preserving its tmpfs data. CLI concurrency is exercised by independent processes within one test. Tests use unique database names and drop only those databases. Existing MCP SDK, execution, authorization, discovery, schema, and audit tests are included. No Kubernetes or WooCommerce instance is needed.
 
 To run selected compiled files manually, provide `MONGODB_TEST_URI`; persistence tests also require `MONGODB_STANDALONE_TEST_URI` and `MONGODB_TEST_CONTAINER` pointing to the isolated disposable replica container. Never point the outage test at an application database.
 

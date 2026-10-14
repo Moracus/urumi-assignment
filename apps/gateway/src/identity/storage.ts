@@ -21,6 +21,7 @@ export interface StoredUser {
   status: "active" | "disabled";
   passwordHash: string;
   requiredPasswordChange: boolean;
+  credentialRevision: number;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -31,6 +32,7 @@ const userSchema = new Schema<StoredUser>({
   status: { type: String, enum: ["active", "disabled"], required: true },
   passwordHash: { type: String, required: true, select: false },
   requiredPasswordChange: { type: Boolean, required: true },
+  credentialRevision: { type: Number, default: 0 },
 }, {
   timestamps: true, strict: "throw", bufferCommands: false,
   toJSON: { transform: (_document, value) => { const { passwordHash, ...safe } = value; return safe; } },
@@ -43,6 +45,23 @@ const setupSchema = new Schema({
   consumedAt: { type: Date, default: null },
   validationRevision: { type: Number, default: 0 },
 }, { strict: "throw", bufferCommands: false });
+
+const dashboardSessionSchema = new Schema({
+  userId: { type: Schema.Types.ObjectId, required: true },
+  credentialHash: { type: String, required: true },
+  createdAt: { type: Date, required: true },
+  expiresAt: { type: Date, required: true },
+}, { strict: "throw", bufferCommands: false });
+dashboardSessionSchema.index({ credentialHash: 1 }, { unique: true });
+dashboardSessionSchema.index({ userId: 1 });
+dashboardSessionSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+
+const loginThrottleSchema = new Schema({
+  _id: { type: String, required: true },
+  attempts: { type: [{ _id: false, id: { type: String, required: true }, at: { type: Date, required: true } }], default: [] },
+  expiresAt: { type: Date, required: true },
+}, { strict: "throw", bufferCommands: false });
+loginThrottleSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
 export async function connectIdentityStorage(uri = process.env.MONGODB_URI) {
   if (!uri) throw new IdentityStorageError("configuration");
@@ -58,12 +77,18 @@ export async function connectIdentityStorage(uri = process.env.MONGODB_URI) {
     });
     const users = connection.model("User", userSchema, "users");
     const setup = connection.model("InitialSetup", setupSchema, "initial_setup");
+    const sessions = connection.model("DashboardSession", dashboardSessionSchema, "dashboard_sessions");
+    const loginThrottles = connection.model("LoginThrottle", loginThrottleSchema, "login_throttles");
     stage = "collections";
     await users.createCollection();
     await setup.createCollection();
+    await sessions.createCollection();
+    await loginThrottles.createCollection();
     stage = "indexes";
     await users.createIndexes();
     await setup.createIndexes();
+    await sessions.createIndexes();
+    await loginThrottles.createIndexes();
     const indexes = await users.collection.indexes();
     if (!indexes.some((index) => index.name === "unique_normalized_email"
       && index.unique && index.key.email === 1 && !index.sparse && !index.partialFilterExpression)) {
@@ -81,7 +106,7 @@ export async function connectIdentityStorage(uri = process.env.MONGODB_URI) {
     }, identityTransactionOptions);
 
     return {
-      connection, users, setup,
+      connection, users, setup, sessions, loginThrottles,
       async isAvailable(): Promise<boolean> {
         try {
           if (connection.readyState !== 1 || !connection.db) return false;

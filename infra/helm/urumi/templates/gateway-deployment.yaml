@@ -31,7 +31,7 @@ spec:
 
           env:
             - name: NODE_ENV
-              value: "production"
+              value: {{ .Values.gateway.nodeEnv | quote }}
 
             - name: PORT
               value: {{ .Values.gateway.port | quote }}
@@ -41,6 +41,15 @@ spec:
 
             - name: MCP_ALLOWED_HOSTS
               value: {{ .Values.gateway.allowedHosts | quote }}
+
+            - name: DASHBOARD_TRUSTED_ORIGINS
+              value: {{ join "," .Values.gateway.dashboard.trustedOrigins | quote }}
+
+            - name: DASHBOARD_ALLOW_HTTP
+              value: {{ .Values.gateway.dashboard.allowHttp | quote }}
+
+            - name: DASHBOARD_TRUSTED_PROXIES
+              value: {{ join "," .Values.gateway.dashboard.trustedProxies | quote }}
 
             - name: GATEWAY_BOOTSTRAP_KEY
               valueFrom:

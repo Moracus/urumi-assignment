@@ -7,6 +7,11 @@ global:
   gatewayHost: gateway.localhost
 
   storageClassName: standard
+gateway:
+  nodeEnv: development
+  dashboard:
+    trustedOrigins: ["http://gateway.localhost"]
+    allowHttp: true
 woocommerceMcp:
   wordpressUrl: http://store.localhost
   wordpressInternalUrl: http://urumi-wordpress

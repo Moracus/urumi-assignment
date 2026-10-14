@@ -1,0 +1,69 @@
+import type { FastifyInstance, FastifyRequest } from "fastify";
+import { z } from "zod/v4";
+import { timingSafeEqual } from "node:crypto";
+import type { IdentityStorage } from "./storage.js";
+import type { DashboardConfig } from "./dashboard-config.js";
+import { createDashboardSessions, DashboardAuthError } from "./dashboard-sessions.js";
+import { isDashboardHttps, loginSourceIp } from "./source-ip.js";
+
+const cookieName = "urumi_dashboard";
+function credential(request: FastifyRequest) {
+  const values = (request.headers.cookie ?? "").split(";").map((part) => part.trim())
+    .filter((part) => part.startsWith(`${cookieName}=`));
+  return values.length === 1 ? values[0].slice(cookieName.length + 1) : undefined;
+}
+function cookie(value: string, expires: Date, secure: boolean) {
+  return `${cookieName}=${value}; Path=/api; HttpOnly; SameSite=Lax; Max-Age=28800; Expires=${expires.toUTCString()}${secure ? "; Secure" : ""}`;
+}
+
+export async function registerDashboardRoutes(app: FastifyInstance, storage: IdentityStorage, config: DashboardConfig) {
+  const sessions = await createDashboardSessions(storage);
+  await app.register(async (routes) => {
+    routes.addHook("onRequest", async (_request, reply) => { reply.header("Cache-Control", "no-store"); });
+    routes.setErrorHandler((error, request, reply) => {
+      if (error instanceof DashboardAuthError) return reply.code(error.status).send({ error: error.message });
+      // Parsing and validation failures never echo input or internal exceptions.
+      const status = error instanceof Error && "statusCode" in error ? error.statusCode : undefined;
+      if (status === 400 || status === 413 || status === 415) {
+        return reply.code(status).send({ error: "Invalid request" });
+      }
+      request.log.error("Dashboard authentication unavailable");
+      return reply.code(503).send({ error: "Authentication unavailable" });
+    });
+    routes.addHook("preHandler", async (request) => {
+      if (!(await storage.isAvailable())) throw new DashboardAuthError(503, "Authentication unavailable");
+      if (!config.allowHttp && !isDashboardHttps(request, config.trustedProxies)) throw new DashboardAuthError(403, "Forbidden");
+    });
+    routes.post("/api/auth/login", { bodyLimit: 4096 }, async (request, reply) => {
+      if (!config.trustedOrigins.includes(request.headers.origin ?? "")) throw new DashboardAuthError(403, "Forbidden");
+      if (!/^application\/json(?:\s*;.*)?$/i.test(request.headers["content-type"] ?? "")) throw new DashboardAuthError(415, "Invalid request");
+      const parsed = z.strictObject({
+        email: z.string().trim().toLowerCase().email().max(254),
+        password: z.string().refine((value) => Array.from(value).length >= 12 && Array.from(value).length <= 128),
+      }).safeParse(request.body);
+      if (!parsed.success) throw new DashboardAuthError(400, "Invalid request");
+      const result = await sessions.login(parsed.data.email, parsed.data.password, loginSourceIp(request, config.trustedProxies));
+      reply.header("Set-Cookie", cookie(result.credential, result.expiresAt, !config.allowHttp));
+      return { user: result.user, csrfToken: result.csrfToken };
+    });
+    routes.get("/api/auth/me", async (request) => sessions.authenticate(credential(request)));
+    routes.post("/api/auth/logout", { bodyLimit: 4096 }, async (request, reply) => {
+      if (!config.trustedOrigins.includes(request.headers.origin ?? "")) throw new DashboardAuthError(403, "Forbidden");
+      if (request.body !== undefined && !z.strictObject({}).safeParse(request.body).success) {
+        throw new DashboardAuthError(400, "Invalid request");
+      }
+      const token = credential(request);
+      const authenticated = await sessions.authenticate(token);
+      const supplied = request.headers["x-csrf-token"];
+      if (typeof supplied !== "string" || !/^[a-f0-9]{64}$/.test(supplied)
+        || !timingSafeEqual(Buffer.from(supplied), Buffer.from(authenticated.csrfToken))) {
+        throw new DashboardAuthError(403, "Forbidden");
+      }
+      // Authentication above guarantees an opaque credential.
+      if (!token) throw new DashboardAuthError(401, "Unauthorized");
+      await sessions.logout(token);
+      reply.header("Set-Cookie", `${cookieName}=; Path=/api; HttpOnly; SameSite=Lax; Max-Age=0; Expires=${new Date(0).toUTCString()}${config.allowHttp ? "" : "; Secure"}`);
+      return reply.code(204).send();
+    });
+  });
+}
