@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
-import type { HydratedDocument } from "mongoose";
-import { identityTransactionOptions, type IdentityStorage, type StoredUser } from "./storage.js";
+import { identityTransactionOptions, type IdentityStorage } from "./storage.js";
+import { safeUser } from "./safe-user.js";
 import { hashPassword, verifyPassword } from "./passwords.js";
 import { reserveLoginAttempt } from "./login-throttle.js";
 import { isUserEligibleForOrdinaryAccess } from "./account-eligibility.js";
@@ -16,12 +16,6 @@ const csrfToken = (credential: string) => createHash("sha256").update("urumi-das
 export async function createDashboardSessions(storage: IdentityStorage) {
   // Unknown identifiers incur the same bounded Argon2 work as known accounts.
   const dummyHash = await hashPassword(randomBytes(32).toString("hex"));
-  function safeUser(user: HydratedDocument<StoredUser>) {
-    return {
-      id: user._id.toHexString(), email: user.email, role: user.role, status: user.status,
-      requiredPasswordChange: user.requiredPasswordChange, createdAt: user.createdAt, updatedAt: user.updatedAt,
-    };
-  }
   return {
     async login(email: string, password: string, ip: string) {
       const attempt = await reserveLoginAttempt(storage, email, ip);

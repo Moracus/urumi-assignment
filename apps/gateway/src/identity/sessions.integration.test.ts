@@ -57,6 +57,159 @@ function sessionCookie(response: { headers: { [key: string]: unknown } }) {
   return String(header).split(";")[0];
 }
 
+test("administrator creates a member who replaces the assigned password before fresh login", async (t) => {
+  const f = await fixture(t);
+  const admin = await f.login();
+  const headers = { cookie: sessionCookie(admin), origin, "x-csrf-token": admin.json().csrfToken };
+  const assigned = "temporary member password";
+  const created = await f.app.inject({ method: "POST", url: "/api/admin/users", headers,
+    payload: { email: " Member@Example.COM ", password: assigned } });
+  assert.equal(created.statusCode, 201, created.body);
+  assert.equal(created.headers["cache-control"], "no-store");
+  const user = created.json().user;
+  assert.deepEqual(Object.keys(user).sort(), ["createdAt", "email", "id", "requiredPasswordChange", "role", "status", "updatedAt"]);
+  assert.equal(user.email, "member@example.com");
+  assert.equal(user.role, "member");
+  assert.equal(user.status, "active");
+  assert.equal(user.requiredPasswordChange, true);
+  const stored = await f.db.collection("users").findOne({ email: user.email });
+  assert.ok(stored);
+  assert.match(stored.passwordHash, /^\$argon2id\$v=19\$m=65536,t=3,p=1\$/);
+  assert.ok(!JSON.stringify(stored).includes(assigned));
+  const inspected = await f.app.inject({ url: `/api/admin/users/${user.id}`, headers });
+  assert.equal(inspected.statusCode, 200, inspected.body);
+  assert.deepEqual(inspected.json(), { user });
+  const member = await f.login(user.email, assigned);
+  assert.equal(member.statusCode, 200, member.body);
+  const memberHeaders = { cookie: sessionCookie(member), origin, "x-csrf-token": member.json().csrfToken };
+  assert.equal((await f.app.inject({ url: "/api/auth/me", headers: memberHeaders })).json().user.requiredPasswordChange, true);
+  assert.equal((await f.app.inject({ url: `/api/admin/users/${f.userId}`, headers: memberHeaders })).statusCode, 403);
+  const replacement = "a final member password";
+  const changed = await f.app.inject({ method: "POST", url: "/api/auth/change-password", headers: memberHeaders,
+    payload: { currentPassword: assigned, newPassword: replacement } });
+  assert.equal(changed.statusCode, 204, changed.body);
+  assert.equal((await f.app.inject({ url: "/api/auth/me", headers: memberHeaders })).statusCode, 401);
+  assert.equal((await f.login(user.email, assigned)).statusCode, 401);
+  const fresh = await f.login(user.email, replacement);
+  assert.equal(fresh.statusCode, 200, fresh.body);
+  assert.equal(fresh.json().user.requiredPasswordChange, false);
+  assert.equal((await f.app.inject({ url: `/api/admin/users/${f.userId}`, headers: { cookie: sessionCookie(fresh) } })).statusCode, 403);
+});
+
+test("administrator lists safe accounts with bounded deterministic pagination", async (t) => {
+  const f = await fixture(t);
+  const admin = await f.login();
+  const headers = { cookie: sessionCookie(admin), origin, "x-csrf-token": admin.json().csrfToken };
+  for (const email of ["first@example.com", "second@example.com"]) {
+    const result = await f.app.inject({ method: "POST", url: "/api/admin/users", headers, payload: { email, password } });
+    assert.equal(result.statusCode, 201, result.body);
+  }
+  const list = (query = "") => f.app.inject({ url: `/api/admin/users${query}`, headers });
+  const all = await list();
+  assert.equal(all.statusCode, 200, all.body);
+  assert.equal(all.headers["cache-control"], "no-store");
+  assert.equal(all.json().page, 1);
+  assert.equal(all.json().limit, 20);
+  assert.equal(all.json().users.length, 3);
+  const pages = [];
+  for (let page = 1; page <= 4; page++) {
+    const response = await list(`?page=${page}&limit=1`);
+    assert.equal(response.statusCode, 200, response.body);
+    assert.equal(response.json().page, page);
+    assert.equal(response.json().limit, 1);
+    pages.push(...response.json().users);
+  }
+  assert.deepEqual(pages, all.json().users);
+  for (const user of pages) {
+    assert.deepEqual(Object.keys(user).sort(), ["createdAt", "email", "id", "requiredPasswordChange", "role", "status", "updatedAt"]);
+  }
+  assert.equal((await list("?limit=100")).statusCode, 200);
+  for (const query of ["?limit=101", "?limit=0", "?limit=-1", "?limit=1.5", "?limit=", "?limit=abc",
+    "?page=0", "?page=1.5", "?page=9007199254740991", "?role=admin", "?limit=1&limit=2"]) {
+    const response = await list(query);
+    assert.equal(response.statusCode, 400, query);
+    assert.deepEqual(response.json(), { error: "Invalid request" });
+  }
+});
+
+test("admin account routes enforce session roles, pending replacement, Origin, and CSRF", async (t) => {
+  const f = await fixture(t);
+  const admin = await f.login();
+  const other = await f.login();
+  const cookie = sessionCookie(admin);
+  const headers = { cookie, origin, "x-csrf-token": admin.json().csrfToken };
+  const create = (requestHeaders: Record<string, string>) => f.app.inject({
+    method: "POST", url: "/api/admin/users", headers: requestHeaders,
+    payload: { email: "blocked@example.com", password },
+  });
+  const deniedHeaders: Record<string, string>[] = [{ cookie, origin }, { cookie, "x-csrf-token": admin.json().csrfToken },
+    { ...headers, origin: "http://evil.example" }, { ...headers, "x-csrf-token": other.json().csrfToken }];
+  for (const denied of deniedHeaders) {
+    assert.equal((await create(denied)).statusCode, 403);
+  }
+  const missingSessionHeaders: Record<string, string>[] = [{}, { authorization: "Bearer test-only-gateway-key" }];
+  for (const authHeaders of missingSessionHeaders) {
+    for (const url of ["/api/admin/users", `/api/admin/users/${f.userId}`]) {
+      assert.equal((await f.app.inject({ url, headers: authHeaders })).statusCode, 401);
+    }
+    assert.equal((await create({ ...authHeaders, origin })).statusCode, 401);
+  }
+  for (const state of [{ role: "member", requiredPasswordChange: false }, { role: "admin", requiredPasswordChange: true }]) {
+    await f.db.collection("users").updateOne({ _id: f.userId }, { $set: state });
+    for (const url of ["/api/admin/users", `/api/admin/users/${f.userId}`]) {
+      assert.equal((await f.app.inject({ url, headers })).statusCode, 403);
+    }
+    assert.equal((await create(headers)).statusCode, 403);
+  }
+  await f.db.collection("users").updateOne({ _id: f.userId }, { $set: { role: "admin", requiredPasswordChange: false } });
+  assert.equal((await f.app.inject({ url: "/api/admin/users", headers })).json().users.length, 1);
+  assert.equal((await f.app.inject({ url: "/api/admin/users/not-an-id", headers })).statusCode, 400);
+  const missing = await f.app.inject({ url: "/api/admin/users/000000000000000000000000", headers });
+  assert.equal(missing.statusCode, 404);
+  assert.deepEqual(missing.json(), { error: "User not found" });
+});
+
+test("member creation rejects strict input violations and normalized duplicate races", async (t) => {
+  const f = await fixture(t);
+  const admin = await f.login();
+  const headers = { cookie: sessionCookie(admin), origin, "x-csrf-token": admin.json().csrfToken };
+  const valid = { email: "new@example.com", password };
+  for (const payload of [{ ...valid, role: "admin" }, { ...valid, role: "member" }, { ...valid, userId: String(f.userId) },
+    { ...valid, status: "disabled" }, { ...valid, requiredPasswordChange: false }, { ...valid, passwordHash: "hash" },
+    { ...valid, unexpected: true }, { ...valid, email: "bad" }, { ...valid, password: "short" },
+    { ...valid, password: "x".repeat(129) }, { email: valid.email }, { password }, null, []]) {
+    const response = await f.app.inject({ method: "POST", url: "/api/admin/users", headers: { ...headers, "content-type": "application/json" },
+      payload: JSON.stringify(payload) });
+    assert.equal(response.statusCode, 400, response.body);
+    assert.deepEqual(response.json(), { error: "Invalid request" });
+  }
+  for (const [contentType, payload, status] of [
+    ["application/json", "{invalid", 400], ["text/plain", password, 415], ["application/json", "x".repeat(5000), 413],
+  ] as const) {
+    const response = await f.app.inject({ method: "POST", url: "/api/admin/users", headers: { ...headers, "content-type": contentType }, payload });
+    assert.equal(response.statusCode, status, response.body);
+    assert.deepEqual(response.json(), { error: "Invalid request" });
+  }
+  assert.equal((await f.app.inject({ url: "/api/admin/users", headers })).json().users.length, 1);
+  const other = await createGatewayApp({ mongodbUri: f.uri, upstreams: [] });
+  t.after(() => other.close());
+  const results = await Promise.all([
+    f.app.inject({ method: "POST", url: "/api/admin/users", headers, payload: valid }),
+    other.inject({ method: "POST", url: "/api/admin/users", headers, payload: { email: " NEW@Example.COM ", password } }),
+  ]);
+  assert.deepEqual(results.map((response) => response.statusCode).sort(), [201, 409]);
+  assert.deepEqual(results.find((response) => response.statusCode === 409)?.json(), { error: "Email already exists" });
+  const duplicate = await f.app.inject({ method: "POST", url: "/api/admin/users", headers, payload: valid });
+  assert.equal(duplicate.statusCode, 409, duplicate.body);
+  const list = await f.app.inject({ url: "/api/admin/users", headers });
+  assert.equal(list.json().users.length, 2);
+  for (const response of [...results, duplicate, list]) {
+    assert.equal(response.headers["cache-control"], "no-store");
+    assert.ok(!response.body.includes(password));
+    assert.ok(!response.body.includes("passwordHash"));
+  }
+});
+
 test("password replacement clears required change and ends every device session before fresh login", async (t) => {
   const f = await fixture(t);
   await f.db.collection("users").updateOne({ _id: f.userId }, { $set: { requiredPasswordChange: true } });

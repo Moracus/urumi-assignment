@@ -1,6 +1,6 @@
-# Dashboard login, sessions and password replacement (#4–#5)
+# Dashboard sessions and member onboarding (#4–#6)
 
-Implemented endpoints are `POST /api/auth/login`, `GET /api/auth/me`, `POST /api/auth/logout`, and `POST /api/auth/change-password`. They use MongoDB users established through [initial administrator setup](identity-setup.md). The React dashboard, administrator password resets, user/key management, operator recovery, dynamic upstream management, and durable audits remain later tickets. Normal MCP bearer authentication still uses the previous bootstrap mechanism; this slice does not make dashboard sessions usable as MCP credentials.
+Implemented endpoints are `POST /api/auth/login`, `GET /api/auth/me`, `POST /api/auth/logout`, and `POST /api/auth/change-password`. Administrator member creation, listing, and inspection are also implemented under `/api/admin/users` (see below). These endpoints use MongoDB users established through [initial administrator setup](identity-setup.md) or administrator member creation. The React dashboard, administrator password resets, account lifecycle changes/key management, operator recovery, dynamic upstream management, and durable audits remain later tickets. Normal MCP bearer authentication still uses the previous bootstrap mechanism; this slice does not make dashboard sessions usable as MCP credentials.
 
 ## Configuration
 
@@ -52,7 +52,7 @@ curl --fail-with-body --silent --show-error \
   > "$session_dir/me.json"
 ```
 
-`GET /api/auth/me` returns the same safe user/CSRF shape, resolving role, status, and password-change state from MongoDB on each request. It does not renew the session or cookie. Missing, invalid, expired, orphaned, or disabled-account sessions receive `401 Unauthorized`. Users requiring password replacement may access only account details, password change, and logout. Ordinary session authentication denies them with `403 Password change required`, regardless of role; later management/key routes must use that default enforcement. These three recovery endpoints explicitly permit pending replacement. Management/key endpoints themselves are not implemented yet.
+`GET /api/auth/me` returns the same safe user/CSRF shape, resolving role, status, and password-change state from MongoDB on each request. It does not renew the session or cookie. Missing, invalid, expired, orphaned, or disabled-account sessions receive `401 Unauthorized`. Users requiring password replacement may access only account details, password change, and logout. Ordinary session authentication denies them with `403 Password change required`, regardless of role; later management/key routes must use that default enforcement. These three recovery endpoints explicitly permit pending replacement. Administrator creation/list/inspection routes are described below; key management remains later work.
 
 Logout requires both the trusted Origin and this session's token. A token from a different device is rejected. This example uses `jq` to read the token from the safe response:
 
@@ -88,7 +88,7 @@ Success returns `204`, expires the current cookie, atomically replaces the Argon
 
 Invalid or unknown JSON fields and password bounds return `400 Invalid request`; an incorrect current password returns `400 Current password is incorrect`; an unchanged password returns `400 New password must be different`. Missing/invalid/expired sessions return `401 Unauthorized`. Origin/CSRF failures return `403 Forbidden`; storage or hashing failures return `503 Authentication unavailable`. Responses are non-cacheable and never include passwords, hashes, or raw exceptions. Failed validation leaves account and sessions intact. If another password change wins concurrently, the stale request is rejected. Login's transactional user write prevents an old-password login from creating a session that escapes invalidation.
 
-A connection failure during transaction commit can leave the password changed even if the client receives `503`; attempt fresh login with the new password before retrying. Already admitted requests need not be canceled. Administrator resets and assigned member creation belong to later tickets, but the pending-password state and enforcement are implemented here.
+A connection failure during transaction commit can leave the password changed even if the client receives `503`; attempt fresh login with the new password before retrying. Already admitted requests need not be canceled. Administrator resets belong to a later ticket. Assigned member creation uses the same pending-password state and enforcement.
 
 ## Persistence, throttling, and failure behavior
 
@@ -115,3 +115,41 @@ helm lint infra/helm/urumi -f infra/helm/urumi/values-prod.yaml
 ```
 
 The existing integration runner includes the dashboard HTTP tests automatically. MongoDB must be a replica set and must permit creation of the new session/throttling collections and indexes. Existing local account data is preserved.
+
+## Create and inspect members (#6)
+
+These routes require a live dashboard session for an administrator with no pending password replacement. Roles are resolved from MongoDB on every request. Members receive `403 Forbidden`; pending-password users receive `403 Password change required` regardless of role. Missing sessions and bearer-only requests receive `401 Unauthorized`. Creation additionally requires trusted Origin and the session-bound CSRF token. All responses use `Cache-Control: no-store` and contain only the safe user fields shown above.
+
+| Endpoint | Request | Successful response |
+| --- | --- | --- |
+| `POST /api/admin/users` | JSON with exactly `email` and `password` | `201 { "user": { "id", "email", "role", "status", "requiredPasswordChange", "createdAt", "updatedAt" } }` |
+| `GET /api/admin/users?page=1&limit=20` | Positive integer query values; default page 1, limit 20 | `200 { "users": [safe user objects], "page": 1, "limit": 20 }` |
+| `GET /api/admin/users/:userId` | Canonical 24-character hexadecimal account ID | `200 { "user": safe user object }` |
+
+Creation always assigns `role: member`, `status: active`, and `requiredPasswordChange: true`. Email is trimmed and lowercased and protected by the existing unique index. Assigned passwords preserve whitespace/Unicode, require 12–128 code points, and are stored only as Argon2id hashes. Role, status, identity claims, hashes, and other unknown body fields are rejected with `400 Invalid request`. Duplicate normalized email returns `409 Email already exists`, including competing requests from different gateway instances. Hashing/storage failures return safe `503 Authentication unavailable`; a failed connection after insertion can leave the account created, so inspect the account list before retrying.
+
+Lists are ordered by account ID ascending. `limit` accepts 1–100 and `page` accepts 1–2147483647; unknown, repeated, non-integer, or out-of-range query fields return `400 Invalid request`. Pages beyond the list are empty. Offset pagination does not provide a snapshot across concurrent account additions. A malformed account ID returns `400`; a valid missing ID returns `404 User not found`. Passwords, hashes, and internal credential revisions never appear in these responses.
+
+After administrator login, fetch `/api/auth/me` using the earlier example to obtain `me.json`. Create the member using hidden input:
+
+```bash
+csrf_token=$(jq -r '.csrfToken' "$session_dir/me.json")
+python3 -c 'import getpass,json,sys; print("Member email: ",file=sys.stderr,end="",flush=True); email=input(); print(json.dumps({"email":email,"password":getpass.getpass("Assigned temporary password: ")}))' \
+  | curl --fail-with-body --silent --show-error \
+      -b "$session_dir/cookies" \
+      -H 'Origin: http://localhost:3000' -H "X-CSRF-Token: $csrf_token" \
+      -H 'Content-Type: application/json' \
+      --data-binary @- http://localhost:3000/api/admin/users \
+      > "$session_dir/member.json"
+unset csrf_token
+
+curl --fail-with-body --silent --show-error \
+  -b "$session_dir/cookies" 'http://localhost:3000/api/admin/users?page=1&limit=20'
+
+member_id=$(jq -r '.user.id' "$session_dir/member.json")
+curl --fail-with-body --silent --show-error \
+  -b "$session_dir/cookies" "http://localhost:3000/api/admin/users/$member_id"
+unset member_id
+```
+
+Deliver the assigned password to the member through your chosen private channel. The member uses a separate cookie jar to log in with that password and obtains their own CSRF token. Until replacement, only `/api/auth/me`, `/api/auth/change-password`, and `/api/auth/logout` are permitted. Follow **Replace a password** above with the assigned password as `currentPassword` and a different final password as `newPassword`. Success invalidates all member sessions; log in again with the final password. The fresh account reports `requiredPasswordChange: false`, while administrator routes remain denied to the member. No invitation/email delivery, role promotion, account status mutation, or dashboard UI is included in this slice. Persistent MCP keys/authentication and public `/api` Ingress remain later tickets; existing bootstrap MCP behavior is unchanged.

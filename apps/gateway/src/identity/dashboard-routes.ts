@@ -6,6 +6,8 @@ import type { DashboardConfig } from "./dashboard-config.js";
 import { createDashboardSessions, DashboardAuthError, dashboardSessionLifetimeSeconds } from "./dashboard-sessions.js";
 import { isDashboardHttps, loginSourceIp } from "./source-ip.js";
 import { validatePassword } from "./passwords.js";
+import { createMember } from "./member-accounts.js";
+import { safeUser } from "./safe-user.js";
 
 const cookieName = "urumi_dashboard";
 const passwordInput = z.string().refine((value) => {
@@ -90,6 +92,43 @@ export async function registerDashboardRoutes(app: FastifyInstance, storage: Ide
       await sessions.logout(token);
       reply.header("Set-Cookie", cookie("", new Date(0), !config.allowHttp, 0));
       return reply.code(204).send();
+    });
+    await routes.register(async (admin) => {
+      admin.addHook("preHandler", async (request) => {
+        const authenticated = await sessions.authenticate(credential(request));
+        if (authenticated.user.role !== "admin") throw new DashboardAuthError(403, "Forbidden");
+        if (request.method === "POST") {
+          requireTrustedOrigin(request, config);
+          requireCsrf(request, authenticated.csrfToken);
+        }
+      });
+      admin.post("/api/admin/users", { bodyLimit: 4096 }, async (request, reply) => {
+        if (!/^application\/json(?:\s*;.*)?$/i.test(request.headers["content-type"] ?? "")) throw new DashboardAuthError(415, "Invalid request");
+        const parsed = z.strictObject({
+          email: z.string().trim().toLowerCase().email().max(254), password: passwordInput,
+        }).safeParse(request.body);
+        if (!parsed.success) throw new DashboardAuthError(400, "Invalid request");
+        const user = await createMember(storage, parsed.data.email, parsed.data.password);
+        return reply.code(201).send({ user });
+      });
+      admin.get("/api/admin/users/:userId", async (request) => {
+        const parsed = z.strictObject({ userId: z.string().regex(/^[a-fA-F0-9]{24}$/) }).safeParse(request.params);
+        if (!parsed.success) throw new DashboardAuthError(400, "Invalid request");
+        const user = await storage.users.findById(parsed.data.userId);
+        if (!user) throw new DashboardAuthError(404, "User not found");
+        return { user: safeUser(user) };
+      });
+      admin.get("/api/admin/users", async (request) => {
+        const integer = (maximum: number) => z.string().regex(/^[1-9][0-9]*$/)
+          .transform(Number).pipe(z.number().int().min(1).max(maximum));
+        const parsed = z.strictObject({
+          page: integer(2147483647).default(1), limit: integer(100).default(20),
+        }).safeParse(request.query);
+        if (!parsed.success) throw new DashboardAuthError(400, "Invalid request");
+        const { page, limit } = parsed.data;
+        const users = await storage.users.find().sort({ _id: 1 }).skip((page - 1) * limit).limit(limit);
+        return { users: users.map(safeUser), page, limit };
+      });
     });
   });
 }

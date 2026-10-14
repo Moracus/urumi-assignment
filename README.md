@@ -19,7 +19,7 @@ This document describes source at commit [`f740f55`](https://github.com/Moracus/
 - Dockerfiles for the gateway and upstream services; Helm Deployments, ClusterIP Services, health probes, resource settings, and persistent volumes for WordPress and MariaDB.
 - Gateway `/mcp` and storefront `/` Ingress routes, plus ingress restrictions between platform components.
 
-The React dashboard is a scaffold. User management, key management, audit browsing, server management, and chat are not implemented.
+The React dashboard is a scaffold. Administrator member creation, listing, and inspection are available through the [backend API](docs/dashboard-sessions.md#create-and-inspect-members-6). Account lifecycle changes, key management, audit browsing, server management, and chat remain later work.
 
 ## Architecture
 
