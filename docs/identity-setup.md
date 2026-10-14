@@ -1,6 +1,6 @@
 # Persistent identity storage and initial administrator setup (#3)
 
-This ticket implements storage, passwords, one-time CLI enrollment, and database health. Dashboard login, sessions and password replacement are implemented by [tickets #4–#5](dashboard-sessions.md). Persistent MCP keys, account management, operator recovery, dashboard UI, dynamic upstream persistence, and durable audits remain later work. Normal MCP requests still use `GATEWAY_BOOTSTRAP_KEY` and the bootstrap identity until the persistent MCP authentication ticket replaces them. Creating an administrator makes it usable for dashboard login with the configuration in ticket #4; it does not yet make it usable for MCP. This is an incremental development slice, not a production completion claim.
+This ticket implements storage, passwords, one-time CLI enrollment, and database health. Dashboard login, sessions and password replacement are implemented by [tickets #4–#5](dashboard-sessions.md). [Personal key management](api-keys.md) and [persistent MCP authentication](mcp-authentication.md) are implemented by tickets #7–#8. Account lifecycle management, operator recovery, dashboard UI, dynamic upstream persistence, and durable audits remain later work. Create the first administrator, log in through the dashboard API, and issue an individual key for MCP use. The bootstrap credential never authenticates MCP. This is an incremental development slice, not a production completion claim.
 
 ## Local replica set
 
@@ -23,7 +23,7 @@ Do not expose this development database remotely. Shared or deployed databases r
 
 ## First administrator
 
-Setup is CLI-only. There is no HTTP enrollment route. Configure `GATEWAY_BOOTSTRAP_KEY` through the existing secret mechanism, or set `GATEWAY_BOOTSTRAP_KEY_FILE` to an operator-provided file for CLI setup. The file setting takes precedence in the CLI; it does not change existing MCP authentication.
+Setup is CLI-only. There is no HTTP enrollment route. Configure `GATEWAY_BOOTSTRAP_KEY` through the existing secret mechanism, or set `GATEWAY_BOOTSTRAP_KEY_FILE` to an operator-provided file for CLI setup. The file setting takes precedence in the CLI; neither setting authenticates normal MCP requests.
 
 Interactive setup accepts only the email on the command line and reads the supplied bootstrap secret and final password using hidden terminal prompts:
 
@@ -70,6 +70,6 @@ To run selected compiled files manually, provide `MONGODB_TEST_URI`; persistence
 
 ## Kubernetes limitation
 
-The gateway Deployment reads `MONGODB_URI` from key `uri` in the Secret selected by `gateway.mongodbSecretName` (default `urumi-identity-storage`). Supply the URI through your secret-management workflow; never put it in committed Helm values. Existing bootstrap Secret wiring is unchanged. Local and production values inherit the same Secret reference.
+The gateway Deployment reads `MONGODB_URI` from key `uri` in the Secret selected by `gateway.mongodbSecretName` (default `urumi-identity-storage`). Supply the URI through your secret-management workflow; never put it in committed Helm values. Existing bootstrap Secret wiring is unchanged, but the gateway runtime ignores that credential; it remains an initial setup CLI credential. Local and production values inherit the same Secret reference.
 
 The chart does **not** provision MongoDB, identity PVCs, database access policies, authentication/TLS, or replica-set topology. Existing installations cannot run this gateway image without a usable replica set and URI Secret. Arrange those dependencies before upgrading the gateway; full Kubernetes rollout and connectivity verification remain later work. No cluster workloads or network-policy enforcement were verified for this ticket.

@@ -54,21 +54,13 @@ The gateway constructs an MCP server using the current catalog and request ident
 
 ## Authentication and authorization
 
-Every gateway request whose path is `/mcp` passes a Fastify authentication hook. Missing or invalid bearer credentials return HTTP 401 with `WWW-Authenticate`. Missing bootstrap configuration returns HTTP 503. The MCP handler also derives identity from the request's authorization header when constructing the server.
+Every `/mcp` HTTP request authenticates once before the SDK handler using the SHA-256 digest of its individually issued `ugw_` bearer key. MongoDB resolves the current unrevoked key and active owner with no pending password replacement. Missing, invalid, revoked, orphaned, disabled-user, and pending-password credentials receive safe HTTP 401 with `WWW-Authenticate`; authentication storage failures return bounded safe 503 responses. Bootstrap credentials, dashboard cookies, and client session identifiers never authenticate MCP. There is no outage fallback.
 
-Authentication reads `GATEWAY_BOOTSTRAP_KEY`, hashes both the configured and supplied tokens with SHA-256, and compares equal-length digests with `timingSafeEqual`. A successful request becomes:
+A request-local asynchronous scope propagates verified `AuthenticatedIdentity` (`userId`, current `role`, and `keyId`) into the existing per-request MCP factory and shared execution path. It avoids duplicate database authentication and does not introduce persistent MCP sessions or identity caching. Successful authentication advances `lastUsedAt`, even if later protocol, authorization, or execution fails. A conditional update guards concurrent revocation and never moves last use backwards. Subsequent requests from an existing connection recheck database state; already admitted operations need not be canceled. See [read-only MCP use and revocation](mcp-authentication.md).
 
-```json
-{
-  "userId": "bootstrap-admin",
-  "role": "admin",
-  "keyId": "bootstrap-key"
-}
-```
+Users and permanently consumed initial administrator setup are stored in MongoDB, with Argon2id passwords and unique normalized email. [Personal key management](api-keys.md) uses a separate dashboard cookie/session boundary. [Dashboard sessions](dashboard-sessions.md) persist hashed opaque credentials with a fixed eight-hour expiry, exact trusted Origin and session-bound CSRF for mutations, and current user eligibility/roles. Password replacement transactionally replaces the password hash, clears required replacement, and invalidates every target-user session without revoking keys. Only account details, password change, and logout permit pending replacement. Transactions coordinate rolling login throttles across gateway instances. Secure HTTPS is required unless explicit development HTTP is configured. See [identity setup](identity-setup.md) for storage and CLI behavior.
 
-Users and permanently consumed initial administrator setup are stored in MongoDB, with Argon2id passwords and unique normalized email. Dashboard login uses those accounts through a separate cookie/session boundary; MCP authentication with persistent API keys remains later work; [personal key management](api-keys.md) is implemented. [Dashboard sessions](dashboard-sessions.md) persist hashed opaque credentials with a fixed eight-hour expiry, require exact trusted Origin and session-bound CSRF for logout and password replacement, and resolve current account role/status on each request. Password replacement transactionally replaces the password hash, clears required replacement, and invalidates every target-user dashboard session without revoking keys. Ordinary session authentication rejects users requiring password replacement; only account details, password change, and logout explicitly allow that state. MongoDB transactions coordinate rolling login throttles across gateway instances. Secure HTTPS is required unless explicit development HTTP is configured. A bearer credential cannot select the member role. Hashing during comparison must not be confused with a persisted hashed-key store: normal MCP authentication still uses the configured bootstrap secret until the persistent MCP authentication ticket replaces it. See [identity setup](identity-setup.md) for storage and CLI behavior.
-
-The authorization module permits admins to invoke all registered tools. Its member allowlist includes `woocommerce.list_products`, `woocommerce.list_orders`, `woocommerce.get_order`, `calculator.calculate`, and `time.current`. Product creation and order updates are rejected for members. Member behavior is exercised by internal tests with constructed identities.
+The authorization module permits admins to invoke all registered tools. Its member allowlist includes `woocommerce.list_products`, `woocommerce.list_orders`, `woocommerce.get_order`, `calculator.calculate`, and `time.current`. Product creation and order updates are rejected for members. Member behavior is exercised through real MCP SDK requests with persisted keys as well as shared execution tests.
 
 Authorization is applied both while constructing the visible catalog and before resolving/executing a tool. This prevents an internal caller from bypassing authorization simply by naming a hidden tool. Host allowlists provide HTTP host validation; they are separate from bearer authentication and Kubernetes network controls.
 
@@ -119,7 +111,7 @@ Recovery is periodic reconnection and rediscovery, not automatic replay of the f
 | WordPress readiness | A static WordPress CSS asset is served, not a commerce transaction. |
 | MariaDB readiness | Container health script checks connectivity and InnoDB initialization. |
 
-Gateway readiness does not check the bootstrap credential, complete tool availability, or end-to-end WooCommerce behavior. Cached connection state can lag behind an outage until a request or discovery refresh detects it.
+Gateway readiness checks database availability and connected upstreams, but not individual keys, complete tool availability, or end-to-end WooCommerce behavior. Cached connection state can lag behind an outage until a request or discovery refresh detects it.
 
 Startup validates MongoDB connectivity, indexes, and an actual transactional write before serving. New MCP requests fail safely with HTTP 503 during database outages; liveness remains healthy, and readiness recovers through driver reconnection. Fastify's close hook closes the MCP handler, registry, and identity database, clearing the refresh timer. Later cleanup runs even if earlier cleanup fails. The process entry point calls application close on SIGINT and SIGTERM; HTTP tests call the same close boundary directly.
 
@@ -166,7 +158,7 @@ The chart expects these pre-existing Secrets:
 | --- | --- | --- |
 | `urumi-db-secret` | `database-password`, `root-password` | WordPress and MariaDB; root password is used by MariaDB only. |
 | `urumi-woocommerce-api` | `consumer-key`, `consumer-secret` | WooCommerce MCP. |
-| `urumi-gateway-auth` | `bootstrap-key` | Gateway. |
+| `urumi-gateway-auth` | `bootstrap-key` | Legacy gateway environment wiring; runtime ignores it. Initial administrator setup uses the bootstrap secret. |
 
 Secrets are injected as environment variables, so changes require affected Pods to restart. The chart neither creates the Secrets nor manages their rotation. Kubernetes Secret references alone do not establish encryption-at-rest, access-control, or external secret-manager guarantees.
 
@@ -188,7 +180,7 @@ These records cover calls that enter the execution boundary. Failed HTTP authent
 
 The repository includes unit tests for execution authorization/audit and aggregation/resolution, plus runnable registry, aggregation, routing, WooCommerce REST, and interactive failure-isolation scripts. Internal routing scripts construct identities directly and do not test public HTTP authentication. The README separates those checks from MCP-client and cluster-policy validation.
 
-The current architecture provides a functional execution and routing boundary, but is not a complete multi-user management platform. [Personal key management](api-keys.md) persists SHA-256 key digests and safe owner-scoped metadata, with one-time disclosure and idempotent revocation. Issuance transactionally checks eligibility and enforces the 20-active-key limit across gateway instances. Its HTTP routes use dashboard sessions and Origin/CSRF protection. Persistent MCP authentication with these keys, administrator key management, account lifecycle management, editable upstream configuration, durable audit storage, dashboard features, chat orchestration, TLS deployment, broader request rate limiting, egress controls, backups, and high availability are absent. Additions should update this document when their source and deployment behavior exist.
+The current architecture provides a functional execution and routing boundary, but is not a complete multi-user management platform. [Personal key management](api-keys.md) persists SHA-256 key digests and safe owner-scoped metadata, with one-time disclosure and idempotent revocation. Issuance transactionally checks eligibility and enforces the 20-active-key limit across gateway instances. Its HTTP routes use dashboard sessions and Origin/CSRF protection. Administrator key management, account lifecycle management, editable upstream configuration, durable audit storage, dashboard features, chat orchestration, TLS deployment, broader request rate limiting, egress controls, backups, and high availability are absent. Additions should update this document when their source and deployment behavior exist.
 
 ## Member account administration (#6)
 

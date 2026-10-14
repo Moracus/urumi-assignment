@@ -426,6 +426,9 @@ test("logout requires exact Origin and session-bound CSRF and ends only this dev
   const first = await f.login();
   const second = await f.login();
   const cookie = sessionCookie(first);
+  const issued = await f.app.inject({ method: "POST", url: "/api/keys", payload: {},
+    headers: { cookie, origin, "x-csrf-token": first.json().csrfToken } });
+  assert.equal(issued.statusCode, 201);
   const logout = (headers: Record<string, string>) => f.app.inject({
     method: "POST", url: "/api/auth/logout", headers: { cookie, ...headers },
   });
@@ -449,7 +452,7 @@ test("logout requires exact Origin and session-bound CSRF and ends only this dev
   assert.equal((await f.app.inject({ url: "/api/auth/me", headers: { cookie: sessionCookie(second) } })).statusCode, 200);
   assert.equal(await f.db.collection("dashboard_sessions").countDocuments(), 1);
   const mcp = await f.app.inject({ method: "POST", url: "/mcp", headers: {
-    authorization: "Bearer test-only-gateway-key", accept: "application/json, text/event-stream",
+    authorization: `Bearer ${issued.json().rawKey}`, accept: "application/json, text/event-stream",
   }, payload: { jsonrpc: "2.0", id: 1, method: "initialize", params: {
     protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "logout-test", version: "1" },
   } } });

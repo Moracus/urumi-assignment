@@ -4,12 +4,12 @@ A TypeScript MCP gateway that exposes WooCommerce, calculator, and time tools th
 
 Repository: [Moracus/urumi-assignment](https://github.com/Moracus/urumi-assignment).
 
-This document describes source at commit [`f740f55`](https://github.com/Moracus/urumi-assignment/tree/f740f557e524dd9ccf45e41014038a08a66aad92). Deployment checks below are instructions, not a claim that a particular cluster has passed them.
+This document describes the current repository implementation. Deployment checks below are instructions, not a claim that a particular cluster has passed them.
 
 ## Implemented capabilities
 
 - MCP Streamable HTTP at `/mcp` on the gateway and three upstream services.
-- Gateway bearer authentication using `GATEWAY_BOOTSTRAP_KEY`, with SHA-256 digest comparison through `timingSafeEqual`.
+- [Persistent gateway API-key authentication](docs/mcp-authentication.md), checking current key/user eligibility and roles on every incoming MCP request.
 - An execution boundary that authorizes, resolves, invokes, and audits tool calls.
 - Upstream discovery, namespaced tool aggregation, schema forwarding, and routing to the original upstream tool name.
 - Independent upstream connections, request timeouts, periodic discovery, and reconnection attempts.
@@ -19,7 +19,7 @@ This document describes source at commit [`f740f55`](https://github.com/Moracus/
 - Dockerfiles for the gateway and upstream services; Helm Deployments, ClusterIP Services, health probes, resource settings, and persistent volumes for WordPress and MariaDB.
 - Gateway `/mcp` and storefront `/` Ingress routes, plus ingress restrictions between platform components.
 
-The React dashboard is a scaffold. Administrator member creation, listing, and inspection are available through the [backend API](docs/dashboard-sessions.md#create-and-inspect-members-6). Eligible users can [manage their personal gateway API keys](docs/api-keys.md), with one-time disclosure, safe metadata, and revocation. Account lifecycle changes, persistent MCP bearer authentication, administrator key management, audit browsing, server management, and chat remain later work.
+The React dashboard is a scaffold. Administrator member creation, listing, and inspection are available through the [backend API](docs/dashboard-sessions.md#create-and-inspect-members-6). Eligible users can [manage their personal gateway API keys](docs/api-keys.md), with one-time disclosure, safe metadata, and revocation. Account lifecycle changes, administrator key management, audit browsing, server management, and chat remain later work.
 
 ## Architecture
 
@@ -54,7 +54,7 @@ Gateway names include the upstream prefix. Direct upstream endpoints use the unp
 | `calculator.calculate` | `operation`: `add`, `subtract`, `multiply`, or `divide`; numeric `a` and `b`. Rejects division by zero and non-finite results. |
 | `time.current` | Current time in an IANA `timezone` (default `UTC`), with date, local time, UTC ISO timestamp, and Unix timestamp. |
 
-Admin authorization permits all registered tools. The member policy permits the three WooCommerce read tools, calculator, and time, but rejects product creation and order updates. **MCP bearer authentication currently always creates the bootstrap admin identity**; dashboard login resolves real user accounts separately. Personal key issuance is implemented, but using those keys for MCP remains later work.
+Admin authorization permits all registered tools. The member policy permits the three WooCommerce read tools, calculator, and time, but rejects product creation and order updates. MCP bearer authentication resolves the current user and role from the individually hashed key on every request. Dashboard session cookies and API keys authenticate only their respective boundaries; bootstrap credentials never authenticate MCP.
 
 ## Repository layout
 
@@ -99,10 +99,9 @@ Before starting the gateway, follow [identity setup](docs/identity-setup.md) to 
 Provide credentials in your shell; these prompts avoid putting literal credentials in the commands:
 
 ```bash
-read -r -s -p 'Gateway bootstrap key: ' GATEWAY_BOOTSTRAP_KEY; printf '\n'
 read -r -s -p 'WooCommerce consumer key: ' WC_CONSUMER_KEY; printf '\n'
 read -r -s -p 'WooCommerce consumer secret: ' WC_CONSUMER_SECRET; printf '\n'
-export GATEWAY_BOOTSTRAP_KEY WC_CONSUMER_KEY WC_CONSUMER_SECRET
+export WC_CONSUMER_KEY WC_CONSUMER_SECRET
 export WC_URL=http://localhost:8080
 export WOOCOMMERCE_MCP_URL=http://localhost:3001/mcp
 export CALCULATOR_MCP_URL=http://localhost:3002/mcp
@@ -122,7 +121,7 @@ Run this prompt block in Bash (`bash` if your default shell is zsh). Set `WC_URL
 
 Each backend exposes `/health/live` and `/health/ready`. Gateway readiness requires available MongoDB and at least one connected upstream, so it does not mean all seven tools are available. Upstream health endpoints report process health without validating WooCommerce connectivity.
 
-Use an MCP-capable client with Streamable HTTP and the header `Authorization: Bearer <your-bootstrap-key>` for gateway requests. Calculator example: call `calculator.calculate` with `{"operation":"multiply","a":6,"b":7}`. A successful text result contains `42`. Time example: call `time.current` with `{"timezone":"Asia/Kolkata"}`.
+Use an MCP-capable client with Streamable HTTP and the header `Authorization: Bearer <your-gateway-api-key>` for gateway requests. Calculator example: call `calculator.calculate` with `{"operation":"multiply","a":6,"b":7}`. A successful text result contains `42`. Time example: call `time.current` with `{"timezone":"Asia/Kolkata"}`. Follow [key issuance](docs/api-keys.md) and [read-only MCP requests/revocation](docs/mcp-authentication.md) first; the setup bootstrap secret cannot authenticate MCP.
 
 ## Deploy to local Kubernetes
 
@@ -236,7 +235,7 @@ Port-forwarding is administrative access and is not evidence that pod-to-pod Net
 | --- | --- | --- |
 | `PORT`, `HOST` | Backends | Listen address; local defaults use loopback, containers use `0.0.0.0`. |
 | `MCP_ALLOWED_HOSTS` | Backends | Comma-separated allowed HTTP hostnames. |
-| `GATEWAY_BOOTSTRAP_KEY` | Gateway | Required bearer credential; maps to one admin identity. |
+| `GATEWAY_BOOTSTRAP_KEY` | Setup CLI | Initial administrator setup secret; never authenticates normal MCP requests. The legacy chart still injects it into the gateway. |
 | `MONGODB_URI` | Gateway and setup CLI | Required transaction-capable identity database; Helm reads Secret key `uri`. |
 | `DASHBOARD_TRUSTED_ORIGINS` | Gateway | Exact trusted public origins for dashboard login and mutations; empty denies them. |
 | `DASHBOARD_ALLOW_HTTP` | Gateway | Explicit development HTTP mode; defaults false and is rejected in production. |
@@ -264,7 +263,7 @@ helm template urumi infra/helm/urumi -n urumi \
   -f infra/helm/urumi/values-local.yaml
 ```
 
-The automated gateway tests include real MongoDB CLI setup, concurrent/durable consumption, transaction/index validation, outages and reconnection, dashboard login/me/logout/password replacement, required-change restrictions, all-device invalidation and concurrent replacement/login, session expiry/restart/device independence, Origin/CSRF, shared throttling, proxy/cookie modes, plus MCP SDK discovery and calls against controlled upstreams. The runner provisions disposable MongoDB containers; no Kubernetes or commerce services are needed. `createGatewayApp()` accepts upstream configurations, an audit logger, and an optional `mongodbUri`; it validates storage, connects and refreshes the registry, returns an unlistening Fastify app, and releases MCP/registry/database resources on `app.close()`. The process entry point owns listening and signal shutdown. Normal MCP bootstrap authentication and console audits remain until later tickets replace or extend them.
+The automated gateway tests include real MongoDB CLI setup, concurrent/durable consumption, transaction/index validation, outages and reconnection, dashboard login/me/logout/password replacement, required-change restrictions, all-device invalidation and concurrent replacement/login, session expiry/restart/device independence, Origin/CSRF, shared throttling, proxy/cookie modes, plus MCP SDK discovery and calls against controlled upstreams. The runner provisions disposable MongoDB containers; no Kubernetes or commerce services are needed. `createGatewayApp()` accepts upstream configurations, an audit logger, and an optional `mongodbUri`; it validates storage, connects and refreshes the registry, returns an unlistening Fastify app, and releases MCP/registry/database resources on `app.close()`. The process entry point owns listening and signal shutdown. MCP requests use current persisted key/user state, with real user/key attribution in console audits; durable audit storage remains later work.
 
 With all three upstream endpoints reachable and the gateway URL variables set as in the local setup:
 
@@ -282,7 +281,7 @@ Verify network isolation using ordinary test Pods: unrelated Pods should be deni
 
 ## Current limitations
 
-- Normal MCP still uses one environment-backed bootstrap admin credential. Users, one-time CLI setup, independent eight-hour dashboard sessions, shared login throttling, and personal hashed API-key records are persisted. MCP authentication with those keys, administrator key management, account lifecycle management, and operator recovery remain later tickets.
+- MCP uses individually revocable hashed API keys with per-request eligibility/role lookup. Users, one-time CLI setup, independent eight-hour dashboard sessions, shared login throttling, and key metadata are persisted. Administrator key management, account lifecycle management, and operator recovery remain later tickets.
 - Registry, discovery cache, and connections are in memory. No registry CRUD API or persisted upstream configuration.
 - Audits are console records, with no durable audit database, queue, query API, or dashboard. Authentication failures and SDK-level validation failures do not necessarily reach the execution audit boundary.
 - NetworkPolicies cover ingress only. They do not restrict egress and require an enforcing network plugin. Controller namespace and workload-label selectors are broader than cryptographic service identity.

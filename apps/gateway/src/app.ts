@@ -1,4 +1,6 @@
 import { createMcpFastifyApp } from "@modelcontextprotocol/fastify";
+import { AsyncLocalStorage } from "node:async_hooks";
+import type { AuthenticatedIdentity } from "./security/identity.js";
 
 import { toNodeHandler } from "@modelcontextprotocol/node";
 
@@ -95,18 +97,13 @@ export async function createGatewayApp(options: GatewayAppOptions = {}) {
     // 3. Create MCP HTTP handler
     // ------------------------------------------
 
+    // Adapt the Node HTTP handler to the SDK factory without a second lookup.
+    // Each incoming request gets a separate scope, including legacy stateless serving.
+    const verifiedIdentity = new AsyncLocalStorage<AuthenticatedIdentity>();
     const mcpHandler = createMcpHandler(
-      (context) => {
-        // Identity is established independently
-        // for each incoming MCP request.
-        const authorization =
-          context.requestInfo?.headers.get(
-            "authorization",
-          );
-
-        const identity = authenticateRequest(
-          authorization ?? undefined,
-        );
+      () => {
+        const identity = verifiedIdentity.getStore();
+        if (!identity) throw new AuthenticationError();
 
         return createGatewayMcpServer(
           identity,
@@ -166,18 +163,16 @@ export async function createGatewayApp(options: GatewayAppOptions = {}) {
     // 6. Authentication boundary
     // ------------------------------------------
 
-    app.addHook("preHandler", async (request, reply) => {
-      if (request.url.split("?")[0] !== "/mcp") {
-        return;
-      }
-
+    app.all("/mcp", async (request, reply) => {
       try {
         if (!(await identityStorage.isAvailable())) {
           return reply.code(503).send({ error: "Authentication unavailable" });
         }
-        authenticateRequest(
+        const identity = await authenticateRequest(
           request.headers.authorization,
+          identityStorage,
         );
+        return await verifiedIdentity.run(identity, () => nodeHandler(request.raw, reply.raw, request.body));
       } catch (error) {
         if (error instanceof AuthenticationError) {
           return reply
@@ -192,25 +187,13 @@ export async function createGatewayApp(options: GatewayAppOptions = {}) {
         }
 
         request.log.error(
-          "Gateway authentication configuration error",
+          "Gateway authentication unavailable",
         );
 
         return reply.code(503).send({
           error: "Authentication unavailable",
         });
       }
-    });
-
-    // ------------------------------------------
-    // 7. MCP endpoint
-    // ------------------------------------------
-
-    app.all("/mcp", (request, reply) => {
-      return nodeHandler(
-        request.raw,
-        reply.raw,
-        request.body,
-      );
     });
 
     // ------------------------------------------

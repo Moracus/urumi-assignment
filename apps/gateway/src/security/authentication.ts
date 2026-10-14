@@ -1,7 +1,8 @@
 import {
   createHash,
-  timingSafeEqual,
 } from "node:crypto";
+import type { IdentityStorage } from "../identity/storage.js";
+import { isUserEligibleForOrdinaryAccess } from "../identity/account-eligibility.js";
 
 import type {
   AuthenticatedIdentity,
@@ -14,43 +15,32 @@ export class AuthenticationError extends Error {
   }
 }
 
-function hashToken(token: string): Buffer {
-  return createHash("sha256")
-    .update(token)
-    .digest();
-}
-
-export function authenticateRequest(
+export async function authenticateRequest(
   authorizationHeader: string | undefined,
-): AuthenticatedIdentity {
-  const configuredKey = process.env.GATEWAY_BOOTSTRAP_KEY;
-
-  if (!configuredKey) {
-    throw new Error(
-      "Gateway bootstrap authentication is not configured",
-    );
-  }
-
+  storage: IdentityStorage,
+): Promise<AuthenticatedIdentity> {
   const match = authorizationHeader?.match(
-    /^Bearer ([^\s]+)$/,
+    /^Bearer (ugw_[A-Za-z0-9_-]{43})$/,
   );
 
   if (!match) {
     throw new AuthenticationError();
   }
 
-  const providedKey = match[1];
-
-  const expectedHash = hashToken(configuredKey);
-  const providedHash = hashToken(providedKey);
-
-  if (!timingSafeEqual(expectedHash, providedHash)) {
-    throw new AuthenticationError();
-  }
+  const keyHash = createHash("sha256").update(match[1]).digest("hex");
+  const key = await storage.apiKeys.findOne({ keyHash, revokedAt: null });
+  const user = key ? await storage.users.findById(key.userId) : null;
+  if (!key || !user || !isUserEligibleForOrdinaryAccess(user)) throw new AuthenticationError();
+  // Revocation between lookup and admission must not restore or update the key.
+  // $max prevents concurrent request completion from moving last-use backwards.
+  const updated = await storage.apiKeys.updateOne({ _id: key._id, revokedAt: null }, {
+    $max: { lastUsedAt: new Date() },
+  });
+  if (updated.matchedCount !== 1) throw new AuthenticationError();
 
   return {
-    userId: "bootstrap-admin",
-    role: "admin",
-    keyId: "bootstrap-key",
+    userId: user._id.toHexString(),
+    role: user.role,
+    keyId: key._id.toHexString(),
   };
 }

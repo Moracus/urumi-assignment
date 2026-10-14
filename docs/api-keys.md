@@ -1,8 +1,8 @@
-# Personal gateway API keys (#7)
+# Personal gateway API keys (#7–#8)
 
 Eligible members and administrators can issue, list, and revoke their own keys using a dashboard session. All operations derive ownership from the authenticated session; bearer credentials cannot authenticate these endpoints. Disabled users receive `401 Unauthorized`; users awaiting password replacement receive `403 Password change required`. Complete [password replacement and fresh login](dashboard-sessions.md#replace-a-password) first when required.
 
-This slice persists and manages keys. Using them at `/mcp`, updating `lastUsedAt`, administrator management of other users' keys, account lifecycle changes, and the React dashboard belong to later tickets. Normal MCP authentication still uses the existing bootstrap mechanism. The chart exposes only `/mcp`; use direct local access for `/api` until the public API rollout is implemented.
+Keys now authenticate external clients at `/mcp` with current eligibility and roles checked on every request; successful authentication advances `lastUsedAt`. See [read-only MCP requests and revocation](mcp-authentication.md). Administrator management of other users' keys, account lifecycle changes, and the React dashboard belong to later tickets. The chart exposes only `/mcp`; use direct local access for `/api` until the public API rollout is implemented.
 
 | Endpoint | Request | Successful response |
 | --- | --- | --- |
@@ -62,4 +62,4 @@ Database failures return safe `503 Authentication unavailable` with no credentia
 
 ## Validation and deployment
 
-Run `pnpm typecheck`, `pnpm build`, and `pnpm --filter @urumi/gateway test:integration`. The integration runner includes real replica-set HTTP tests for disclosure/storage/log safety, ownership, eligibility, CSRF, strict inputs, pagination, idempotence, concurrent issuance, and outages. No dependencies, environment variables, Helm resources, or public routes change. Restart the gateway with its existing transaction-capable MongoDB configuration; startup creates the key collection/indexes. Full Kubernetes/API routing and persistent MCP authentication remain unimplemented.
+Run `pnpm typecheck`, `pnpm build`, and `pnpm --filter @urumi/gateway test:integration`. The integration runner includes real replica-set HTTP tests for disclosure/storage/log safety, ownership, eligibility, CSRF, strict inputs, pagination, idempotence, concurrent issuance, and outages. No dependencies, environment variables, Helm resources, or public routes change. Restart the gateway with its existing transaction-capable MongoDB configuration; startup creates the key collection/indexes. Full Kubernetes/API routing and administrator key management remain unimplemented.

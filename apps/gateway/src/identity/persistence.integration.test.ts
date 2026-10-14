@@ -7,6 +7,7 @@ import mongoose from "mongoose";
 import { createMcpFastifyApp } from "@modelcontextprotocol/fastify";
 import { toNodeHandler } from "@modelcontextprotocol/node";
 import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
+import { Client, StreamableHTTPClientTransport, SdkHttpError } from "@modelcontextprotocol/client";
 import { createGatewayApp } from "../app.js";
 import { hashPassword } from "./passwords.js";
 
@@ -130,6 +131,13 @@ test("database outage fails readiness and MCP safely while liveness stays health
   const createdKey = await app.inject({ method: "POST", url: "/api/keys", headers: keyHeaders, payload: {} });
   assert.equal(createdKey.statusCode, 201);
   const keyId = createdKey.json().key.id;
+  const gatewayAddress = await app.listen({ host: "127.0.0.1", port: 0 });
+  const client = new Client({ name: "outage-test", version: "1.0.0" });
+  t.after(() => client.close());
+  await client.connect(new StreamableHTTPClientTransport(new URL(`${gatewayAddress}/mcp`), {
+    requestInit: { headers: { authorization: `Bearer ${createdKey.json().rawKey}` } },
+  }));
+  const keysBefore = (await app.inject({ url: "/api/keys", headers: keyHeaders })).json().keys;
   assert.equal((await app.inject({ url: "/health/ready" })).statusCode, 200);
   // Pause preserves tmpfs data; stopping this disposable container discards its sessions.
   await docker("docker", ["pause", container]);
@@ -143,6 +151,14 @@ test("database outage fails readiness and MCP safely while liveness stays health
   assert.equal(mcp.statusCode, 503);
   assert.deepEqual(mcp.json(), { error: "Authentication unavailable" });
   assert.ok(Date.now() - start < 10000);
+  const sdkStart = Date.now();
+  await assert.rejects(client.listTools(undefined, { cacheMode: "bypass", timeout: 7000 }), (error: unknown) => {
+    assert.ok(error instanceof SdkHttpError);
+    assert.equal(error.data.status, 503);
+    assert.equal(error.data.text, JSON.stringify({ error: "Authentication unavailable" }));
+    return true;
+  });
+  assert.ok(Date.now() - sdkStart < 7000);
   for (const request of [
     { url: "/api/auth/me", headers: { cookie } },
     { method: "POST" as const, url: "/api/auth/logout", headers: { cookie, origin: "http://localhost:3000", "x-csrf-token": login.json().csrfToken } },
@@ -171,5 +187,11 @@ test("database outage fails readiness and MCP safely while liveness stays health
   assert.equal((await app.inject({ url: "/mcp" })).statusCode, 401);
   assert.equal((await app.inject({ url: "/api/auth/me", headers: { cookie } })).statusCode, 200);
   const keysAfter = await app.inject({ url: "/api/keys", headers: keyHeaders });
-  assert.deepEqual(keysAfter.json().keys, [createdKey.json().key]);
+  // An already-admitted initialize notification may complete after the snapshot.
+  const lastUsedAfterOutage = keysAfter.json().keys[0].lastUsedAt;
+  assert.deepEqual(keysAfter.json().keys, [{ ...keysBefore[0], lastUsedAt: lastUsedAfterOutage }]);
+  assert.ok(Date.parse(lastUsedAfterOutage) >= Date.parse(keysBefore[0].lastUsedAt));
+  assert.deepEqual((await client.callTool({ name: "time.current" })).content, [{ type: "text", text: "controlled" }]);
+  const usedAfter = (await app.inject({ url: "/api/keys", headers: keyHeaders })).json().keys[0].lastUsedAt;
+  assert.ok(Date.parse(usedAfter) > Date.parse(keysBefore[0].lastUsedAt));
 });
