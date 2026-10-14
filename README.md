@@ -19,7 +19,7 @@ This document describes source at commit [`f740f55`](https://github.com/Moracus/
 - Dockerfiles for the gateway and upstream services; Helm Deployments, ClusterIP Services, health probes, resource settings, and persistent volumes for WordPress and MariaDB.
 - Gateway `/mcp` and storefront `/` Ingress routes, plus ingress restrictions between platform components.
 
-The React dashboard is a scaffold. Administrator member creation, listing, and inspection are available through the [backend API](docs/dashboard-sessions.md#create-and-inspect-members-6). Account lifecycle changes, key management, audit browsing, server management, and chat remain later work.
+The React dashboard is a scaffold. Administrator member creation, listing, and inspection are available through the [backend API](docs/dashboard-sessions.md#create-and-inspect-members-6). Eligible users can [manage their personal gateway API keys](docs/api-keys.md), with one-time disclosure, safe metadata, and revocation. Account lifecycle changes, persistent MCP bearer authentication, administrator key management, audit browsing, server management, and chat remain later work.
 
 ## Architecture
 
@@ -54,7 +54,7 @@ Gateway names include the upstream prefix. Direct upstream endpoints use the unp
 | `calculator.calculate` | `operation`: `add`, `subtract`, `multiply`, or `divide`; numeric `a` and `b`. Rejects division by zero and non-finite results. |
 | `time.current` | Current time in an IANA `timezone` (default `UTC`), with date, local time, UTC ISO timestamp, and Unix timestamp. |
 
-Admin authorization permits all registered tools. The member policy permits the three WooCommerce read tools, calculator, and time, but rejects product creation and order updates. **MCP bearer authentication currently always creates the bootstrap admin identity**; dashboard login resolves real user accounts separately; member API-key issuance remains later work.
+Admin authorization permits all registered tools. The member policy permits the three WooCommerce read tools, calculator, and time, but rejects product creation and order updates. **MCP bearer authentication currently always creates the bootstrap admin identity**; dashboard login resolves real user accounts separately. Personal key issuance is implemented, but using those keys for MCP remains later work.
 
 ## Repository layout
 
@@ -282,7 +282,7 @@ Verify network isolation using ordinary test Pods: unrelated Pods should be deni
 
 ## Current limitations
 
-- Normal MCP still uses one environment-backed bootstrap admin credential. Users, one-time CLI setup, independent eight-hour dashboard sessions, and shared login throttling are persisted. Persistent MCP API keys, account lifecycle management, and operator recovery remain later tickets. Digest comparison is not persisted hashed-key management.
+- Normal MCP still uses one environment-backed bootstrap admin credential. Users, one-time CLI setup, independent eight-hour dashboard sessions, shared login throttling, and personal hashed API-key records are persisted. MCP authentication with those keys, administrator key management, account lifecycle management, and operator recovery remain later tickets.
 - Registry, discovery cache, and connections are in memory. No registry CRUD API or persisted upstream configuration.
 - Audits are console records, with no durable audit database, queue, query API, or dashboard. Authentication failures and SDK-level validation failures do not necessarily reach the execution audit boundary.
 - NetworkPolicies cover ingress only. They do not restrict egress and require an enforcing network plugin. Controller namespace and workload-label selectors are broader than cryptographic service identity.

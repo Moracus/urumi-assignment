@@ -40,6 +40,32 @@ const userSchema = new Schema<StoredUser>({
 });
 userSchema.index({ email: 1 }, { unique: true, name: "unique_normalized_email" });
 
+export interface StoredApiKey {
+  userId: mongoose.Types.ObjectId;
+  keyHash: string;
+  prefix: string;
+  name: string | null;
+  createdAt: Date;
+  lastUsedAt: Date | null;
+  revokedAt: Date | null;
+}
+
+const apiKeySchema = new Schema<StoredApiKey>({
+  userId: { type: Schema.Types.ObjectId, required: true },
+  keyHash: { type: String, required: true, select: false },
+  prefix: { type: String, required: true },
+  name: { type: String, maxlength: 100, default: null },
+  createdAt: { type: Date, required: true },
+  lastUsedAt: { type: Date, default: null },
+  revokedAt: { type: Date, default: null },
+}, {
+  strict: "throw", bufferCommands: false,
+  toJSON: { transform: (_document, value) => { const { keyHash, ...safe } = value; return safe; } },
+  toObject: { transform: (_document, value) => { const { keyHash, ...safe } = value; return safe; } },
+});
+apiKeySchema.index({ keyHash: 1 }, { unique: true, name: "unique_api_key_hash" });
+apiKeySchema.index({ userId: 1, _id: 1 }, { name: "api_key_owner" });
+
 const setupSchema = new Schema({
   _id: { type: String, required: true },
   consumedAt: { type: Date, default: null },
@@ -79,16 +105,19 @@ export async function connectIdentityStorage(uri = process.env.MONGODB_URI) {
     const setup = connection.model("InitialSetup", setupSchema, "initial_setup");
     const sessions = connection.model("DashboardSession", dashboardSessionSchema, "dashboard_sessions");
     const loginThrottles = connection.model("LoginThrottle", loginThrottleSchema, "login_throttles");
+    const apiKeys = connection.model("ApiKey", apiKeySchema, "api_keys");
     stage = "collections";
     await users.createCollection();
     await setup.createCollection();
     await sessions.createCollection();
     await loginThrottles.createCollection();
+    await apiKeys.createCollection();
     stage = "indexes";
     await users.createIndexes();
     await setup.createIndexes();
     await sessions.createIndexes();
     await loginThrottles.createIndexes();
+    await apiKeys.createIndexes();
     const indexes = await users.collection.indexes();
     if (!indexes.some((index) => index.name === "unique_normalized_email"
       && index.unique && index.key.email === 1 && !index.sparse && !index.partialFilterExpression)) {
@@ -106,7 +135,7 @@ export async function connectIdentityStorage(uri = process.env.MONGODB_URI) {
     }, identityTransactionOptions);
 
     return {
-      connection, users, setup, sessions, loginThrottles,
+      connection, users, setup, sessions, loginThrottles, apiKeys,
       async isAvailable(): Promise<boolean> {
         try {
           if (connection.readyState !== 1 || !connection.db) return false;

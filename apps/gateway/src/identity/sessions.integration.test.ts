@@ -334,7 +334,7 @@ test("ordinary password changes preserve key metadata, other accounts and exact 
   await f.db.collection("users").insertOne({ email: "member@example.com", passwordHash: await hashPassword(otherPassword),
     role: "member", status: "active", requiredPasswordChange: false, createdAt: new Date(), updatedAt: new Date() });
   const other = await f.login("member@example.com", otherPassword);
-  // Persistent API-key endpoints are a later ticket; prove this operation leaves existing records intact.
+  // Prove password replacement leaves existing API-key records intact.
   await f.db.collection("api_keys").insertOne({ userId: f.userId, keyHash: createHash("sha256").update("test-only-key").digest("hex"), revokedAt: null });
   const keysBefore = await f.db.collection("api_keys").find().toArray();
   let currentPassword = password;

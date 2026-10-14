@@ -8,6 +8,8 @@ import { isDashboardHttps, loginSourceIp } from "./source-ip.js";
 import { validatePassword } from "./passwords.js";
 import { createMember } from "./member-accounts.js";
 import { safeUser } from "./safe-user.js";
+import { registerApiKeyRoutes } from "./api-key-routes.js";
+import { paginationInput } from "./pagination.js";
 
 const cookieName = "urumi_dashboard";
 const passwordInput = z.string().refine((value) => {
@@ -93,6 +95,14 @@ export async function registerDashboardRoutes(app: FastifyInstance, storage: Ide
       reply.header("Set-Cookie", cookie("", new Date(0), !config.allowHttp, 0));
       return reply.code(204).send();
     });
+    await registerApiKeyRoutes(routes, storage, async (request) => {
+      const authenticated = await sessions.authenticate(credential(request));
+      if (request.method !== "GET") {
+        requireTrustedOrigin(request, config);
+        requireCsrf(request, authenticated.csrfToken);
+      }
+      return authenticated.user.id;
+    });
     await routes.register(async (admin) => {
       admin.addHook("preHandler", async (request) => {
         const authenticated = await sessions.authenticate(credential(request));
@@ -119,11 +129,7 @@ export async function registerDashboardRoutes(app: FastifyInstance, storage: Ide
         return { user: safeUser(user) };
       });
       admin.get("/api/admin/users", async (request) => {
-        const integer = (maximum: number) => z.string().regex(/^[1-9][0-9]*$/)
-          .transform(Number).pipe(z.number().int().min(1).max(maximum));
-        const parsed = z.strictObject({
-          page: integer(2147483647).default(1), limit: integer(100).default(20),
-        }).safeParse(request.query);
+        const parsed = paginationInput.safeParse(request.query);
         if (!parsed.success) throw new DashboardAuthError(400, "Invalid request");
         const { page, limit } = parsed.data;
         const users = await storage.users.find().sort({ _id: 1 }).skip((page - 1) * limit).limit(limit);

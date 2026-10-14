@@ -126,6 +126,10 @@ test("database outage fails readiness and MCP safely while liveness stays health
     payload: { email: "outage@example.com", password: "outage test password" } });
   assert.equal(login.statusCode, 200);
   const cookie = String(login.headers["set-cookie"]).split(";")[0];
+  const keyHeaders = { cookie, origin: "http://localhost:3000", "x-csrf-token": login.json().csrfToken };
+  const createdKey = await app.inject({ method: "POST", url: "/api/keys", headers: keyHeaders, payload: {} });
+  assert.equal(createdKey.statusCode, 201);
+  const keyId = createdKey.json().key.id;
   assert.equal((await app.inject({ url: "/health/ready" })).statusCode, 200);
   // Pause preserves tmpfs data; stopping this disposable container discards its sessions.
   await docker("docker", ["pause", container]);
@@ -143,6 +147,9 @@ test("database outage fails readiness and MCP safely while liveness stays health
     { url: "/api/auth/me", headers: { cookie } },
     { method: "POST" as const, url: "/api/auth/logout", headers: { cookie, origin: "http://localhost:3000", "x-csrf-token": login.json().csrfToken } },
     { method: "POST" as const, url: "/api/auth/login", headers: { origin: "http://localhost:3000" }, payload: { email: "outage@example.com", password: "outage test password" } },
+    { url: "/api/keys", headers: keyHeaders },
+    { method: "POST" as const, url: "/api/keys", headers: keyHeaders, payload: {} },
+    { method: "DELETE" as const, url: `/api/keys/${keyId}`, headers: keyHeaders },
   ]) {
     const requestStart = Date.now();
     const response = await app.inject(request);
@@ -163,4 +170,6 @@ test("database outage fails readiness and MCP safely while liveness stays health
   assert.equal((await app.inject({ url: "/health/live" })).statusCode, 200);
   assert.equal((await app.inject({ url: "/mcp" })).statusCode, 401);
   assert.equal((await app.inject({ url: "/api/auth/me", headers: { cookie } })).statusCode, 200);
+  const keysAfter = await app.inject({ url: "/api/keys", headers: keyHeaders });
+  assert.deepEqual(keysAfter.json().keys, [createdKey.json().key]);
 });
