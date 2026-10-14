@@ -153,4 +153,10 @@ ingress:
 
   wordpress:
     enabled: true
+
+networkPolicy:
+  enabled: true
+
+  ingressNamespace: traefik
+  
 # Never put raw credentials in values files.

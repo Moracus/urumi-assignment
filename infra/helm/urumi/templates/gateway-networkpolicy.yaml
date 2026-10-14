@@ -1,0 +1,26 @@
+{{- if and .Values.networkPolicy.enabled .Values.gateway.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+
+metadata:
+  name: urumi-gateway-ingress
+
+spec:
+  podSelector:
+    matchLabels:
+      app: urumi-gateway
+
+  policyTypes:
+    - Ingress
+
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.ingressNamespace | quote }}
+
+      ports:
+        - protocol: TCP
+          port: {{ .Values.gateway.port }}
+
+{{- end }}
