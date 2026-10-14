@@ -249,11 +249,13 @@ From the repository root:
 pnpm typecheck
 pnpm build
 pnpm --filter @urumi/gateway exec tsx --test \
-  src/execution/execute-tool.test.ts src/tools/aggregator.test.ts
+  src/app.test.ts src/execution/execute-tool.test.ts src/tools/aggregator.test.ts
 helm lint infra/helm/urumi -f infra/helm/urumi/values-local.yaml
 helm template urumi infra/helm/urumi -n urumi \
   -f infra/helm/urumi/values-local.yaml
 ```
+
+The automated gateway tests include real MCP SDK discovery and calls against a controlled local upstream, HTTP authentication and health checks, injected audit records, and application start/close cycles. They require local listening sockets, but no Kubernetes cluster or running commerce services. `createGatewayApp()` in `apps/gateway/src/app.ts` accepts upstream configurations and an audit logger; it connects and refreshes the registry, returns an unlistening Fastify app, and releases MCP/registry resources on `app.close()`. The process entry point owns listening and signal shutdown. Bootstrap authentication and console audit defaults are unchanged.
 
 With all three upstream endpoints reachable and the gateway URL variables set as in the local setup:
 

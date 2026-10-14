@@ -40,7 +40,7 @@ The controller is installed separately from the application chart. Internal MCP 
 
 ## Gateway initialization and discovery
 
-`apps/gateway/src/index.ts` creates a registry and registers the WooCommerce, calculator, and time endpoints from environment variables or cluster DNS defaults. These registrations are application configuration, not a remotely editable registry.
+`apps/gateway/src/app.ts` exports `createGatewayApp()`, which constructs the Fastify application, connects the registry, and starts discovery refresh without opening a listening socket. Its optional upstream configurations, audit logger, host, and allowed hosts let HTTP tests use controlled MCP servers while retaining the real registry and execution pipeline. Defaults register WooCommerce, calculator, and time endpoints from environment variables or cluster DNS. These registrations are application configuration, not a remotely editable registry. `index.ts` owns listening and process shutdown.
 
 The registry connects to all upstreams independently using `Promise.allSettled`. A failed upstream does not abort initialization of healthy ones. Each connection uses the MCP client and Streamable HTTP transport. Connection setup and tool discovery each have a five-second timeout.
 
@@ -121,7 +121,7 @@ Recovery is periodic reconnection and rediscovery, not automatic replay of the f
 
 Gateway readiness does not check the bootstrap credential, complete tool availability, or end-to-end WooCommerce behavior. Cached connection state can lag behind an outage until a request or discovery refresh detects it.
 
-Fastify's gateway close hook closes the MCP handler and registry connections and clears the refresh timer. The source does not establish a broader application shutdown orchestration mechanism through explicit process signal handlers.
+Fastify's gateway close hook closes the MCP handler and registry connections and clears the refresh timer. Registry cleanup runs even if MCP handler cleanup fails. The process entry point calls application close on SIGINT and SIGTERM; HTTP tests call the same close boundary directly.
 
 ## WooCommerce integration
 
