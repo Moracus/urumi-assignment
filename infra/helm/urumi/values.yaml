@@ -130,6 +130,9 @@ gateway:
 
   secretName: urumi-gateway-auth
 
+  # External transaction-capable MongoDB; chart does not provision MongoDB.
+  mongodbSecretName: urumi-identity-storage
+
   allowedHosts: "localhost,127.0.0.1,urumi-gateway,urumi-gateway.urumi.svc.cluster.local,gateway.localhost"
 
   upstreams:

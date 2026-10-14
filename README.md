@@ -14,6 +14,7 @@ This document describes source at commit [`f740f55`](https://github.com/Moracus/
 - Upstream discovery, namespaced tool aggregation, schema forwarding, and routing to the original upstream tool name.
 - Independent upstream connections, request timeouts, periodic discovery, and reconnection attempts.
 - JSON tool-execution audit records on standard output.
+- MongoDB-backed users, transaction-validated startup, database-aware health, and one-time administrator CLI setup. See [identity setup](docs/identity-setup.md) for the required local replica set and operator steps.
 - Five WooCommerce tools backed by the WooCommerce REST API, plus arithmetic and timezone tools.
 - Dockerfiles for the gateway and upstream services; Helm Deployments, ClusterIP Services, health probes, resource settings, and persistent volumes for WordPress and MariaDB.
 - Gateway `/mcp` and storefront `/` Ingress routes, plus ingress restrictions between platform components.
@@ -93,6 +94,8 @@ corepack enable
 pnpm install --frozen-lockfile
 ```
 
+Before starting the gateway, follow [identity setup](docs/identity-setup.md) to start the local MongoDB replica set and export `MONGODB_URI`. The gateway fails startup without it.
+
 Provide credentials in your shell; these prompts avoid putting literal credentials in the commands:
 
 ```bash
@@ -117,11 +120,13 @@ Run this prompt block in Bash (`bash` if your default shell is zsh). Set `WC_URL
 | Calculator MCP | `http://localhost:3002/mcp` |
 | Time MCP | `http://localhost:3003/mcp` |
 
-Each backend exposes `/health/live` and `/health/ready`. Gateway readiness requires at least one connected upstream, so it does not mean all seven tools are available. Upstream health endpoints report process health without validating WooCommerce connectivity.
+Each backend exposes `/health/live` and `/health/ready`. Gateway readiness requires available MongoDB and at least one connected upstream, so it does not mean all seven tools are available. Upstream health endpoints report process health without validating WooCommerce connectivity.
 
 Use an MCP-capable client with Streamable HTTP and the header `Authorization: Bearer <your-bootstrap-key>` for gateway requests. Calculator example: call `calculator.calculate` with `{"operation":"multiply","a":6,"b":7}`. A successful text result contains `42`. Time example: call `time.current` with `{"timezone":"Asia/Kolkata"}`.
 
 ## Deploy to local Kubernetes
+
+The chart now also requires a transaction-capable MongoDB replica set and a URI Secret; it does not provision them. Supply `gateway.mongodbSecretName` (default `urumi-identity-storage`) with key `uri` before enabling the gateway. The existing cluster alone is insufficient for this image. See [deployment limitations](docs/identity-setup.md#kubernetes-limitation).
 
 Commands below use namespace `urumi` and release name `urumi`. Resource names and default DNS/allowed-host settings are fixed around those names; alternate namespaces or multiple releases need additional configuration or template changes.
 
@@ -232,6 +237,8 @@ Port-forwarding is administrative access and is not evidence that pod-to-pod Net
 | `PORT`, `HOST` | Backends | Listen address; local defaults use loopback, containers use `0.0.0.0`. |
 | `MCP_ALLOWED_HOSTS` | Backends | Comma-separated allowed HTTP hostnames. |
 | `GATEWAY_BOOTSTRAP_KEY` | Gateway | Required bearer credential; maps to one admin identity. |
+| `MONGODB_URI` | Gateway and setup CLI | Required transaction-capable identity database; Helm reads Secret key `uri`. |
+| `GATEWAY_BOOTSTRAP_KEY_FILE` | Setup CLI only | Optional configured bootstrap secret file; takes precedence over the environment key for setup. |
 | `WOOCOMMERCE_MCP_URL` | Gateway | WooCommerce MCP endpoint. |
 | `CALCULATOR_MCP_URL` | Gateway | Calculator MCP endpoint. |
 | `TIME_MCP_URL` | Gateway | Time MCP endpoint. |
@@ -248,14 +255,13 @@ From the repository root:
 ```bash
 pnpm typecheck
 pnpm build
-pnpm --filter @urumi/gateway exec tsx --test \
-  src/app.test.ts src/execution/execute-tool.test.ts src/tools/aggregator.test.ts
+pnpm --filter @urumi/gateway test:integration
 helm lint infra/helm/urumi -f infra/helm/urumi/values-local.yaml
 helm template urumi infra/helm/urumi -n urumi \
   -f infra/helm/urumi/values-local.yaml
 ```
 
-The automated gateway tests include real MCP SDK discovery and calls against a controlled local upstream, HTTP authentication and health checks, injected audit records, and application start/close cycles. They require local listening sockets, but no Kubernetes cluster or running commerce services. `createGatewayApp()` in `apps/gateway/src/app.ts` accepts upstream configurations and an audit logger; it connects and refreshes the registry, returns an unlistening Fastify app, and releases MCP/registry resources on `app.close()`. The process entry point owns listening and signal shutdown. Bootstrap authentication and console audit defaults are unchanged.
+The automated gateway tests include real MongoDB CLI setup, concurrent/durable consumption, transaction/index validation, outages and reconnection, plus MCP SDK discovery and calls against controlled upstreams. The runner provisions disposable MongoDB containers; no Kubernetes or commerce services are needed. `createGatewayApp()` accepts upstream configurations, an audit logger, and an optional `mongodbUri`; it validates storage, connects and refreshes the registry, returns an unlistening Fastify app, and releases MCP/registry/database resources on `app.close()`. The process entry point owns listening and signal shutdown. Normal MCP bootstrap authentication and console audits remain until later tickets replace or extend them.
 
 With all three upstream endpoints reachable and the gateway URL variables set as in the local setup:
 
@@ -273,7 +279,7 @@ Verify network isolation using ordinary test Pods: unrelated Pods should be deni
 
 ## Current limitations
 
-- One environment-backed bootstrap admin credential; no persisted users, teams, hashed key store, key expiry, or revocation API. Digest comparison is not persisted hashed-key management.
+- Normal MCP still uses one environment-backed bootstrap admin credential. Users and one-time CLI setup are persisted, but login, sessions, persistent API keys, revocation, and operator recovery remain later tickets. Digest comparison is not persisted hashed-key management.
 - Registry, discovery cache, and connections are in memory. No registry CRUD API or persisted upstream configuration.
 - Audits are console records, with no durable audit database, queue, query API, or dashboard. Authentication failures and SDK-level validation failures do not necessarily reach the execution audit boundary.
 - NetworkPolicies cover ingress only. They do not restrict egress and require an enforcing network plugin. Controller namespace and workload-label selectors are broader than cryptographic service identity.

@@ -66,7 +66,7 @@ Authentication reads `GATEWAY_BOOTSTRAP_KEY`, hashes both the configured and sup
 }
 ```
 
-There is no current user database, team membership lookup, or client-selected identity. A bearer credential cannot select the member role. Hashing during comparison must not be confused with a persisted hashed-key store: the configured bootstrap key remains an environment-backed secret.
+Users and permanently consumed initial administrator setup are stored in MongoDB, with Argon2id passwords and unique normalized email. This incremental slice does not yet connect those users to MCP authentication, dashboard login, or persistent API keys. A bearer credential cannot select the member role. Hashing during comparison must not be confused with a persisted hashed-key store: normal MCP authentication still uses the configured bootstrap secret until the persistent MCP authentication ticket replaces it. See [identity setup](identity-setup.md) for storage and CLI behavior.
 
 The authorization module permits admins to invoke all registered tools. Its member allowlist includes `woocommerce.list_products`, `woocommerce.list_orders`, `woocommerce.get_order`, `calculator.calculate`, and `time.current`. Product creation and order updates are rejected for members. Member behavior is exercised by internal tests with constructed identities.
 
@@ -114,14 +114,14 @@ Recovery is periodic reconnection and rediscovery, not automatic replay of the f
 | Probe | Actual guarantee |
 | --- | --- |
 | Gateway `/health/live` | HTTP process responds. |
-| Gateway `/health/ready` | At least one upstream is marked connected; HTTP 503 when none are. |
+| Gateway `/health/ready` | MongoDB responds to a bounded ping and at least one upstream is marked connected; otherwise HTTP 503. |
 | Upstream `/health/live` and `/health/ready` | Process-level response; no WordPress API dependency check. |
 | WordPress readiness | A static WordPress CSS asset is served, not a commerce transaction. |
 | MariaDB readiness | Container health script checks connectivity and InnoDB initialization. |
 
 Gateway readiness does not check the bootstrap credential, complete tool availability, or end-to-end WooCommerce behavior. Cached connection state can lag behind an outage until a request or discovery refresh detects it.
 
-Fastify's gateway close hook closes the MCP handler and registry connections and clears the refresh timer. Registry cleanup runs even if MCP handler cleanup fails. The process entry point calls application close on SIGINT and SIGTERM; HTTP tests call the same close boundary directly.
+Startup validates MongoDB connectivity, indexes, and an actual transactional write before serving. New MCP requests fail safely with HTTP 503 during database outages; liveness remains healthy, and readiness recovers through driver reconnection. Fastify's close hook closes the MCP handler, registry, and identity database, clearing the refresh timer. Later cleanup runs even if earlier cleanup fails. The process entry point calls application close on SIGINT and SIGTERM; HTTP tests call the same close boundary directly.
 
 ## WooCommerce integration
 

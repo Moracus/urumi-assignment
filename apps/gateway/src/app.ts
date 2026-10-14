@@ -35,12 +35,14 @@ import {
 
 import type { AuditLogger } from "./audit/logger.js";
 import type { UpstreamConfig } from "./upstream/types.js";
+import { connectIdentityStorage } from "./identity/storage.js";
 
 export interface GatewayAppOptions {
   host?: string;
   allowedHosts?: string[];
   upstreams?: UpstreamConfig[];
   auditLogger?: AuditLogger;
+  mongodbUri?: string;
 }
 
 // Construction owns MCP and registry resources; the caller owns listening.
@@ -50,167 +52,185 @@ export async function createGatewayApp(options: GatewayAppOptions = {}) {
     process.env.MCP_ALLOWED_HOSTS ?? "localhost,127.0.0.1"
   ).split(",").map((value) => value.trim()).filter(Boolean);
 
-  // ------------------------------------------
-  // 1. Initialize upstream registry
-  // ------------------------------------------
+  // Persistence must be usable before any HTTP or upstream resources are started.
+  const identityStorage = await connectIdentityStorage(options.mongodbUri);
 
-  const registry = new UpstreamRegistry();
+  try {
 
-  for (const config of options.upstreams ?? getDefaultUpstreams()) {
-    registry.register(config);
-  }
+    // ------------------------------------------
+    // 1. Initialize upstream registry
+    // ------------------------------------------
 
-  // ------------------------------------------
-  // 2. Initialize gateway components
-  // ------------------------------------------
+    const registry = new UpstreamRegistry();
 
-  const aggregator = new ToolAggregator(registry);
+    for (const config of options.upstreams ?? getDefaultUpstreams()) {
+      registry.register(config);
+    }
 
-  const resolver = new AggregatedToolResolver(
-    aggregator,
-    registry,
-  );
+    // ------------------------------------------
+    // 2. Initialize gateway components
+    // ------------------------------------------
 
-  const invoker = new McpUpstreamInvoker(registry);
+    const aggregator = new ToolAggregator(registry);
 
-  const auditLogger = options.auditLogger ?? new ConsoleAuditLogger();
+    const resolver = new AggregatedToolResolver(
+      aggregator,
+      registry,
+    );
 
-  const execution = {
-    resolver,
-    invoker,
-    auditLogger,
-  };
+    const invoker = new McpUpstreamInvoker(registry);
 
-  // ------------------------------------------
-  // 3. Create MCP HTTP handler
-  // ------------------------------------------
+    const auditLogger = options.auditLogger ?? new ConsoleAuditLogger();
 
-  const mcpHandler = createMcpHandler(
-    (context) => {
-      // Identity is established independently
-      // for each incoming MCP request.
-      const authorization =
-        context.requestInfo?.headers.get(
-          "authorization",
+    const execution = {
+      resolver,
+      invoker,
+      auditLogger,
+    };
+
+    // ------------------------------------------
+    // 3. Create MCP HTTP handler
+    // ------------------------------------------
+
+    const mcpHandler = createMcpHandler(
+      (context) => {
+        // Identity is established independently
+        // for each incoming MCP request.
+        const authorization =
+          context.requestInfo?.headers.get(
+            "authorization",
+          );
+
+        const identity = authenticateRequest(
+          authorization ?? undefined,
         );
 
-      const identity = authenticateRequest(
-        authorization ?? undefined,
-      );
+        return createGatewayMcpServer(
+          identity,
+          {
+            aggregator,
+            execution,
+          },
+        );
+      },
+    );
 
-      return createGatewayMcpServer(
-        identity,
-        {
-          aggregator,
-          execution,
-        },
-      );
-    },
-  );
+    const nodeHandler = toNodeHandler(mcpHandler);
 
-  const nodeHandler = toNodeHandler(mcpHandler);
+    // ------------------------------------------
+    // 4. Create Fastify application
+    // ------------------------------------------
 
-  // ------------------------------------------
-  // 4. Create Fastify application
-  // ------------------------------------------
+    const app = createMcpFastifyApp({
+      host,
+      allowedHosts,
+    });
 
-  const app = createMcpFastifyApp({
-    host,
-    allowedHosts,
-  });
+    // ------------------------------------------
+    // 5. Health endpoints
+    // ------------------------------------------
 
-  // ------------------------------------------
-  // 5. Health endpoints
-  // ------------------------------------------
-
-  app.get("/health/live", async () => ({
-    status: "ok",
-    service: "gateway",
-  }));
-
-  app.get("/health/ready", async (_request, reply) => {
-    const connected = registry
-      .list()
-      .filter(
-        (upstream) =>
-          upstream.status === "connected",
-      ).length;
-
-    if (connected === 0) {
-      return reply.code(503).send({
-        status: "not_ready",
-        service: "gateway",
-      });
-    }
-
-    return {
+    app.get("/health/live", async () => ({
       status: "ok",
       service: "gateway",
-      connectedUpstreams: connected,
-    };
-  });
+    }));
 
-  // ------------------------------------------
-  // 6. Authentication boundary
-  // ------------------------------------------
+    app.get("/health/ready", async (_request, reply) => {
+      const connected = registry
+        .list()
+        .filter(
+          (upstream) =>
+            upstream.status === "connected",
+        ).length;
 
-  app.addHook("preHandler", async (request, reply) => {
-    if (request.url.split("?")[0] !== "/mcp") {
-      return;
-    }
-
-    try {
-      authenticateRequest(
-        request.headers.authorization,
-      );
-    } catch (error) {
-      if (error instanceof AuthenticationError) {
-        return reply
-          .code(401)
-          .header(
-            "WWW-Authenticate",
-            'Bearer realm="urumi-gateway"',
-          )
-          .send({
-            error: "Unauthorized",
-          });
+      if (!(await identityStorage.isAvailable()) || connected === 0) {
+        return reply.code(503).send({
+          status: "not_ready",
+          service: "gateway",
+        });
       }
 
-      request.log.error(
-        "Gateway authentication configuration error",
+      return {
+        status: "ok",
+        service: "gateway",
+        connectedUpstreams: connected,
+      };
+    });
+
+    // ------------------------------------------
+    // 6. Authentication boundary
+    // ------------------------------------------
+
+    app.addHook("preHandler", async (request, reply) => {
+      if (request.url.split("?")[0] !== "/mcp") {
+        return;
+      }
+
+      try {
+        if (!(await identityStorage.isAvailable())) {
+          return reply.code(503).send({ error: "Authentication unavailable" });
+        }
+        authenticateRequest(
+          request.headers.authorization,
+        );
+      } catch (error) {
+        if (error instanceof AuthenticationError) {
+          return reply
+            .code(401)
+            .header(
+              "WWW-Authenticate",
+              'Bearer realm="urumi-gateway"',
+            )
+            .send({
+              error: "Unauthorized",
+            });
+        }
+
+        request.log.error(
+          "Gateway authentication configuration error",
+        );
+
+        return reply.code(503).send({
+          error: "Authentication unavailable",
+        });
+      }
+    });
+
+    // ------------------------------------------
+    // 7. MCP endpoint
+    // ------------------------------------------
+
+    app.all("/mcp", (request, reply) => {
+      return nodeHandler(
+        request.raw,
+        reply.raw,
+        request.body,
       );
+    });
 
-      return reply.code(503).send({
-        error: "Authentication unavailable",
-      });
-    }
-  });
+    // ------------------------------------------
+    // 8. Graceful shutdown
+    // ------------------------------------------
 
-  // ------------------------------------------
-  // 7. MCP endpoint
-  // ------------------------------------------
-
-  app.all("/mcp", (request, reply) => {
-    return nodeHandler(
-      request.raw,
-      reply.raw,
-      request.body,
-    );
-  });
-
-  // ------------------------------------------
-  // 8. Graceful shutdown
-  // ------------------------------------------
-
-  app.addHook("onClose", async () => {
+    app.addHook("onClose", async () => {
+      try {
+        await mcpHandler.close();
+      } finally {
+        try { await registry.close(); }
+        finally { await identityStorage.close(); }
+      }
+    });
     try {
-      await mcpHandler.close();
-    } finally {
-      await registry.close();
+      await registry.connectAll();
+      registry.startRefresh(30_000);
+    } catch (error) {
+      await app.close();
+      throw error;
     }
-  });
-  await registry.connectAll();
-  registry.startRefresh(30_000);
 
-  return app;
+    return app;
+  } catch (error) {
+    await identityStorage.close();
+    throw error;
+  }
 }

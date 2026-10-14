@@ -1,0 +1,18 @@
+services:
+  mongodb:
+    image: mongo:8.0
+    command: [mongod, --replSet, urumi, --bind_ip_all]
+    ports:
+      - "127.0.0.1:27017:27017"
+    volumes:
+      - identity-data:/data/db
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          mongosh --quiet --eval 'try { rs.status() } catch (e) { rs.initiate({_id:"urumi",members:[{_id:0,host:"localhost:27017"}]}) }; if (!db.hello().isWritablePrimary) quit(1)'
+      interval: 2s
+      timeout: 5s
+      retries: 30
+volumes:
+  identity-data:

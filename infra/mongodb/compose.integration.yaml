@@ -1,0 +1,24 @@
+# Isolated, ephemeral databases used only by the integration-test runner.
+services:
+  replica:
+    image: mongo:8.0
+    command: [mongod, --replSet, urumi, --bind_ip_all]
+    ports: ["127.0.0.1:27417:27017"]
+    tmpfs: [/data/db]
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          mongosh --quiet --eval 'try { rs.status() } catch (e) { rs.initiate({_id:"urumi",members:[{_id:0,host:"localhost:27017"}]}) }; if (!db.hello().isWritablePrimary) quit(1)'
+      interval: 2s
+      timeout: 5s
+      retries: 30
+  standalone:
+    image: mongo:8.0
+    ports: ["127.0.0.1:27418:27017"]
+    tmpfs: [/data/db]
+    healthcheck:
+      test: [CMD, mongosh, --quiet, --eval, "db.adminCommand({ping:1})"]
+      interval: 2s
+      timeout: 5s
+      retries: 30

@@ -48,6 +48,12 @@ spec:
                   name: {{ .Values.gateway.secretName }}
                   key: bootstrap-key
 
+            - name: MONGODB_URI
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.gateway.mongodbSecretName }}
+                  key: uri
+
             - name: WOOCOMMERCE_MCP_URL
               value: {{ .Values.gateway.upstreams.woocommerce | quote }}
 

@@ -40,6 +40,7 @@ test("SDK discovery and calls use a controlled upstream and injected audit logge
 
   const records: AuditRecord[] = [];
   const app = await createGatewayApp({
+    mongodbUri: process.env.MONGODB_TEST_URI,
     upstreams: [{ name: "calculator", url: `${upstreamAddress}/mcp`, enabled: true }],
     auditLogger: { async write(record) { records.push(record); } },
   });
@@ -83,7 +84,7 @@ test("HTTP authentication and health remain intact across application start/clos
   });
 
   for (let cycle = 0; cycle < 2; cycle++) {
-    const app = await createGatewayApp({ upstreams: [] });
+    const app = await createGatewayApp({ upstreams: [], mongodbUri: process.env.MONGODB_TEST_URI });
     t.after(() => app.close());
     const address = await app.listen({ host: "127.0.0.1", port: 0 });
     assert.deepEqual(await (await fetch(`${address}/health/live`)).json(), { status: "ok", service: "gateway" });
