@@ -8,9 +8,9 @@ export class DashboardAuthError extends Error {
   constructor(readonly status: number, message: string) { super(message); }
 }
 
-const lifetimeMs = 8 * 60 * 60 * 1000;
-export const credentialHash = (credential: string) => createHash("sha256").update(credential).digest("hex");
-export const csrfToken = (credential: string) => createHash("sha256").update("urumi-dashboard-csrf:").update(credential).digest("hex");
+export const dashboardSessionLifetimeSeconds = 8 * 60 * 60;
+const credentialHash = (credential: string) => createHash("sha256").update(credential).digest("hex");
+const csrfToken = (credential: string) => createHash("sha256").update("urumi-dashboard-csrf:").update(credential).digest("hex");
 
 export async function createDashboardSessions(storage: IdentityStorage) {
   // Unknown identifiers incur the same bounded Argon2 work as known accounts.
@@ -32,7 +32,7 @@ export async function createDashboardSessions(storage: IdentityStorage) {
       }
       const credential = randomBytes(32).toString("base64url");
       const createdAt = new Date();
-      const expiresAt = new Date(createdAt.getTime() + lifetimeMs);
+      const expiresAt = new Date(createdAt.getTime() + dashboardSessionLifetimeSeconds * 1000);
       const currentUser = await storage.connection.transaction(async (session) => {
         // A write conflicts with concurrent password/status changes and their invalidation transaction.
         const current = await storage.users.findOneAndUpdate({

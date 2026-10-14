@@ -236,13 +236,14 @@ test("secure mode refuses HTTP and permits HTTPS only through explicitly trusted
   process.env.DASHBOARD_TRUSTED_ORIGINS = "http://localhost:3000";
   await assert.rejects(createGatewayApp({ mongodbUri: f.uri, upstreams: [] }), /Origin configuration/);
   process.env.DASHBOARD_TRUSTED_ORIGINS = "https://localhost:3000";
-  process.env.DASHBOARD_TRUSTED_PROXIES = "127.0.0.1";
+  process.env.DASHBOARD_TRUSTED_PROXIES = "127.0.0.1,::1";
   await f.restart();
   const login = (remoteAddress: string, proto?: string) => f.app.inject({ method: "POST", url: "/api/auth/login", remoteAddress,
     headers: { origin: "https://localhost:3000", ...(proto ? { "x-forwarded-proto": proto } : {}) }, payload: { email: "admin@example.com", password } });
   assert.equal((await login("127.0.0.1")).statusCode, 403);
   assert.equal((await login("192.0.2.10", "https")).statusCode, 403);
   assert.equal((await login("127.0.0.1", "https,http")).statusCode, 403);
+  assert.equal((await login("0:0:0:0:0:0:0:1", "https")).statusCode, 200);
   const response = await login("127.0.0.1", "https");
   assert.equal(response.statusCode, 200, response.body);
   assert.match(String(response.headers["set-cookie"]), /; Secure/);
@@ -265,13 +266,14 @@ test("trusted proxy uses the nearest untrusted hop and cannot evade limits with 
   process.env.DASHBOARD_TRUSTED_PROXIES = "127.0.0.1,192.0.2.1";
   await f.restart();
   for (let index = 0; index < 30; index++) {
+    const clientIp = index % 2 === 0 ? "2001:db8::1" : "2001:DB8:0:0:0:0:0:1";
     const response = await f.app.inject({ method: "POST", url: "/api/auth/login", remoteAddress: "127.0.0.1",
-      headers: { origin, "x-forwarded-for": `203.0.113.${index},198.51.100.1,192.0.2.1` },
+      headers: { origin, "x-forwarded-for": `203.0.113.${index},${clientIp},192.0.2.1` },
       payload: { email: `proxy${index}@example.com`, password } });
     assert.equal(response.statusCode, 401);
   }
   const blocked = await f.app.inject({ method: "POST", url: "/api/auth/login", remoteAddress: "127.0.0.1",
-    headers: { origin, "x-forwarded-for": "203.0.113.99,198.51.100.1,192.0.2.1" }, payload: { email: "admin@example.com", password } });
+    headers: { origin, "x-forwarded-for": "203.0.113.99,2001:db8::1,192.0.2.1" }, payload: { email: "admin@example.com", password } });
   assert.equal(blocked.statusCode, 429);
   const allowed = await f.app.inject({ method: "POST", url: "/api/auth/login", remoteAddress: "127.0.0.1",
     headers: { origin, "x-forwarded-for": "198.51.100.2,192.0.2.1" }, payload: { email: "admin@example.com", password } });

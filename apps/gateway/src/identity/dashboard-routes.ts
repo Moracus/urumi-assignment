@@ -3,8 +3,9 @@ import { z } from "zod/v4";
 import { timingSafeEqual } from "node:crypto";
 import type { IdentityStorage } from "./storage.js";
 import type { DashboardConfig } from "./dashboard-config.js";
-import { createDashboardSessions, DashboardAuthError } from "./dashboard-sessions.js";
+import { createDashboardSessions, DashboardAuthError, dashboardSessionLifetimeSeconds } from "./dashboard-sessions.js";
 import { isDashboardHttps, loginSourceIp } from "./source-ip.js";
+import { validatePassword } from "./passwords.js";
 
 const cookieName = "urumi_dashboard";
 function credential(request: FastifyRequest) {
@@ -12,8 +13,8 @@ function credential(request: FastifyRequest) {
     .filter((part) => part.startsWith(`${cookieName}=`));
   return values.length === 1 ? values[0].slice(cookieName.length + 1) : undefined;
 }
-function cookie(value: string, expires: Date, secure: boolean) {
-  return `${cookieName}=${value}; Path=/api; HttpOnly; SameSite=Lax; Max-Age=28800; Expires=${expires.toUTCString()}${secure ? "; Secure" : ""}`;
+function cookie(value: string, expires: Date, secure: boolean, maxAge = dashboardSessionLifetimeSeconds) {
+  return `${cookieName}=${value}; Path=/api; HttpOnly; SameSite=Lax; Max-Age=${maxAge}; Expires=${expires.toUTCString()}${secure ? "; Secure" : ""}`;
 }
 
 export async function registerDashboardRoutes(app: FastifyInstance, storage: IdentityStorage, config: DashboardConfig) {
@@ -39,7 +40,10 @@ export async function registerDashboardRoutes(app: FastifyInstance, storage: Ide
       if (!/^application\/json(?:\s*;.*)?$/i.test(request.headers["content-type"] ?? "")) throw new DashboardAuthError(415, "Invalid request");
       const parsed = z.strictObject({
         email: z.string().trim().toLowerCase().email().max(254),
-        password: z.string().refine((value) => Array.from(value).length >= 12 && Array.from(value).length <= 128),
+        password: z.string().refine((value) => {
+          try { validatePassword(value); return true; }
+          catch { return false; }
+        }),
       }).safeParse(request.body);
       if (!parsed.success) throw new DashboardAuthError(400, "Invalid request");
       const result = await sessions.login(parsed.data.email, parsed.data.password, loginSourceIp(request, config.trustedProxies));
@@ -62,7 +66,7 @@ export async function registerDashboardRoutes(app: FastifyInstance, storage: Ide
       // Authentication above guarantees an opaque credential.
       if (!token) throw new DashboardAuthError(401, "Unauthorized");
       await sessions.logout(token);
-      reply.header("Set-Cookie", `${cookieName}=; Path=/api; HttpOnly; SameSite=Lax; Max-Age=0; Expires=${new Date(0).toUTCString()}${config.allowHttp ? "" : "; Secure"}`);
+      reply.header("Set-Cookie", cookie("", new Date(0), !config.allowHttp, 0));
       return reply.code(204).send();
     });
   });

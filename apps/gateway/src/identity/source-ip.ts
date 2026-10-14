@@ -1,8 +1,11 @@
-import { isIP } from "node:net";
+import { isIP, SocketAddress } from "node:net";
 import type { FastifyRequest } from "fastify";
 
-// Normalize the common IPv4-mapped socket representation before comparing addresses.
-function normalize(ip: string) { return ip.startsWith("::ffff:") && isIP(ip.slice(7)) === 4 ? ip.slice(7) : ip; }
+// Equivalent IPv6 spellings must share proxy trust and the same source-IP budget.
+function normalize(ip: string) {
+  const canonical = isIP(ip) === 6 ? new SocketAddress({ address: ip, family: "ipv6" }).address : ip;
+  return canonical.startsWith("::ffff:") && isIP(canonical.slice(7)) === 4 ? canonical.slice(7) : canonical;
+}
 
 export function loginSourceIp(request: FastifyRequest, trustedProxies: string[]) {
   let ip = normalize(request.ip);
