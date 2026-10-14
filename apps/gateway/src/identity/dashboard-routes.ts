@@ -8,6 +8,22 @@ import { isDashboardHttps, loginSourceIp } from "./source-ip.js";
 import { validatePassword } from "./passwords.js";
 
 const cookieName = "urumi_dashboard";
+const passwordInput = z.string().refine((value) => {
+  try { validatePassword(value); return true; }
+  catch { return false; }
+});
+
+function requireTrustedOrigin(request: FastifyRequest, config: DashboardConfig) {
+  if (!config.trustedOrigins.includes(request.headers.origin ?? "")) throw new DashboardAuthError(403, "Forbidden");
+}
+
+function requireCsrf(request: FastifyRequest, token: string) {
+  const supplied = request.headers["x-csrf-token"];
+  if (typeof supplied !== "string" || !/^[a-f0-9]{64}$/.test(supplied)
+    || !timingSafeEqual(Buffer.from(supplied), Buffer.from(token))) {
+    throw new DashboardAuthError(403, "Forbidden");
+  }
+}
 function credential(request: FastifyRequest) {
   const values = (request.headers.cookie ?? "").split(";").map((part) => part.trim())
     .filter((part) => part.startsWith(`${cookieName}=`));
@@ -36,33 +52,39 @@ export async function registerDashboardRoutes(app: FastifyInstance, storage: Ide
       if (!config.allowHttp && !isDashboardHttps(request, config.trustedProxies)) throw new DashboardAuthError(403, "Forbidden");
     });
     routes.post("/api/auth/login", { bodyLimit: 4096 }, async (request, reply) => {
-      if (!config.trustedOrigins.includes(request.headers.origin ?? "")) throw new DashboardAuthError(403, "Forbidden");
+      requireTrustedOrigin(request, config);
       if (!/^application\/json(?:\s*;.*)?$/i.test(request.headers["content-type"] ?? "")) throw new DashboardAuthError(415, "Invalid request");
       const parsed = z.strictObject({
         email: z.string().trim().toLowerCase().email().max(254),
-        password: z.string().refine((value) => {
-          try { validatePassword(value); return true; }
-          catch { return false; }
-        }),
+        password: passwordInput,
       }).safeParse(request.body);
       if (!parsed.success) throw new DashboardAuthError(400, "Invalid request");
       const result = await sessions.login(parsed.data.email, parsed.data.password, loginSourceIp(request, config.trustedProxies));
       reply.header("Set-Cookie", cookie(result.credential, result.expiresAt, !config.allowHttp));
       return { user: result.user, csrfToken: result.csrfToken };
     });
-    routes.get("/api/auth/me", async (request) => sessions.authenticate(credential(request)));
+    routes.get("/api/auth/me", async (request) => sessions.authenticate(credential(request), { allowRequiredPasswordChange: true }));
+    routes.post("/api/auth/change-password", { bodyLimit: 4096 }, async (request, reply) => {
+      requireTrustedOrigin(request, config);
+      const token = credential(request);
+      const authenticated = await sessions.authenticate(token, { allowRequiredPasswordChange: true });
+      requireCsrf(request, authenticated.csrfToken);
+      if (!/^application\/json(?:\s*;.*)?$/i.test(request.headers["content-type"] ?? "")) throw new DashboardAuthError(415, "Invalid request");
+      const parsed = z.strictObject({ currentPassword: passwordInput, newPassword: passwordInput }).safeParse(request.body);
+      if (!parsed.success) throw new DashboardAuthError(400, "Invalid request");
+      if (!token) throw new DashboardAuthError(401, "Unauthorized");
+      await sessions.changePassword(token, parsed.data.currentPassword, parsed.data.newPassword);
+      reply.header("Set-Cookie", cookie("", new Date(0), !config.allowHttp, 0));
+      return reply.code(204).send();
+    });
     routes.post("/api/auth/logout", { bodyLimit: 4096 }, async (request, reply) => {
-      if (!config.trustedOrigins.includes(request.headers.origin ?? "")) throw new DashboardAuthError(403, "Forbidden");
+      requireTrustedOrigin(request, config);
       if (request.body !== undefined && !z.strictObject({}).safeParse(request.body).success) {
         throw new DashboardAuthError(400, "Invalid request");
       }
       const token = credential(request);
-      const authenticated = await sessions.authenticate(token);
-      const supplied = request.headers["x-csrf-token"];
-      if (typeof supplied !== "string" || !/^[a-f0-9]{64}$/.test(supplied)
-        || !timingSafeEqual(Buffer.from(supplied), Buffer.from(authenticated.csrfToken))) {
-        throw new DashboardAuthError(403, "Forbidden");
-      }
+      const authenticated = await sessions.authenticate(token, { allowRequiredPasswordChange: true });
+      requireCsrf(request, authenticated.csrfToken);
       // Authentication above guarantees an opaque credential.
       if (!token) throw new DashboardAuthError(401, "Unauthorized");
       await sessions.logout(token);

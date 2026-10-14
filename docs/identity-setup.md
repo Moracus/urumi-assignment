@@ -1,6 +1,6 @@
 # Persistent identity storage and initial administrator setup (#3)
 
-This ticket implements storage, passwords, one-time CLI enrollment, and database health. Dashboard login and sessions are now implemented by [ticket #4](dashboard-sessions.md). Persistent MCP keys, account management, operator recovery, dashboard UI, dynamic upstream persistence, and durable audits remain later work. Normal MCP requests still use `GATEWAY_BOOTSTRAP_KEY` and the bootstrap identity until the persistent MCP authentication ticket replaces them. Creating an administrator makes it usable for dashboard login with the configuration in ticket #4; it does not yet make it usable for MCP. This is an incremental development slice, not a production completion claim.
+This ticket implements storage, passwords, one-time CLI enrollment, and database health. Dashboard login, sessions and password replacement are implemented by [tickets #4–#5](dashboard-sessions.md). Persistent MCP keys, account management, operator recovery, dashboard UI, dynamic upstream persistence, and durable audits remain later work. Normal MCP requests still use `GATEWAY_BOOTSTRAP_KEY` and the bootstrap identity until the persistent MCP authentication ticket replaces them. Creating an administrator makes it usable for dashboard login with the configuration in ticket #4; it does not yet make it usable for MCP. This is an incremental development slice, not a production completion claim.
 
 ## Local replica set
 

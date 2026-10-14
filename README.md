@@ -14,7 +14,7 @@ This document describes source at commit [`f740f55`](https://github.com/Moracus/
 - Upstream discovery, namespaced tool aggregation, schema forwarding, and routing to the original upstream tool name.
 - Independent upstream connections, request timeouts, periodic discovery, and reconnection attempts.
 - JSON tool-execution audit records on standard output.
-- MongoDB-backed users, transaction-validated startup, database-aware health, one-time administrator CLI setup, and [secure dashboard login/logout](docs/dashboard-sessions.md). See [identity setup](docs/identity-setup.md) for the required local replica set and operator steps.
+- MongoDB-backed users, transaction-validated startup, database-aware health, one-time administrator CLI setup, and [secure dashboard login/logout and password replacement](docs/dashboard-sessions.md). See [identity setup](docs/identity-setup.md) for the required local replica set and operator steps.
 - Five WooCommerce tools backed by the WooCommerce REST API, plus arithmetic and timezone tools.
 - Dockerfiles for the gateway and upstream services; Helm Deployments, ClusterIP Services, health probes, resource settings, and persistent volumes for WordPress and MariaDB.
 - Gateway `/mcp` and storefront `/` Ingress routes, plus ingress restrictions between platform components.
@@ -238,7 +238,7 @@ Port-forwarding is administrative access and is not evidence that pod-to-pod Net
 | `MCP_ALLOWED_HOSTS` | Backends | Comma-separated allowed HTTP hostnames. |
 | `GATEWAY_BOOTSTRAP_KEY` | Gateway | Required bearer credential; maps to one admin identity. |
 | `MONGODB_URI` | Gateway and setup CLI | Required transaction-capable identity database; Helm reads Secret key `uri`. |
-| `DASHBOARD_TRUSTED_ORIGINS` | Gateway | Exact trusted public origins for dashboard login/logout; empty denies both. |
+| `DASHBOARD_TRUSTED_ORIGINS` | Gateway | Exact trusted public origins for dashboard login and mutations; empty denies them. |
 | `DASHBOARD_ALLOW_HTTP` | Gateway | Explicit development HTTP mode; defaults false and is rejected in production. |
 | `DASHBOARD_TRUSTED_PROXIES` | Gateway | Exact proxy IP addresses trusted for forwarded client IP/HTTPS headers; defaults empty. |
 | `GATEWAY_BOOTSTRAP_KEY_FILE` | Setup CLI only | Optional configured bootstrap secret file; takes precedence over the environment key for setup. |
@@ -264,7 +264,7 @@ helm template urumi infra/helm/urumi -n urumi \
   -f infra/helm/urumi/values-local.yaml
 ```
 
-The automated gateway tests include real MongoDB CLI setup, concurrent/durable consumption, transaction/index validation, outages and reconnection, dashboard login/me/logout, session expiry/restart/device independence, Origin/CSRF, shared throttling, proxy/cookie modes, plus MCP SDK discovery and calls against controlled upstreams. The runner provisions disposable MongoDB containers; no Kubernetes or commerce services are needed. `createGatewayApp()` accepts upstream configurations, an audit logger, and an optional `mongodbUri`; it validates storage, connects and refreshes the registry, returns an unlistening Fastify app, and releases MCP/registry/database resources on `app.close()`. The process entry point owns listening and signal shutdown. Normal MCP bootstrap authentication and console audits remain until later tickets replace or extend them.
+The automated gateway tests include real MongoDB CLI setup, concurrent/durable consumption, transaction/index validation, outages and reconnection, dashboard login/me/logout/password replacement, required-change restrictions, all-device invalidation and concurrent replacement/login, session expiry/restart/device independence, Origin/CSRF, shared throttling, proxy/cookie modes, plus MCP SDK discovery and calls against controlled upstreams. The runner provisions disposable MongoDB containers; no Kubernetes or commerce services are needed. `createGatewayApp()` accepts upstream configurations, an audit logger, and an optional `mongodbUri`; it validates storage, connects and refreshes the registry, returns an unlistening Fastify app, and releases MCP/registry/database resources on `app.close()`. The process entry point owns listening and signal shutdown. Normal MCP bootstrap authentication and console audits remain until later tickets replace or extend them.
 
 With all three upstream endpoints reachable and the gateway URL variables set as in the local setup:
 

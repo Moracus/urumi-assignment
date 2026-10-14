@@ -3,6 +3,7 @@ import type { HydratedDocument } from "mongoose";
 import { identityTransactionOptions, type IdentityStorage, type StoredUser } from "./storage.js";
 import { hashPassword, verifyPassword } from "./passwords.js";
 import { reserveLoginAttempt } from "./login-throttle.js";
+import { isUserEligibleForOrdinaryAccess } from "./account-eligibility.js";
 
 export class DashboardAuthError extends Error {
   constructor(readonly status: number, message: string) { super(message); }
@@ -50,17 +51,45 @@ export async function createDashboardSessions(storage: IdentityStorage) {
       }, identityTransactionOptions);
       return { credential, expiresAt, user: currentUser, csrfToken: csrfToken(credential) };
     },
-    async authenticate(credential: string | undefined) {
+    async authenticate(credential: string | undefined, options: { allowRequiredPasswordChange?: boolean } = {}) {
       if (!credential || !/^[A-Za-z0-9_-]{43}$/.test(credential)) {
         throw new DashboardAuthError(401, "Unauthorized");
       }
       const session = await storage.sessions.findOne({ credentialHash: credentialHash(credential), expiresAt: { $gt: new Date() } });
       const user = session ? await storage.users.findById(session.userId) : null;
       if (!user || user.status !== "active") throw new DashboardAuthError(401, "Unauthorized");
+      if (!options.allowRequiredPasswordChange && !isUserEligibleForOrdinaryAccess(user)) {
+        throw new DashboardAuthError(403, "Password change required");
+      }
       return { user: safeUser(user), csrfToken: csrfToken(credential) };
     },
     async logout(credential: string) {
       await storage.sessions.deleteOne({ credentialHash: credentialHash(credential) });
+    },
+    async changePassword(credential: string, currentPassword: string, newPassword: string) {
+      const dashboardSession = await storage.sessions.findOne({
+        credentialHash: credentialHash(credential), expiresAt: { $gt: new Date() },
+      });
+      const user = dashboardSession ? await storage.users.findById(dashboardSession.userId).select("+passwordHash") : null;
+      if (!user || user.status !== "active") throw new DashboardAuthError(401, "Unauthorized");
+      if (!(await verifyPassword(currentPassword, user.passwordHash))) {
+        throw new DashboardAuthError(400, "Current password is incorrect");
+      }
+      if (currentPassword === newPassword) throw new DashboardAuthError(400, "New password must be different");
+      const passwordHash = await hashPassword(newPassword);
+      await storage.connection.transaction(async (session) => {
+        const validSession = await storage.sessions.exists({
+          credentialHash: credentialHash(credential), userId: user._id, expiresAt: { $gt: new Date() },
+        }).session(session);
+        if (!validSession) throw new DashboardAuthError(401, "Unauthorized");
+        const updated = await storage.users.updateOne({
+          _id: user._id, status: "active", passwordHash: user.passwordHash,
+        }, {
+          $set: { passwordHash, requiredPasswordChange: false }, $inc: { credentialRevision: 1 },
+        }, { session });
+        if (updated.matchedCount !== 1) throw new DashboardAuthError(401, "Unauthorized");
+        await storage.sessions.deleteMany({ userId: user._id }, { session });
+      }, identityTransactionOptions);
     },
   };
 }

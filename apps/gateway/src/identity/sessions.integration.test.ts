@@ -2,8 +2,11 @@ import assert from "node:assert/strict";
 import { randomUUID, createHash } from "node:crypto";
 import { test, type TestContext } from "node:test";
 import mongoose from "mongoose";
+import Fastify from "fastify";
 import { createGatewayApp } from "../app.js";
 import { hashPassword } from "./passwords.js";
+import { connectIdentityStorage } from "./storage.js";
+import { createDashboardSessions, DashboardAuthError } from "./dashboard-sessions.js";
 
 const baseUri = process.env.MONGODB_TEST_URI;
 assert.ok(baseUri, "Use the real MongoDB integration runner");
@@ -53,6 +56,182 @@ function sessionCookie(response: { headers: { [key: string]: unknown } }) {
   assert.equal(typeof header, "string");
   return String(header).split(";")[0];
 }
+
+test("password replacement clears required change and ends every device session before fresh login", async (t) => {
+  const f = await fixture(t);
+  await f.db.collection("users").updateOne({ _id: f.userId }, { $set: { requiredPasswordChange: true } });
+  const first = await f.login();
+  const second = await f.login();
+  const nextPassword = "a different final password";
+  const response = await f.app.inject({ method: "POST", url: "/api/auth/change-password",
+    headers: { cookie: sessionCookie(first), origin, "x-csrf-token": first.json().csrfToken },
+    payload: { currentPassword: password, newPassword: nextPassword } });
+  assert.equal(response.statusCode, 204, response.body);
+  assert.equal(response.headers["cache-control"], "no-store");
+  assert.match(String(response.headers["set-cookie"]), /Max-Age=0/);
+  for (const login of [first, second]) {
+    assert.equal((await f.app.inject({ url: "/api/auth/me", headers: { cookie: sessionCookie(login) } })).statusCode, 401);
+  }
+  await f.restart();
+  assert.equal((await f.login()).statusCode, 401);
+  const fresh = await f.login("admin@example.com", nextPassword);
+  assert.equal(fresh.statusCode, 200, fresh.body);
+  assert.equal(fresh.json().user.requiredPasswordChange, false);
+  const stored = await f.db.collection("users").findOne({ _id: f.userId });
+  assert.ok(stored);
+  assert.match(stored.passwordHash, /^\$argon2id\$v=19\$m=65536,t=3,p=1\$/);
+  assert.ok(!JSON.stringify(stored).includes(nextPassword));
+});
+
+test("pending replacement permits account details, logout and change only, with ordinary eligibility refreshed per request", async (t) => {
+  const f = await fixture(t);
+  const storage = await connectIdentityStorage(f.uri);
+  const sessions = await createDashboardSessions(storage);
+  const protectedApi = Fastify();
+  t.after(async () => { await protectedApi.close(); await storage.close(); });
+  protectedApi.setErrorHandler((error, _request, reply) => {
+    if (error instanceof DashboardAuthError) return reply.code(error.status).send({ error: error.message });
+    return reply.code(503).send({ error: "Authentication unavailable" });
+  });
+  // Representative later management/key routes use ordinary session authentication.
+  for (const url of ["/api/keys", "/api/admin/users"]) {
+    protectedApi.get(url, async (request) => sessions.authenticate(request.headers.cookie?.split("=")[1]));
+  }
+  for (const role of ["admin", "member"]) {
+    await f.db.collection("users").updateOne({ _id: f.userId }, { $set: { role, requiredPasswordChange: false } });
+    const login = await f.login();
+    const cookie = sessionCookie(login);
+    assert.equal((await protectedApi.inject({ url: "/api/keys", headers: { cookie } })).statusCode, 200);
+    await f.db.collection("users").updateOne({ _id: f.userId }, { $set: { requiredPasswordChange: true } });
+    for (const url of ["/api/keys", "/api/admin/users"]) {
+      const denied = await protectedApi.inject({ url, headers: { cookie } });
+      assert.equal(denied.statusCode, 403, denied.body);
+      assert.deepEqual(denied.json(), { error: "Password change required" });
+    }
+    assert.equal((await f.app.inject({ url: "/api/auth/me", headers: { cookie } })).statusCode, 200);
+    const logout = await f.app.inject({ method: "POST", url: "/api/auth/logout",
+      headers: { cookie, origin, "x-csrf-token": login.json().csrfToken } });
+    assert.equal(logout.statusCode, 204, logout.body);
+  }
+});
+
+test("password change rejects incorrect, unchanged and invalid passwords without altering credentials", async (t) => {
+  const f = await fixture(t);
+  const login = await f.login();
+  const cookie = sessionCookie(login);
+  const before = await f.db.collection("users").findOne({ _id: f.userId });
+  const attempts = [
+    { currentPassword: "incorrect test password", newPassword: "a different final password" },
+    { currentPassword: password, newPassword: password },
+    { currentPassword: password, newPassword: "x".repeat(11) },
+    { currentPassword: password, newPassword: "x".repeat(129) },
+    { currentPassword: "short", newPassword: "a different final password" },
+    { currentPassword: password, newPassword: 123 },
+    { currentPassword: password },
+    { currentPassword: password, newPassword: "a different final password", userId: String(f.userId) },
+  ];
+  for (const payload of attempts) {
+    const result = await f.app.inject({ method: "POST", url: "/api/auth/change-password",
+      headers: { cookie, origin, "x-csrf-token": login.json().csrfToken }, payload });
+    assert.equal(result.statusCode, 400, result.body);
+    assert.ok(!result.body.includes(password));
+    assert.equal((await f.app.inject({ url: "/api/auth/me", headers: { cookie } })).statusCode, 200);
+  }
+  assert.deepEqual(await f.db.collection("users").findOne({ _id: f.userId }), before);
+  assert.equal((await f.login()).statusCode, 200);
+});
+
+test("password change requires a dashboard session, trusted Origin and this session's CSRF token", async (t) => {
+  const f = await fixture(t);
+  const first = await f.login();
+  const second = await f.login();
+  const cookie = sessionCookie(first);
+  const before = await f.db.collection("users").findOne({ _id: f.userId });
+  const cases: { headers: Record<string, string>; status: number }[] = [
+    { headers: { cookie, "x-csrf-token": first.json().csrfToken }, status: 403 },
+    { headers: { cookie, origin: "http://localhost:3001", "x-csrf-token": first.json().csrfToken }, status: 403 },
+    { headers: { cookie, origin }, status: 403 },
+    { headers: { cookie, origin, "x-csrf-token": "invalid" }, status: 403 },
+    { headers: { cookie, origin, "x-csrf-token": second.json().csrfToken }, status: 403 },
+    { headers: { origin, "x-csrf-token": first.json().csrfToken }, status: 401 },
+    { headers: { origin, authorization: "Bearer test-only-gateway-key", "x-csrf-token": first.json().csrfToken }, status: 401 },
+  ];
+  for (const { headers, status } of cases) {
+    const response = await f.app.inject({ method: "POST", url: "/api/auth/change-password", headers,
+      payload: { currentPassword: password, newPassword: "a different final password" } });
+    assert.equal(response.statusCode, status, response.body);
+  }
+  const headers = { cookie, origin, "x-csrf-token": first.json().csrfToken };
+  for (const [contentType, payload, status] of [
+    ["text/plain", password, 415], ["application/json", "{invalid", 400],
+    ["application/json", "x".repeat(5000), 413],
+  ] as const) {
+    const response = await f.app.inject({ method: "POST", url: "/api/auth/change-password",
+      headers: { ...headers, "content-type": contentType }, payload });
+    assert.equal(response.statusCode, status, response.body);
+    assert.deepEqual(response.json(), { error: "Invalid request" });
+  }
+  assert.deepEqual(await f.db.collection("users").findOne({ _id: f.userId }), before);
+  assert.equal(await f.db.collection("dashboard_sessions").countDocuments(), 2);
+});
+
+test("ordinary password changes preserve key metadata, other accounts and exact Unicode passwords at both bounds", async (t) => {
+  const f = await fixture(t);
+  const otherPassword = "another user's password";
+  await f.db.collection("users").insertOne({ email: "member@example.com", passwordHash: await hashPassword(otherPassword),
+    role: "member", status: "active", requiredPasswordChange: false, createdAt: new Date(), updatedAt: new Date() });
+  const other = await f.login("member@example.com", otherPassword);
+  // Persistent API-key endpoints are a later ticket; prove this operation leaves existing records intact.
+  await f.db.collection("api_keys").insertOne({ userId: f.userId, keyHash: createHash("sha256").update("test-only-key").digest("hex"), revokedAt: null });
+  const keysBefore = await f.db.collection("api_keys").find().toArray();
+  let currentPassword = password;
+  for (const newPassword of ["🙂".repeat(12), " " + "🙂".repeat(126) + " "]) {
+    const login = await f.login("admin@example.com", currentPassword);
+    assert.equal(login.statusCode, 200, login.body);
+    const response = await f.app.inject({ method: "POST", url: "/api/auth/change-password",
+      headers: { cookie: sessionCookie(login), origin, "x-csrf-token": login.json().csrfToken },
+      payload: { currentPassword, newPassword } });
+    assert.equal(response.statusCode, 204, response.body);
+    assert.equal((await f.login("admin@example.com", currentPassword)).statusCode, 401);
+    currentPassword = newPassword;
+  }
+  assert.equal((await f.login("admin@example.com", currentPassword)).statusCode, 200);
+  assert.equal((await f.login("admin@example.com", currentPassword.trim())).statusCode, 401);
+  assert.deepEqual(await f.db.collection("api_keys").find().toArray(), keysBefore);
+  assert.equal((await f.app.inject({ url: "/api/auth/me", headers: { cookie: sessionCookie(other) } })).statusCode, 200);
+});
+
+test("concurrent password changes admit one replacement and old-password login cannot escape invalidation", async (t) => {
+  const f = await fixture(t);
+  const first = await f.login();
+  const second = await f.login();
+  const newPasswords = ["the first replacement password", "the second replacement password"];
+  const changes = [first, second].map((login, index) => f.app.inject({ method: "POST", url: "/api/auth/change-password",
+    headers: { cookie: sessionCookie(login), origin, "x-csrf-token": login.json().csrfToken },
+    payload: { currentPassword: password, newPassword: newPasswords[index] } }));
+  const results = await Promise.all(changes);
+  assert.deepEqual(results.map((result) => result.statusCode).sort(), [204, 401]);
+  const winner = results.findIndex((result) => result.statusCode === 204);
+  assert.equal((await f.login("admin@example.com", newPasswords[winner])).statusCode, 200);
+  assert.equal((await f.login()).statusCode, 401);
+  for (const login of [first, second]) {
+    assert.equal((await f.app.inject({ url: "/api/auth/me", headers: { cookie: sessionCookie(login) } })).statusCode, 401);
+  }
+  // Race a login against another replacement. It is either denied or committed before invalidation.
+  const fresh = await f.login("admin@example.com", newPasswords[winner]);
+  const [changed, racingLogin] = await Promise.all([
+    f.app.inject({ method: "POST", url: "/api/auth/change-password",
+      headers: { cookie: sessionCookie(fresh), origin, "x-csrf-token": fresh.json().csrfToken },
+      payload: { currentPassword: newPasswords[winner], newPassword: "the last replacement password" } }),
+    f.login("admin@example.com", newPasswords[winner]),
+  ]);
+  assert.equal(changed.statusCode, 204, changed.body);
+  assert.ok([200, 401].includes(racingLogin.statusCode), racingLogin.body);
+  if (racingLogin.statusCode === 200) {
+    assert.equal((await f.app.inject({ url: "/api/auth/me", headers: { cookie: sessionCookie(racingLogin) } })).statusCode, 401);
+  }
+  assert.equal((await f.login("admin@example.com", "the last replacement password")).statusCode, 200);
+});
 
 test("login returns safe current user and a hashed persistent independent session", async (t) => {
   const f = await fixture(t);
