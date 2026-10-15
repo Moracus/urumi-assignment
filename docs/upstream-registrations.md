@@ -1,4 +1,4 @@
-# Persistent upstream registrations (#17, #18, #19)
+# Persistent upstream registrations (#17, #18, #19, #20)
 
 MongoDB is the source of desired upstream configuration. The existing registry owns observed status, MCP clients, discovered tools, and connection/discovery timestamps in memory. These observations are never written over desired configuration and are rebuilt on every restart. Tool execution still uses `executeTool()`, existing role policies, and per-request gateway API-key authentication.
 
@@ -49,7 +49,7 @@ Run **one gateway replica**. Concurrent migration is safe, but runtime configura
 
 Back up MongoDB, confirm replica-set transaction support, approve the intended default destinations, and deploy the rebuilt gateway image. First startup automatically migrates; no new environment variables, Helm values, Secret, Service, Ingress or PVC changes are required. Inspect the three GET APIs with an administrator dashboard session, compare names/schemas with MCP `tools/list`, perform a read-only calculator/time call, and restart to confirm restored registrations and fresh timestamps. Existing default URL overrides only affect first migration. Do not manually set persisted connection status or tool definitions.
 
-Regression tests cover first/repeat/concurrent migration, rollback after a duplicate canonical URL, preserving desired edits/deletions/references, disabled restoration without connection, independent startup with a dead server, fresh discovery, SDK result compatibility, eligibility/role/bearer separation, malformed stored configuration and storage outage responses. The full MongoDB runner provisions disposable replica-set and standalone databases. It does not prove live Kubernetes health, RBAC, egress enforcement or WooCommerce connectivity. No cluster rollout was performed. Credential resolution, edit APIs, frontend screens, durable observations/audits, and multi-replica coordination remain later work.
+Regression tests cover first/repeat/concurrent migration, rollback after a duplicate canonical URL, preserving desired edits/deletions/references, disabled restoration without connection, independent startup with a dead server, fresh discovery, SDK result compatibility, eligibility/role/bearer separation, malformed stored configuration and storage outage responses. The full MongoDB runner provisions disposable replica-set and standalone databases. It does not prove live Kubernetes health, RBAC, egress enforcement or WooCommerce connectivity. No cluster rollout was performed. Credential resolution, frontend screens, durable observations/audits, and multi-replica coordination remain later work.
 
 
 ## Register without restart (#18)
@@ -113,6 +113,28 @@ An existing MCP client sees withdrawn or restored tools on its next uncached dis
 A persistence or cleanup error returns the existing safe 503 envelope, never a successful removal acknowledgement. A failed initial state write leaves the existing runtime untouched; the result may be ambiguous if MongoDB committed before a connection failure. Inspect GET and retry the intended action, or restart to reconcile durable state. If disable persisted before cleanup failed, it remains disabled and non-callable; failed cleanup retains connection handles for a later cleanup attempt. Retry disable or removal after correcting the failure. If final deletion fails, the durable disabled record remains available for inspection and retry, including after restart. If deletion committed but the response was lost, GET/DELETE returns 404; that is a completed removal. If enable persisted but cleanup failed, it remains non-callable in this process; retry enable or restart to reconcile the enabled intent. An unreachable connection after otherwise successful enable is a 200 observed outcome, not a persistence failure.
 
 Use one gateway replica. Live changes are process-local and out-of-band database edits are unsupported without restart. Inspect desired enabled state and live status/tools after an ambiguous response. Do not delete the defaults migration marker. Rebuild/deploy the gateway image; no new production environment variables, Helm values or cluster resource changes are required. Test-only MongoDB failure injection is enabled solely in the disposable integration compose service, never production deployment configuration.
+
+## Edit display names and endpoints (#20)
+
+`PATCH /api/admin/servers/:serverId` requires the same eligible administrator dashboard session, exact trusted Origin and session-bound CSRF token as creation. Send JSON containing `displayName`, `url`, or both. At least one field is required. Identifier renames, enabled/transport/authentication changes, Secret references, raw credentials, revision fields and all other fields are rejected. Display names and endpoints use the existing creation validation, destination approval, canonicalization and unique endpoint index. Invalid input returns 400, duplicate canonical endpoints return 409, and unknown IDs return 404. Non-JSON input returns 415; the body limit is 8192 bytes. Existing session, role and safe database error responses apply.
+
+```bash
+curl --cookie "$COOKIE_JAR" -X PATCH \
+  -H "Origin: $DASHBOARD_ORIGIN" -H "X-CSRF-Token: $CSRF_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"displayName":"Arithmetic tools","url":"https://approved-tools.example/mcp"}' \
+  "$GATEWAY_URL/api/admin/servers/calculator"
+```
+
+Success returns `200 { "server": detail }`. The stable `serverId` and public namespace remain unchanged: editing calculator's display name or URL still exposes `calculator.calculate` when that tool is discovered. Each successful edit advances the desired configuration revision. A display-only edit (or a URL that canonicalizes to the current URL) preserves the connection, callable generation, catalog and observation timestamps. Disabled registrations can be edited without connecting.
+
+Endpoint edits persist desired configuration first. Immediately after persistence, the registry advances the callable generation, withdraws the previous client and tools, clears previous observation timestamps and records the new desired endpoint. It then waits for older maintenance and already-started bounded calls, retires the old connection, and connects/discovers through the current destination policy. No new call may enter the old connection after that barrier; already-sent operations may finish and are never retried automatically. Delayed discovery cannot publish an obsolete catalog, stale resolved mappings cannot invoke the replacement or old client, and late failures from an old client cannot mark the replacement unhealthy. Per-server management serialization includes edits, creation, enable, disable and removal; unrelated servers remain independent. Observations are associated with the current configuration revision.
+
+A failed replacement connection returns **200** with the new URL durably stored, enabled/unreachable status, zero public tools and a sanitized error. There is no fallback to the old endpoint. Periodic maintenance retries the new endpoint; administrators can also use the enable action to reconnect. A disabled server stays disabled. A duplicate or rejected database write returns non-success without changing the live endpoint or partially applying the display name.
+
+Cleanup failure after persistence returns the existing safe **503** envelope. The desired edit may already be durable, but the old callable generation remains withdrawn. GET by stable ID shows desired state; periodic maintenance or the enable action retries cleanup and connection to the desired endpoint. A restart also restores the persisted configuration. A lost response, process interruption between persistence and reconciliation, or ambiguous database write acknowledgement may leave desired and runtime state different: inspect GET and restart the single gateway replica to reconcile. A 503 does not establish that no database write occurred. Do not retry a non-idempotent tool call to recover an edit.
+
+Run one gateway replica; there is no live cross-replica synchronization or supported out-of-band database editing. Credential-reference edits remain separate work. Deploy the rebuilt gateway image with the existing MongoDB replica set and destination rules; no new environment variables, Helm values, Services, Secrets or PVC changes are required. Approve destination network access before editing an endpoint. This implementation does not verify cluster connectivity or deploy workloads.
 
 
 ## Refresh tools and recover connections (#21)

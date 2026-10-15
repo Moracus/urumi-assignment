@@ -1567,3 +1567,256 @@ test("failed connection cleanup keeps the barrier and retained connection availa
   registry.remove("extra");
   assert.equal(await resolver.resolve("extra.echo"), null);
 });
+
+test("server edits preserve display-only connections and replace endpoints for a continuing MCP client", async t => {
+  let oldCalls = 0;
+  let discoveries = 0;
+  const old = await controlledUpstream(t, "calculator", server => {
+    server.registerTool("calculate", {}, async () => { oldCalls++; return { content: [{ type: "text", text: "old" }] }; });
+    server.server.setRequestHandler("tools/list", async () => {
+      discoveries++;
+      return { tools: [{ name: "calculate", inputSchema: { type: "object", properties: {} } }] };
+    });
+  });
+  const replacement = await controlledUpstream(t, "replacement", server => {
+    server.registerTool("calculate", {}, async () => ({ content: [{ type: "text", text: "new" }] }));
+  });
+  const time = await controlledUpstream(t, "time", server => {
+    server.registerTool("current", {}, async () => ({ content: [] }));
+  });
+  const f = await fixture(t, { upstreams: [old.config, time.config], destinations: { allowLoopback: true,
+    rules: [old, replacement, time].map(upstream => ({ origin: new URL(upstream.config.url).origin, cidrs: ["127.0.0.1/32"] })) } });
+  await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
+  const client = await f.connect();
+  const patch = (payload: object) => f.app.inject({ method: "PATCH", url: "/api/admin/servers/calculator", headers: f.headers, payload });
+  const before = (await f.app.inject({ url: "/api/admin/servers/calculator", headers: f.headers })).json().server;
+  const display = await patch({ displayName: " Renamed calculator " });
+  assert.equal(display.statusCode, 200, display.body);
+  assert.equal(display.json().server.displayName, "Renamed calculator");
+  assert.equal(display.json().server.lastConnectedAt, before.lastConnectedAt);
+  assert.equal(discoveries, 1);
+  assert.deepEqual((await client.callTool({ name: "calculator.calculate" })).content, [{ type: "text", text: "old" }]);
+  const swapped = await patch({ url: replacement.config.url });
+  assert.equal(swapped.statusCode, 200, swapped.body);
+  assert.equal(swapped.json().server.serverId, "calculator");
+  assert.equal(swapped.json().server.configurationRevision, 3);
+  assert.deepEqual((await client.callTool({ name: "calculator.calculate" })).content, [{ type: "text", text: "new" }]);
+  assert.equal(oldCalls, 1);
+  const restarted = await createGatewayApp({ mongodbUri: f.mongodbUri, upstreams: [old.config],
+    destinations: { allowLoopback: true, rules: [old, replacement, time].map(upstream => ({
+      origin: new URL(upstream.config.url).origin, cidrs: ["127.0.0.1/32"],
+    })) } });
+  t.after(() => restarted.close());
+  const restored = (await restarted.inject({ url: "/api/admin/servers/calculator", headers: f.headers })).json().server;
+  assert.equal(restored.url, replacement.config.url);
+  assert.equal(restored.displayName, "Renamed calculator");
+  assert.equal(restored.status, "connected");
+  await restarted.close();
+  await replacement.app.close();
+  const failed = await patch({ url: `${replacement.config.url}?offline=1` });
+  assert.equal(failed.statusCode, 200);
+  assert.equal(failed.json().server.status, "unreachable");
+  assert.equal(failed.json().server.toolCount, 0);
+  assert.deepEqual((await client.listTools(undefined, { cacheMode: "bypass" })).tools.map(tool => tool.name), ["time.current"]);
+  await client.callTool({ name: "time.current" });
+  await assert.rejects(client.callTool({ name: "calculator.calculate" }), ProtocolError);
+  assert.equal(oldCalls, 1);
+});
+
+test("server PATCH enforces administrator eligibility, CSRF, strict input and canonical uniqueness", async t => {
+  const calculator = await calculatorUpstream(t);
+  const time = await controlledUpstream(t, "time", server => { server.registerTool("current", {}, async () => ({ content: [] })); });
+  const f = await fixture(t, { upstreams: [calculator.config, time.config] });
+  const url = "/api/admin/servers/calculator";
+  const patch = (payload: object, headers = f.headers, path = url) => f.app.inject({ method: "PATCH", url: path, headers, payload });
+  assert.equal((await f.app.inject({ method: "PATCH", url, payload: { displayName: "New" } })).statusCode, 401);
+  assert.equal((await f.app.inject({ method: "PATCH", url, headers: { authorization: `Bearer ${f.rawKey}` }, payload: { displayName: "New" } })).statusCode, 401);
+  assert.equal((await patch({ displayName: "New" })).statusCode, 403);
+  await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
+  for (const headers of [{ ...f.headers, origin: "https://untrusted.test" }, { ...f.headers, "x-csrf-token": "" }]) {
+    assert.equal((await patch({ displayName: "New" }, headers)).statusCode, 403);
+  }
+  for (const payload of [{}, { serverId: "renamed" }, { enabled: false }, { authentication: { type: "none" } },
+    { headers: { authorization: "secret" } }, { displayName: " " }, { displayName: "x", unexpected: true },
+    { url: "http://unapproved.example/mcp" }, { url: "file:///tmp/mcp" }, { url: "http://user:secret@localhost/mcp" }]) {
+    const response = await patch(payload);
+    assert.equal(response.statusCode, 400, response.body);
+  }
+  const duplicate = await patch({ url: time.config.url.replace("/mcp", "/a/../mcp"), displayName: "Must not persist" });
+  assert.equal(duplicate.statusCode, 409);
+  assert.equal((await f.app.inject({ url, headers: f.headers })).json().server.displayName, "calculator");
+  assert.equal((await patch({ displayName: "New" }, f.headers, "/api/admin/servers/missing")).statusCode, 404);
+  assert.equal((await f.app.inject({ method: "PATCH", url, headers: { ...f.headers, "content-type": "text/plain" }, payload: "new" })).statusCode, 415);
+  for (const status of [{ requiredPasswordChange: true }, { requiredPasswordChange: false, status: "disabled" }]) {
+    await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: status });
+    assert.equal((await patch({ displayName: "New" })).statusCode, status.requiredPasswordChange ? 403 : 401);
+  }
+});
+
+test("server edit persistence failure leaves desired configuration and the callable endpoint unchanged", async t => {
+  const calculator = await calculatorUpstream(t);
+  const f = await fixture(t, { upstreams: [calculator.config] });
+  await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
+  const client = await f.connect();
+  await f.db.db!.command({ collMod: "upstream_registrations", validator: { configurationRevision: 1 }, validationLevel: "strict" });
+  const response = await f.app.inject({ method: "PATCH", url: "/api/admin/servers/calculator", headers: f.headers,
+    payload: { displayName: "Rejected", url: `${calculator.config.url}?replacement=1` } });
+  assert.equal(response.statusCode, 503);
+  assert.deepEqual(response.json(), { error: "Authentication unavailable" });
+  const unchanged = (await f.app.inject({ url: "/api/admin/servers/calculator", headers: f.headers })).json().server;
+  assert.equal(unchanged.url, calculator.config.url);
+  assert.equal(unchanged.displayName, "calculator");
+  assert.equal(unchanged.configurationRevision, 1);
+  assert.deepEqual((await client.callTool({ name: "calculator.calculate", arguments: { a: 6, b: 7 } })).content,
+    [{ type: "text", text: "42" }]);
+});
+
+test("competing server edits serialize desired revisions while healthy MCP requests continue", async t => {
+  const discovery = barrier();
+  let delay = false;
+  let oldCalls = 0;
+  const old = await controlledUpstream(t, "extra", server => { server.registerTool("echo", {}, async () => { oldCalls++; return { content: [] }; }); });
+  const replacement = await controlledUpstream(t, "replacement", server => {
+    server.registerTool("echo", {}, async () => ({ content: [] }));
+    server.server.setRequestHandler("tools/list", async () => {
+      if (delay) { discovery.enter(); await discovery.blocked; }
+      return { tools: [{ name: "echo", inputSchema: { type: "object", properties: {} } }] };
+    });
+  });
+  const calculator = await calculatorUpstream(t);
+  const f = await fixture(t, { upstreams: [old.config, calculator.config], destinations: { allowLoopback: true,
+    rules: [old, replacement, calculator].map(upstream => ({ origin: new URL(upstream.config.url).origin, cidrs: ["127.0.0.1/32"] })) } });
+  t.after(discovery.release);
+  await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
+  const client = await f.connect();
+  delay = true;
+  const patch = (payload: object) => f.app.inject({ method: "PATCH", url: "/api/admin/servers/extra", headers: f.headers, payload });
+  const first = patch({ url: replacement.config.url }).then(response => response);
+  await discovery.entered;
+  let secondCompleted = false;
+  const second = patch({ displayName: "Final display" }).then(response => { secondCompleted = true; return response; });
+  assert.equal((await f.app.inject({ url: "/api/admin/servers/extra/tools", headers: f.headers })).json().tools.length, 0);
+  await assert.rejects(client.callTool({ name: "extra.echo" }), ProtocolError);
+  await client.callTool({ name: "calculator.calculate", arguments: { a: 6, b: 7 } });
+  assert.equal(secondCompleted, false);
+  discovery.release();
+  assert.equal((await first).statusCode, 200);
+  const final = await second;
+  assert.equal(final.statusCode, 200);
+  assert.equal(final.json().server.url, replacement.config.url);
+  assert.equal(final.json().server.displayName, "Final display");
+  assert.equal(final.json().server.configurationRevision, 3);
+  assert.equal(final.json().server.status, "connected");
+  await client.callTool({ name: "extra.echo" });
+  assert.equal(oldCalls, 0);
+});
+
+test("endpoint replacement rejects stale mappings, delayed old discovery and late old client failures", async t => {
+  const { UpstreamRegistry } = await import("./upstream/registry.js");
+  const { DestinationPolicy } = await import("./upstream/destination-policy.js");
+  const { ToolAggregator } = await import("./tools/aggregator.js");
+  const { AggregatedToolResolver } = await import("./tools/resolver.js");
+  const { McpUpstreamInvoker } = await import("./tools/invoker.js");
+  const { executeTool } = await import("./execution/execute-tool.js");
+  for (const phase of ["connect", "refresh"] as const) {
+    await t.test(phase, async t => {
+      const discovery = barrier();
+      let delay = false;
+      let oldCalls = 0;
+      let newCalls = 0;
+      const old = await controlledUpstream(t, "extra", server => {
+        server.registerTool("echo", {}, async () => { oldCalls++; return { content: [] }; });
+        server.server.setRequestHandler("tools/list", async () => {
+          if (delay) { discovery.enter(); await discovery.blocked; }
+          return { tools: [{ name: "echo", inputSchema: { type: "object", properties: {} } }] };
+        });
+      });
+      const replacement = await controlledUpstream(t, "replacement", server => {
+        server.registerTool("echo", {}, async () => { newCalls++; return { content: [] }; });
+      });
+      const registry = new UpstreamRegistry(new DestinationPolicy({ allowLoopback: true,
+        rules: [old, replacement].map(upstream => ({ origin: new URL(upstream.config.url).origin, cidrs: ["127.0.0.1/32"] })) }));
+      t.after(() => registry.close());
+      t.after(discovery.release);
+      registry.register(old.config);
+      await registry.connect("extra");
+      const resolver = new AggregatedToolResolver(new ToolAggregator(registry), registry);
+      const mapping = await resolver.resolve("extra.echo");
+      assert.ok(mapping);
+      const previousClient = registry.getClient("extra")!;
+      delay = true;
+      const pending = phase === "connect" ? registry.connect("extra") : registry.refreshAll();
+      await discovery.entered;
+      const replacing = registry.reconfigure({ ...old.config, url: replacement.config.url, configurationRevision: 2 });
+      const records: AuditRecord[] = [];
+      const request = { identity: { userId: "admin", role: "admin" as const, keyId: "key" }, toolName: "extra.echo", arguments: {}, requestId: "replacement" };
+      const dependencies = { resolver: { async resolve() { return mapping; } }, invoker: new McpUpstreamInvoker(registry),
+        auditLogger: { async write(record: AuditRecord) { records.push(record); } } };
+      await assert.rejects(executeTool(request, dependencies), { name: "UpstreamUnavailableError" });
+      discovery.release();
+      await pending;
+      await replacing;
+      await registry.markUnreachable("extra", "Late old failure", previousClient);
+      await assert.rejects(executeTool(request, dependencies), { name: "UpstreamUnavailableError" });
+      await executeTool(request, { ...dependencies, resolver });
+      assert.equal(registry.getState("extra")?.config.configurationRevision, 2);
+      assert.equal(registry.getState("extra")?.status, "connected");
+      assert.equal(oldCalls, 0);
+      assert.equal(newCalls, 1);
+      assert.deepEqual(records.map(record => record.outcome), ["upstream_unavailable", "upstream_unavailable", "success"]);
+    });
+  }
+});
+
+test("HTTP endpoint replacement drains a delayed failing old call without poisoning the continuing MCP client", async t => {
+  const failure = barrier();
+  let oldCalls = 0;
+  const old = await controlledUpstream(t, "extra", server => {
+    server.registerTool("echo", {}, async () => ({ content: [] }));
+    server.server.setRequestHandler("tools/call", async () => {
+      oldCalls++;
+      failure.enter();
+      await failure.blocked;
+      throw new Error("Controlled old upstream failure");
+    });
+  });
+  const replacement = await controlledUpstream(t, "replacement", server => {
+    server.registerTool("echo", {}, async () => ({ content: [{ type: "text", text: "replacement" }] }));
+  });
+  const calculator = await calculatorUpstream(t);
+  const records: AuditRecord[] = [];
+  const f = await fixture(t, { upstreams: [old.config, calculator.config], auditLogger: { async write(record) { records.push(record); } },
+    destinations: { allowLoopback: true, rules: [old, replacement, calculator].map(upstream => ({
+      origin: new URL(upstream.config.url).origin, cidrs: ["127.0.0.1/32"],
+    })) } });
+  t.after(failure.release);
+  await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
+  const client = await f.connect();
+  const failing = client.callTool({ name: "extra.echo" });
+  await failure.entered;
+  const replacing = f.app.inject({ method: "PATCH", url: "/api/admin/servers/extra", headers: f.headers,
+    payload: { url: replacement.config.url } }).then(response => response);
+  let withdrawn = false;
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const state = (await f.app.inject({ url: "/api/admin/servers/extra", headers: f.headers })).json().server;
+    if (state.configurationRevision === 2 && state.status === "disconnected") {
+      assert.equal(state.url, replacement.config.url);
+      assert.equal(state.toolCount, 0);
+      withdrawn = true;
+      break;
+    }
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  assert.ok(withdrawn, "Persisted replacement must withdraw the old catalog before draining calls");
+  await assert.rejects(client.callTool({ name: "extra.echo" }), ProtocolError);
+  await client.callTool({ name: "calculator.calculate", arguments: { a: 6, b: 7 } });
+  failure.release();
+  const edited = await replacing;
+  assert.equal(edited.statusCode, 200, edited.body);
+  assert.equal((await failing).isError, true);
+  assert.equal(edited.json().server.status, "connected");
+  assert.equal((await f.app.inject({ url: "/api/admin/servers/extra", headers: f.headers })).json().server.status, "connected");
+  assert.deepEqual((await client.callTool({ name: "extra.echo" })).content, [{ type: "text", text: "replacement" }]);
+  assert.equal(oldCalls, 1);
+  assert.equal(records.filter(record => record.toolName === "extra.echo" && record.outcome === "upstream_error").length, 1);
+});

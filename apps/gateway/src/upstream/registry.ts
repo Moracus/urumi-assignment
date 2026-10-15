@@ -122,6 +122,31 @@ export class UpstreamRegistry {
     }
   }
 
+  async reconfigure(config: UpstreamConfig): Promise<void> {
+    this.policy.validate(config.url);
+    const state = this.upstreams.get(config.name);
+    if (!state) throw new Error("Unknown upstream");
+    if (state.config.url === config.url) {
+      // Metadata revisions do not invalidate a callable catalog or reconnect.
+      state.config = { ...config };
+      return;
+    }
+    // Persisted replacement is authoritative even when cleanup or discovery fails.
+    // Establish the barrier before waiting for older maintenance to finish.
+    state.generation = ++this.nextGeneration;
+    state.config = { ...config };
+    state.status = config.enabled ? "disconnected" : "disabled";
+    state.client = null;
+    state.tools = [];
+    state.lastConnectedAt = null;
+    state.lastDiscoveredAt = null;
+    state.lastError = null;
+    await this.runMaintenance(config.name, async () => {
+      await this.closeConnection(config.name);
+      if (config.enabled) await this.connectInternal(config.name);
+    });
+  }
+
   async disable(name: string, configurationRevision?: number): Promise<void> {
     const state = this.upstreams.get(name);
     if (!state) throw new Error("Unknown upstream");

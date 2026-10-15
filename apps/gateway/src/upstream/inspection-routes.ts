@@ -39,6 +39,12 @@ export function registerServerInspectionRoutes(
     const server = await management.create(request.body);
     return reply.code(201).send({ server: detail(server) });
   });
+  app.patch<{ Params: { serverId: string } }>("/api/admin/servers/:serverId", { bodyLimit: 8192 }, async request => {
+    if (!/^application\/json(?:\s*;.*)?$/i.test(request.headers["content-type"] ?? "")) {
+      throw new DashboardAuthError(415, "Invalid request");
+    }
+    return { server: detail(await management.edit(request.params.serverId, request.body)) };
+  });
   for (const action of ["enable", "disable"] as const) {
     app.post<{ Params: { serverId: string } }>(`/api/admin/servers/:serverId/${action}`, { bodyLimit: 4096 }, async request => {
       const server = await management.setEnabled(request.params.serverId, action === "enable");

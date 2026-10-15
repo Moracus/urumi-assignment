@@ -40,6 +40,9 @@ export type UpstreamRegistration = z.infer<typeof registrationInput>;
 export const createRegistrationInput = registrationInput.pick({
   serverId: true, displayName: true, url: true, transport: true, enabled: true,
 }).extend({ authentication: z.strictObject({ type: z.literal("none") }) });
+export const editRegistrationInput = registrationInput.pick({ displayName: true, url: true })
+  .partial().refine(value => Object.keys(value).length > 0);
+export type EditRegistrationInput = z.infer<typeof editRegistrationInput>;
 export type CreateRegistrationInput = z.infer<typeof createRegistrationInput>;
 
 const registrationSchema = new Schema<UpstreamRegistration>({
@@ -79,6 +82,14 @@ export async function createRegistrationStorage(connection: Connection) {
       const desired = registrationInput.parse({ ...input, configurationRevision: 1, createdAt: now, updatedAt: now });
       await registrations.create(desired);
       return desired;
+    },
+    async edit(serverId: string, input: EditRegistrationInput): Promise<UpstreamRegistration | null> {
+      const document = await registrations.findOneAndUpdate({ serverId }, {
+        $set: { ...input, updatedAt: new Date() }, $inc: { configurationRevision: 1 },
+      }, { returnDocument: "after", runValidators: true }).lean();
+      if (!document) return null;
+      const { _id, ...value } = document;
+      return registrationInput.parse(value);
     },
     async setEnabled(serverId: string, enabled: boolean): Promise<UpstreamRegistration | null> {
       const document = await registrations.findOneAndUpdate({ serverId }, {
