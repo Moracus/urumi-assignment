@@ -49,6 +49,10 @@ export function registerServerInspectionRoutes(
     await management.remove(request.params.serverId);
     return reply.code(204).send();
   });
+  app.post<{ Params: { serverId: string } }>("/api/admin/servers/:serverId/refresh", { bodyLimit: 4096 }, async request => {
+    const server = await management.refresh(request.params.serverId);
+    return { server: detail(server) };
+  });
   async function find(serverId: string) {
     const server = (await storage.list(policy)).find(server => server.serverId === serverId);
     if (!server) throw new DashboardAuthError(404, "Server not found");

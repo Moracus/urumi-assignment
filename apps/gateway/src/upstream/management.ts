@@ -34,6 +34,21 @@ export class UpstreamManagement {
     });
   }
 
+  async refresh(serverId: string): Promise<UpstreamRegistration> {
+    return this.serialize(serverId, async () => {
+      const server = (await this.storage.list(this.policy)).find(server => server.serverId === serverId);
+      if (!server) throw new DashboardAuthError(404, "Server not found");
+      if (!server.enabled) throw new DashboardAuthError(409, "Server is disabled");
+      // Out-of-band storage edits require restart, as with inspection. Never
+      // refresh an obsolete runtime configuration under a newer desired revision.
+      if (this.registry.getState(serverId)?.config.configurationRevision !== server.configurationRevision) {
+        throw new Error("Upstream configuration is not reconciled");
+      }
+      await this.registry.refresh(serverId);
+      return server;
+    });
+  }
+
   async remove(serverId: string): Promise<void> {
     return this.serialize(serverId, async () => {
       // A cleanup/delete failure leaves a durable disabled registration to retry.

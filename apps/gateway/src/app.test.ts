@@ -90,6 +90,185 @@ function calculatorUpstream(t: TestContext) {
   });
 }
 
+test("manual refresh replaces the catalog for a continuing MCP client without changing desired state", async t => {
+  let changed = false;
+  const extra = await controlledUpstream(t, "extra", server => {
+    server.registerTool("new", {}, async () => ({ content: [], structuredContent: { refreshed: true }, isError: true }));
+    server.server.setRequestHandler("tools/list", async () => ({ tools: [{
+      name: changed ? "new" : "old", description: changed ? "New description" : "Old description",
+      inputSchema: { type: "object", properties: { value: { type: changed ? "number" : "string" } } },
+    }] }));
+  });
+  const f = await fixture(t, { upstreams: [extra.config] });
+  await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
+  const client = await f.connect();
+  assert.equal((await client.listTools()).tools[0].name, "extra.old");
+  const before = (await f.app.inject({ url: "/api/admin/servers/extra", headers: f.headers })).json().server;
+  changed = true;
+  const response = await f.app.inject({ method: "POST", url: "/api/admin/servers/extra/refresh", headers: f.headers });
+  assert.equal(response.statusCode, 200, response.body);
+  assert.equal(response.headers["cache-control"], "no-store");
+  const after = response.json().server;
+  assert.equal(after.status, "connected");
+  assert.equal(after.configurationRevision, before.configurationRevision);
+  assert.equal(after.updatedAt, before.updatedAt);
+  assert.equal(after.lastConnectedAt, before.lastConnectedAt);
+  assert.ok(Date.parse(after.lastDiscoveredAt) > Date.parse(before.lastDiscoveredAt));
+  assert.deepEqual((await client.listTools(undefined, { cacheMode: "bypass" })).tools, [{
+    name: "extra.new", description: "New description", inputSchema: { type: "object", properties: { value: { type: "number" } } },
+  }]);
+  await assert.rejects(client.callTool({ name: "extra.old" }), ProtocolError);
+  const result = await client.callTool({ name: "extra.new", arguments: { value: 42 } });
+  assert.equal(result.isError, true);
+  assert.deepEqual(result.structuredContent, { refreshed: true });
+});
+
+test("manual refresh enforces session eligibility, Origin and CSRF and never enables disabled servers", async t => {
+  const calculator = await calculatorUpstream(t);
+  const f = await fixture(t, { upstreams: [calculator.config] });
+  const refresh = (headers: Record<string, string>, id = "calculator") => f.app.inject({
+    method: "POST", url: `/api/admin/servers/${id}/refresh`, headers,
+  });
+  assert.equal((await refresh({})).statusCode, 401);
+  assert.equal((await refresh({ authorization: `Bearer ${f.rawKey}`, origin })).statusCode, 401);
+  assert.equal((await refresh(f.headers)).statusCode, 403);
+  await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
+  for (const headers of [{ ...f.headers, origin: "" }, { ...f.headers, origin: "https://evil.test" },
+    { ...f.headers, "x-csrf-token": "" }, { ...f.headers, "x-csrf-token": "a".repeat(64) }]) {
+    assert.equal((await refresh(headers)).statusCode, 403);
+  }
+  assert.equal((await refresh(f.headers, "missing")).statusCode, 404);
+  await f.app.inject({ method: "POST", url: "/api/admin/servers/calculator/disable", headers: f.headers });
+  const before = (await f.app.inject({ url: "/api/admin/servers/calculator", headers: f.headers })).json().server;
+  const disabled = await refresh(f.headers);
+  assert.equal(disabled.statusCode, 409, disabled.body);
+  assert.deepEqual(disabled.json(), { error: "Server is disabled" });
+  assert.deepEqual((await f.app.inject({ url: "/api/admin/servers/calculator", headers: f.headers })).json().server, before);
+  const client = await f.connect();
+  assert.deepEqual((await client.listTools()).tools, []);
+  for (const status of [{ requiredPasswordChange: true }, { requiredPasswordChange: false, status: "disabled" }]) {
+    await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: status });
+    assert.equal((await refresh(f.headers)).statusCode, status.requiredPasswordChange ? 403 : 401);
+  }
+  await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { status: "active" } });
+  await f.app.inject({ method: "POST", url: "/api/auth/logout", headers: f.headers });
+  assert.equal((await refresh(f.headers)).statusCode, 401);
+});
+
+test("manual refresh rejects invalid discovery, bounds discovery and connection delays and recovers without stale publication", async t => {
+  const discovery = barrier();
+  const initialization = barrier();
+  let mode: "valid" | "duplicate" | "discovery delay" | "connection delay" = "valid";
+  let calls = 0;
+  const extra = await controlledUpstream(t, "extra", server => {
+    server.registerTool("echo", {}, async () => { calls++; return { content: [] }; });
+    server.server.setRequestHandler("initialize", async request => {
+      if (mode === "connection delay") { initialization.enter(); await initialization.blocked; }
+      return { protocolVersion: request.params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "extra", version: "1" } };
+    });
+    server.server.setRequestHandler("tools/list", async () => {
+      if (mode === "discovery delay") {
+        discovery.enter(); await discovery.blocked;
+        return { tools: [{ name: "obsolete", inputSchema: { type: "object" } }] };
+      }
+      const tool = { name: "echo", inputSchema: { type: "object" as const } };
+      return { tools: mode === "duplicate" ? [tool, tool] : [tool] };
+    });
+  });
+  const calculator = await calculatorUpstream(t);
+  const f = await fixture(t, { upstreams: [extra.config, calculator.config] });
+  t.after(discovery.release); t.after(initialization.release);
+  await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
+  const client = await f.connect();
+  const refresh = () => f.app.inject({ method: "POST", url: "/api/admin/servers/extra/refresh", headers: f.headers }).then(value => value);
+  const healthy = async () => {
+    assert.deepEqual((await client.callTool({ name: "calculator.calculate", arguments: { a: 6, b: 7 } })).content, [{ type: "text", text: "42" }]);
+    assert.equal((await f.app.inject({ url: "/api/auth/me", headers: f.headers })).statusCode, 200);
+    assert.equal((await f.app.inject({ url: "/api/keys", headers: f.headers })).statusCode, 200);
+  };
+  mode = "duplicate";
+  const failed = await refresh();
+  assert.equal(failed.statusCode, 200, failed.body);
+  assert.equal(failed.json().server.status, "unreachable");
+  assert.equal(failed.json().server.lastError, "Upstream unavailable");
+  assert.equal(failed.json().server.toolCount, 0);
+  await assert.rejects(client.callTool({ name: "extra.echo" }), ProtocolError);
+  assert.equal(calls, 0);
+  mode = "valid";
+  assert.equal((await refresh()).json().server.status, "connected");
+  mode = "discovery delay";
+  const started = Date.now();
+  const delayedDiscovery = refresh();
+  await discovery.entered;
+  await healthy();
+  // An unrelated registration is independent of this server's blocked discovery.
+  assert.equal((await f.app.inject({ method: "POST", url: "/api/admin/servers", headers: f.headers, payload: {
+    serverId: "other", displayName: "Other", url: `${calculator.config.url}?other=1`, transport: "streamable-http", enabled: false, authentication: { type: "none" },
+  } })).statusCode, 201);
+  const timedOut = await delayedDiscovery;
+  assert.equal(timedOut.statusCode, 200);
+  assert.equal(timedOut.json().server.status, "unreachable");
+  assert.ok(Date.now() - started >= 4500 && Date.now() - started < 10000);
+  assert.deepEqual((await client.listTools(undefined, { cacheMode: "bypass" })).tools.map(tool => tool.name), ["calculator.calculate"]);
+  mode = "connection delay";
+  const connecting = refresh();
+  await initialization.entered;
+  await healthy();
+  assert.equal((await connecting).json().server.status, "unreachable");
+  mode = "valid";
+  const recovered = await refresh();
+  assert.equal(recovered.json().server.status, "connected");
+  assert.equal(recovered.json().server.lastError, null);
+  assert.ok(recovered.json().server.lastConnectedAt && recovered.json().server.lastDiscoveredAt);
+  initialization.release(); discovery.release();
+  assert.deepEqual((await client.listTools(undefined, { cacheMode: "bypass" })).tools.map(tool => tool.name), ["calculator.calculate", "extra.echo"]);
+  await client.callTool({ name: "extra.echo" });
+  assert.equal(calls, 1);
+});
+
+test("manual and periodic refresh serialize discovery and replacement and ignore failures from retired connections", async t => {
+  const { UpstreamRegistry } = await import("./upstream/registry.js");
+  const { DestinationPolicy } = await import("./upstream/destination-policy.js");
+  const discovery = barrier();
+  let delay = false;
+  let active = 0;
+  let maximum = 0;
+  let discoveries = 0;
+  const extra = await controlledUpstream(t, "extra", server => {
+    server.registerTool("echo", {}, async () => ({ content: [] }));
+    server.server.setRequestHandler("tools/list", async () => {
+      discoveries++; active++; maximum = Math.max(maximum, active);
+      try {
+        if (delay) { discovery.enter(); await discovery.blocked; }
+        return { tools: [{ name: "echo", inputSchema: { type: "object" } }] };
+      } finally { active--; }
+    });
+  });
+  const registry = new UpstreamRegistry(new DestinationPolicy({ allowLoopback: true,
+    rules: [{ origin: new URL(extra.config.url).origin, cidrs: ["127.0.0.1/32"] }] }));
+  t.after(() => registry.close()); t.after(discovery.release);
+  registry.register(extra.config);
+  await registry.connect("extra");
+  const previous = registry.getClient("extra")!;
+  delay = true;
+  const manual = registry.refresh("extra");
+  await discovery.entered;
+  const periodic = registry.refreshAll();
+  const replacement = registry.connect("extra");
+  const failure = registry.markUnreachable("extra", "Obsolete failure", previous);
+  assert.equal(discoveries, 2);
+  discovery.release();
+  await Promise.all([manual, periodic, replacement, failure]);
+  assert.equal(maximum, 1);
+  assert.equal(discoveries, 4);
+  assert.notEqual(registry.getClient("extra"), previous);
+  assert.equal(registry.getState("extra")?.status, "connected");
+  assert.deepEqual(registry.getState("extra")?.tools.map(tool => tool.name), ["echo"]);
+  await registry.close();
+  await registry.refresh("extra");
+  assert.equal(registry.getClient("extra"), null);
+});
+
 test("server inspection requires an eligible administrator session and preserves discovered tool contracts", async (t) => {
   const calculator = await calculatorUpstream(t);
   const f = await fixture(t, { upstreams: [calculator.config] });
@@ -1185,7 +1364,7 @@ test("disable barriers reject resolved mappings and delayed automatic discovery 
   const { AggregatedToolResolver } = await import("./tools/resolver.js");
   const { McpUpstreamInvoker } = await import("./tools/invoker.js");
   const { executeTool } = await import("./execution/execute-tool.js");
-  for (const phase of ["connect", "automatic refresh"] as const) {
+  for (const phase of ["connect", "automatic refresh", "manual refresh"] as const) {
     await t.test(phase, async t => {
       const discovery = barrier();
       let delay = false;
@@ -1208,7 +1387,8 @@ test("disable barriers reject resolved mappings and delayed automatic discovery 
       assert.ok(mapping);
       const previousClient = registry.getClient("extra")!;
       delay = true;
-      const connecting = phase === "connect" ? registry.connect("extra") : Promise.resolve();
+      const connecting = phase === "connect" ? registry.connect("extra")
+        : phase === "manual refresh" ? registry.refresh("extra") : Promise.resolve();
       if (phase === "automatic refresh") registry.startRefresh(10);
       await discovery.entered;
       const disabling = registry.disable("extra");
@@ -1279,8 +1459,12 @@ test("enable rediscovers with current destination checks and offline servers sta
   await client.callTool({ name: "calculator.calculate", arguments: { a: 6, b: 7 } });
   await assert.rejects(client.callTool({ name: "extra.echo", arguments: {} }), ProtocolError);
   assert.equal(calls, 1);
+  const deniedRefresh = await f.app.inject({ method: "POST", url: "/api/admin/servers/extra/refresh", headers: f.headers });
+  assert.equal(deniedRefresh.statusCode, 200);
+  assert.equal(deniedRefresh.json().server.status, "unreachable");
+  assert.equal(deniedRefresh.json().server.configurationRevision, response.json().server.configurationRevision);
   online = true;
-  assert.equal((await f.app.inject({ method: "POST", url: "/api/admin/servers/extra/enable", headers: f.headers })).json().server.status, "connected");
+  assert.equal((await f.app.inject({ method: "POST", url: "/api/admin/servers/extra/refresh", headers: f.headers })).json().server.status, "connected");
   await client.callTool({ name: "extra.echo", arguments: {} });
   assert.equal(calls, 2);
 });

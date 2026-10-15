@@ -295,8 +295,12 @@ export class UpstreamRegistry {
 
   async refreshAll(): Promise<void> {
     await Promise.allSettled(
-      [...this.upstreams.keys()].map((name) => this.runMaintenance(name, () => this.refreshInternal(name))),
+      [...this.upstreams.keys()].map((name) => this.refresh(name)),
     );
+  }
+
+  async refresh(name: string): Promise<void> {
+    await this.runMaintenance(name, () => this.refreshInternal(name));
   }
 
   async markUnreachable(
