@@ -11,6 +11,7 @@ import { safeUser } from "./safe-user.js";
 import { registerApiKeyRoutes } from "./api-key-routes.js";
 import { paginationInput } from "./pagination.js";
 import { changeUserAccess } from "./user-roles.js";
+import { resetUserPassword } from "./password-reset.js";
 
 const cookieName = "urumi_dashboard";
 const passwordInput = z.string().refine((value) => {
@@ -128,6 +129,14 @@ export async function registerDashboardRoutes(app: FastifyInstance, storage: Ide
         if (!parsed.success) throw new DashboardAuthError(400, "Invalid request");
         const user = await createMember(storage, parsed.data.email, parsed.data.password);
         return reply.code(201).send({ user });
+      });
+      admin.post("/api/admin/users/:userId/reset-password", { bodyLimit: 4096 }, async (request, reply) => {
+        if (!/^application\/json(?:\s*;.*)?$/i.test(request.headers["content-type"] ?? "")) throw new DashboardAuthError(415, "Invalid request");
+        const params = z.strictObject({ userId: z.string().regex(/^[a-fA-F0-9]{24}$/) }).safeParse(request.params);
+        const body = z.strictObject({ password: passwordInput }).safeParse(request.body);
+        if (!params.success || !body.success) throw new DashboardAuthError(400, "Invalid request");
+        await resetUserPassword(storage, params.data.userId, body.data.password);
+        return reply.code(204).send();
       });
       admin.get("/api/admin/users/:userId", async (request) => {
         const parsed = z.strictObject({ userId: z.string().regex(/^[a-fA-F0-9]{24}$/) }).safeParse(request.params);

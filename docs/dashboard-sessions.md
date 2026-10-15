@@ -1,6 +1,6 @@
-# Dashboard sessions and user administration (#4–#10)
+# Dashboard sessions and user administration (#4–#12)
 
-Implemented endpoints are `POST /api/auth/login`, `GET /api/auth/me`, `POST /api/auth/logout`, and `POST /api/auth/change-password`. Administrator member creation, listing, and inspection are also implemented under `/api/admin/users` (see below). [Personal API-key management](api-keys.md) provides session-scoped `GET/POST /api/keys` and `DELETE /api/keys/:keyId`. These endpoints use MongoDB users established through [initial administrator setup](identity-setup.md) or administrator member creation. Administrator key management, [role changes](#promote-and-demote-administrators-10), and [disabling/re-enabling](#disable-and-re-enable-users-11) are also implemented. The React dashboard, administrator password resets, operator recovery, dynamic upstream management, and durable audits remain later tickets. Normal MCP bearer authentication uses [persistent gateway API keys](mcp-authentication.md); dashboard sessions cannot authenticate MCP.
+Implemented endpoints are `POST /api/auth/login`, `GET /api/auth/me`, `POST /api/auth/logout`, and `POST /api/auth/change-password`. Administrator member creation, listing, and inspection are also implemented under `/api/admin/users` (see below). [Personal API-key management](api-keys.md) provides session-scoped `GET/POST /api/keys` and `DELETE /api/keys/:keyId`. These endpoints use MongoDB users established through [initial administrator setup](identity-setup.md) or administrator member creation. Administrator key management, [role changes](#promote-and-demote-administrators-10), and [disabling/re-enabling](#disable-and-re-enable-users-11) are also implemented. Administrator [password resets](#reset-a-password-12) are implemented. The React dashboard, operator recovery, dynamic upstream management, and durable audits remain later tickets. Normal MCP bearer authentication uses [persistent gateway API keys](mcp-authentication.md); dashboard sessions cannot authenticate MCP.
 
 ## Configuration
 
@@ -88,7 +88,7 @@ Success returns `204`, expires the current cookie, atomically replaces the Argon
 
 Invalid or unknown JSON fields and password bounds return `400 Invalid request`; an incorrect current password returns `400 Current password is incorrect`; an unchanged password returns `400 New password must be different`. Missing/invalid/expired sessions return `401 Unauthorized`. Origin/CSRF failures return `403 Forbidden`; storage or hashing failures return `503 Authentication unavailable`. Responses are non-cacheable and never include passwords, hashes, or raw exceptions. Failed validation leaves account and sessions intact. If another password change wins concurrently, the stale request is rejected. Login's transactional user write prevents an old-password login from creating a session that escapes invalidation.
 
-A connection failure during transaction commit can leave the password changed even if the client receives `503`; attempt fresh login with the new password before retrying. Already admitted requests need not be canceled. Administrator resets belong to a later ticket. Assigned member creation uses the same pending-password state and enforcement.
+A connection failure during transaction commit can leave the password changed even if the client receives `503`; attempt fresh login with the new password before retrying. Already admitted requests need not be canceled. Administrator resets use the workflow below. Assigned member creation uses the same pending-password state and enforcement.
 
 ## Persistence, throttling, and failure behavior
 
@@ -98,7 +98,7 @@ Fresh login creates an independent 32-byte cryptographically random opaque crede
 
 Argon2 retains its two-job per-process bound. Unknown users incur dummy Argon2 verification to avoid an account-existence timing shortcut. Hashing overload and unexpected authentication/storage failures return safe `503 Authentication unavailable`, with no credential fallback. Storage operations use the existing bounded connection/operation/transaction deadlines. Database outage/recovery tests pause and resume only the disposable test database, verifying safe bounded failures, process liveness, and restoration of the same session.
 
-Session creation transactionally checks current status/password and increments the user's `credentialRevision`. Password replacement updates that same user and invalidates all its sessions in one transaction. Disabling does likewise and also revokes all API keys, as required by the identity ADRs; future reset operations must invalidate sessions too. Use the status PATCH workflow below; merely flipping database status back and forth is not the credential-invalidation workflow. Database operator access remains privileged. A lost connection during commit can leave a persisted session even if the client receives 503; it expires after eight hours, and retrying login creates a separate session.
+Session creation transactionally checks current status/password and increments the user's `credentialRevision`. Password replacement updates that same user and invalidates all its sessions in one transaction. Disabling does likewise and also revokes all API keys, as required by the identity ADRs; administrator resets invalidate sessions without revoking keys. Use the status PATCH workflow below; merely flipping database status back and forth is not the credential-invalidation workflow. Database operator access remains privileged. A lost connection during commit can leave a persisted session even if the client receives 503; it expires after eight hours, and retrying login creates a separate session.
 
 ## Helm and validation
 
@@ -178,7 +178,7 @@ Missing/invalid sessions receive `401`; members, pending-password administrators
 
 Demoting the last active administrator returns `409 {"error":"At least one active administrator must remain"}` and rolls back the entire change. Active means `status: active`; disabled administrators do not count. A transaction writes the shared `account_coordination` singleton before changing roles and counting active administrators. Concurrent demotions across gateway instances therefore serialize through MongoDB conflict retries; with two active administrators, competing self-demotions yield one success and one conflict. Status changes use the same `withActiveAdministrator()` transaction; disabling includes credential invalidation within it.
 
-Existing dashboard sessions and connected MCP clients use the changed database role on their next request without restart or new keys. MCP discovery remains permission-filtered and direct calls independently enforce authorization through the existing execution path. Clients that cache tool catalogs should refresh discovery. Already admitted requests may complete. Storage errors remain safe `503 Authentication unavailable`; an uncertain commit can have succeeded despite a 503, so inspect current account state before retrying. Startup initializes the coordination collection automatically; no new configuration or manual database migration is required. Password resets, dashboard UI, public API Ingress, and Kubernetes rollout remain later work.
+Existing dashboard sessions and connected MCP clients use the changed database role on their next request without restart or new keys. MCP discovery remains permission-filtered and direct calls independently enforce authorization through the existing execution path. Clients that cache tool catalogs should refresh discovery. Already admitted requests may complete. Storage errors remain safe `503 Authentication unavailable`; an uncertain commit can have succeeded despite a 503, so inspect current account state before retrying. Startup initializes the coordination collection automatically; no new configuration or manual database migration is required. Dashboard UI, public API Ingress, and Kubernetes rollout remain later work.
 
 ## Disable and re-enable users (#11)
 
@@ -201,3 +201,29 @@ unset csrf_token member_id
 Use `{"status":"active"}` to re-enable. Disabling transactionally deletes every existing dashboard session and permanently revokes every existing gateway API key, including keys issued by administrators. Revoked metadata is retained and previous revocation timestamps are preserved. Repeated disabling is safe. The user-record write serializes with concurrent login and key issuance on either management route: credentials created before disabling commits are invalidated; issuance/login after disabling cannot succeed. Newly protected requests fail immediately, including subsequent discovery/calls from a connected MCP client; already admitted requests may finish.
 
 Re-enabling requires fresh login and new keys. It preserves the password and required-password-change flag, never restores old sessions/keys, and never bypasses password replacement. A pending-password user can log in only for account details, password change, and logout until replacement. A transaction failure rolls back account and credential changes together and returns safe 503. An uncertain commit can have succeeded despite a 503; inspect account/key state before retrying. Direct database edits are privileged operations outside this workflow. No new configuration, deployment, or manual migration is required; full Kubernetes rollout and public API routing remain pending.
+
+## Reset a password (#12)
+
+`POST /api/admin/users/:userId/reset-password` accepts JSON containing exactly `password`, the assigned temporary password (12–128 code points, preserving whitespace and Unicode). An eligible administrator must supply a live dashboard session, trusted Origin, and that session's CSRF token. The target's current password is not required. Success returns `204` with an empty body and `Cache-Control: no-store`.
+
+Using the administrator cookie jar, `me.json`, and member ID from the examples above:
+
+```bash
+member_id=$(jq -r '.user.id' "$session_dir/member.json")
+csrf_token=$(jq -r '.csrfToken' "$session_dir/me.json")
+python3 -c 'import getpass,json; print(json.dumps({"password":getpass.getpass("Assigned temporary password: ")}))' \
+  | curl --fail-with-body --silent --show-error \
+      -b "$session_dir/cookies" \
+      -H 'Origin: http://localhost:3000' -H "X-CSRF-Token: $csrf_token" \
+      -H 'Content-Type: application/json' \
+      --data-binary @- "http://localhost:3000/api/admin/users/$member_id/reset-password"
+unset csrf_token member_id
+```
+
+The transaction stores an Argon2id hash, sets `requiredPasswordChange: true`, and deletes every target dashboard session. It preserves the target's role, active/disabled status, and all gateway API-key records. The user-record write serializes with concurrent login, key issuance, and password replacement. Login using the old password cannot leave a session that survives reset. Already admitted operations may finish.
+
+Deliver the temporary password privately. The target logs in with it and may access only account details, password change, and logout. Personal and administrator-assisted key issuance are denied; existing unrevoked keys cannot authenticate MCP requests, including further requests by an already-connected SDK client. Follow **Replace a password** above using the temporary password as `currentPassword` and a different final password as `newPassword`. Replacement invalidates all dashboard sessions again and requires fresh login. Previously unrevoked keys then work with their existing values; revoked keys remain revoked. Resetting a disabled account does not enable it.
+
+Missing/invalid sessions or bearer-only authentication receive `401`; members, pending-password administrators, and Origin/CSRF failures receive `403`. Malformed target IDs or invalid/unknown body fields receive `400`; a valid missing target receives `404 User not found`. Non-JSON input receives `415`; bodies over 4096 bytes receive `413`. Storage/hashing failures return safe `503 Authentication unavailable`. An uncertain transaction commit may have succeeded despite a 503; inspect the target's state and try the assigned password before retrying.
+
+Administrator reset differs from **operator recovery**, which remains a later CLI ticket: recovery requires database operator access, restores an explicitly selected existing user as an active administrator, and invalidates both sessions and API keys. Reset uses existing administrator authority, preserves role/status and keys, and never reopens initial setup or bootstrap MCP authentication. No new configuration, manual migration, or deployment change is required for reset. The React dashboard and public API Ingress remain later work; exercise this endpoint through direct local gateway access.
