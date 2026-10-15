@@ -1,3 +1,4 @@
+import { DestinationPolicy, type DestinationOptions, type DestinationNetwork } from "./upstream/destination-policy.js";
 import { createMcpFastifyApp } from "@modelcontextprotocol/fastify";
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { AuthenticatedIdentity } from "./security/identity.js";
@@ -47,10 +48,15 @@ export interface GatewayAppOptions {
   upstreams?: UpstreamConfig[];
   auditLogger?: AuditLogger;
   mongodbUri?: string;
+  destinations?: DestinationOptions;
+  upstreamNetwork?: DestinationNetwork;
 }
 
 // Construction owns MCP and registry resources; the caller owns listening.
 export async function createGatewayApp(options: GatewayAppOptions = {}) {
+  const policy = new DestinationPolicy(options.destinations);
+  const upstreams = options.upstreams ?? getDefaultUpstreams();
+  for (const upstream of upstreams) policy.validate(upstream.url);
   const dashboard = dashboardConfig();
   const host = options.host ?? process.env.HOST ?? "127.0.0.1";
   const allowedHosts = options.allowedHosts ?? (
@@ -66,9 +72,9 @@ export async function createGatewayApp(options: GatewayAppOptions = {}) {
     // 1. Initialize upstream registry
     // ------------------------------------------
 
-    const registry = new UpstreamRegistry();
+    const registry = new UpstreamRegistry(policy, options.upstreamNetwork);
 
-    for (const config of options.upstreams ?? getDefaultUpstreams()) {
+    for (const config of upstreams) {
       registry.register(config);
     }
 

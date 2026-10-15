@@ -27,7 +27,7 @@ async function fixture(t: TestContext, options: Pick<GatewayAppOptions, "upstrea
   const previous = { origins: process.env.DASHBOARD_TRUSTED_ORIGINS, http: process.env.DASHBOARD_ALLOW_HTTP };
   process.env.DASHBOARD_TRUSTED_ORIGINS = origin;
   process.env.DASHBOARD_ALLOW_HTTP = "true";
-  const app = await createGatewayApp({ mongodbUri: uri.toString(), upstreams: [], ...options });
+  const app = await createGatewayApp({ mongodbUri: uri.toString(), upstreams: [], destinations: { allowLoopback: true, rules: (options.upstreams ?? []).map(config => ({ origin: new URL(config.url).origin, cidrs: ["127.0.0.1/32"] })) }, ...options });
   t.after(async () => {
     await app.close(); await db.dropDatabase(); await db.close();
     if (previous.origins === undefined) delete process.env.DASHBOARD_TRUSTED_ORIGINS;

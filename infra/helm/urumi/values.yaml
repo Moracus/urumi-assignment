@@ -119,6 +119,11 @@ timeMcp:
       cpu: 250m
       memory: 256Mi
 gateway:
+  destinationPolicy:
+    rules: []
+    deniedCidrs: []
+    allowLoopback: false
+
   enabled: true
   nodeEnv: production
 

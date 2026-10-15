@@ -1,3 +1,4 @@
+import { DestinationPolicy, type DestinationNetwork } from "./destination-policy.js";
 import type { Client } from "@modelcontextprotocol/client";
 
 import {
@@ -9,6 +10,8 @@ import {
 import type { DiscoveredTool, UpstreamConfig, UpstreamState } from "./types.js";
 
 export class UpstreamRegistry {
+  constructor(private readonly policy = new DestinationPolicy(), private readonly network?: DestinationNetwork) {}
+
   private upstreams = new Map<string, UpstreamState>();
 
   private connections = new Map<string, UpstreamConnection>();
@@ -30,11 +33,7 @@ export class UpstreamRegistry {
       throw new Error("Invalid upstream name");
     }
 
-    const url = new URL(config.url);
-
-    if (url.protocol !== "http:" && url.protocol !== "https:") {
-      throw new Error("Upstream must use HTTP or HTTPS");
-    }
+    this.policy.validate(config.url);
 
     this.upstreams.set(config.name, {
       config: { ...config },
@@ -109,7 +108,7 @@ export class UpstreamRegistry {
     let connection: UpstreamConnection | null = null;
 
     try {
-      connection = await connectToUpstream(name, state.config.url);
+      connection = await connectToUpstream(name, state.config.url, this.policy, this.network);
 
       // Discover tools before marking the upstream healthy.
       const result = await connection.client.listTools(undefined, {

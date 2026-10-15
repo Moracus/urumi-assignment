@@ -294,3 +294,7 @@ Verify network isolation using ordinary test Pods: unrelated Pods should be deni
 - Dashboard remains a local scaffold with no Helm workload or Ingress template. A dashboard hostname/image value alone does not deploy it.
 
 These limits describe the current implementation and should be revised as capabilities are added.
+
+### Upstream destination approval
+
+Upstream HTTP connections now require an approved origin and resolved IP range. The three existing internal MCP services are approved by default; changing an upstream URL does not grant outbound access. See [upstream destination configuration](docs/upstream-destinations.md) for `UPSTREAM_DESTINATION_RULES`, the controlled `UPSTREAM_ALLOW_LOOPBACK` development exception, Helm settings, and required deployment egress approval.

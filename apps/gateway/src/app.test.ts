@@ -15,7 +15,7 @@ import type { AuditRecord } from "./audit/logger.js";
 const origin = "http://localhost:3000";
 const password = "a final MCP test password";
 
-async function fixture(t: TestContext, options: Pick<GatewayAppOptions, "upstreams" | "auditLogger"> = {}) {
+async function fixture(t: TestContext, options: Pick<GatewayAppOptions, "upstreams" | "auditLogger" | "destinations" | "upstreamNetwork"> = {}) {
   assert.ok(process.env.MONGODB_TEST_URI, "Use the real MongoDB integration runner");
   const uri = new URL(process.env.MONGODB_TEST_URI);
   uri.pathname = `/urumi_test_${randomUUID().replaceAll("-", "")}`;
@@ -27,7 +27,10 @@ async function fixture(t: TestContext, options: Pick<GatewayAppOptions, "upstrea
   const previous = { origins: process.env.DASHBOARD_TRUSTED_ORIGINS, http: process.env.DASHBOARD_ALLOW_HTTP };
   process.env.DASHBOARD_TRUSTED_ORIGINS = origin;
   process.env.DASHBOARD_ALLOW_HTTP = "true";
-  const app = await createGatewayApp({ upstreams: [], ...options, mongodbUri: uri.toString() });
+  const app = await createGatewayApp({ upstreams: [],
+    destinations: { allowLoopback: true, rules: (options.upstreams ?? []).map(config => ({
+      origin: new URL(config.url).origin, cidrs: ["127.0.0.1/32"],
+    })) }, ...options, mongodbUri: uri.toString() });
   t.after(async () => {
     await app.close();
     await db.dropDatabase(); await db.close();
@@ -65,7 +68,7 @@ const httpFailure = (status: number) => (error: unknown) => {
 };
 
 async function controlledUpstream(t: TestContext, name: string, register: (server: McpServer) => void) {
-  const app = createMcpFastifyApp({ host: "127.0.0.1" });
+  const app = createMcpFastifyApp({ host: "127.0.0.1", allowedHosts: ["127.0.0.1", "urumi-time-mcp", "urumi-woocommerce-mcp", "urumi-calculator-mcp", "tools.example.test"] });
   const handler = createMcpHandler(() => {
     const server = new McpServer({ name, version: "1.0.0" });
     register(server);
@@ -355,4 +358,189 @@ test("dashboard logout and ordinary password changes leave a connected MCP key u
   assert.equal((await f.app.inject({ url: "/api/auth/me", headers })).statusCode, 401);
   assert.deepEqual((await client.callTool({ name: "calculator.calculate", arguments: { a: 2, b: 3 } })).content, [{ type: "text", text: "6" }]);
   assert.deepEqual((await (await f.connect()).listTools(undefined, { cacheMode: "bypass" })).tools.map((tool) => tool.name), ["calculator.calculate"]);
+});
+
+
+test("invalid destination policy fails startup before storage or network access", async () => {
+  const previous = process.env.UPSTREAM_DESTINATION_RULES;
+  process.env.UPSTREAM_DESTINATION_RULES = "not-json";
+  try {
+    await assert.rejects(createGatewayApp({ upstreams: [] }), /Invalid upstream destination configuration/);
+  } finally {
+    if (previous === undefined) delete process.env.UPSTREAM_DESTINATION_RULES;
+    else process.env.UPSTREAM_DESTINATION_RULES = previous;
+  }
+});
+
+test("startup rejects unapproved endpoints and sensitive targets even with explicit rules", async () => {
+  for (const url of [
+    "ftp://urumi-time-mcp:3003/mcp", "http://user:secret@urumi-time-mcp:3003/mcp",
+    "http://urumi-time-mcp:3002/mcp", "http://urumi-time-mcp.other.svc:3003/mcp",
+    "http://169.254.169.254/mcp", "http://127.0.0.1:3003/mcp", "https://kubernetes.default.svc/mcp",
+    "http://database:27017/mcp", "http://[::ffff:127.0.0.1]:3003/mcp",
+  ]) {
+    const parsed = new URL(url);
+    await assert.rejects(createGatewayApp({ upstreams: [{ name: "time", url, enabled: true }],
+      destinations: { rules: ["urumi-time-mcp:3002", "other.svc"].some(value => url.includes(value)) ? [] : [{ origin: parsed.origin, cidrs: ["0.0.0.0/0", "::/0"] }] },
+    }), /destination/);
+  }
+});
+
+test("DNS validates every answer before dialing approved services and denies redirects without harming healthy tools", async (t) => {
+  const calculator = await calculatorUpstream(t);
+  let redirectCalls = 0;
+  let targetCalls = 0;
+  const redirect = createMcpFastifyApp({ host: "127.0.0.1" });
+  redirect.all("/mcp", (_request, reply) => {
+    redirectCalls++;
+    return reply.redirect("/trap");
+  });
+  redirect.all("/trap", async () => { targetCalls++; return {}; });
+  t.after(() => redirect.close());
+  const redirectAddress = await redirect.listen({ host: "127.0.0.1", port: 0 });
+  const { buildConnector } = await import("undici");
+  const dial = buildConnector({ timeout: 1000 });
+  const dialed: string[] = [];
+  const f = await fixture(t, {
+    upstreams: [calculator.config,
+      { name: "time", url: "http://urumi-time-mcp:3003/mcp", enabled: true },
+      { name: "woocommerce", url: "http://urumi-woocommerce-mcp:3001/mcp", enabled: true },
+      { name: "redirect", url: `${redirectAddress}/mcp`, enabled: true }],
+    destinations: { allowLoopback: true, rules: [calculator.config.url, `${redirectAddress}/mcp`].map(url => ({
+      origin: new URL(url).origin, cidrs: ["127.0.0.1/32"],
+    })) },
+    upstreamNetwork: {
+      async lookup(host, _options) {
+        // A single forbidden answer invalidates the complete set, even when the first is safe.
+        return host === "urumi-time-mcp" ? [{ address: "10.42.1.5", family: 4 }, { address: "169.254.169.254", family: 4 }] :
+          [{ address: "10.42.1.6", family: 4 }];
+      },
+      dial(options, callback) {
+        dialed.push(options.hostname);
+        const endpoint = options.hostname === "10.42.1.6" ? new URL(calculator.config.url) : undefined;
+        dial({ ...options, hostname: endpoint?.hostname ?? options.hostname, port: endpoint?.port ?? options.port }, callback);
+      },
+    },
+  });
+  const client = await f.connect();
+  assert.deepEqual((await client.listTools(undefined, { cacheMode: "bypass" })).tools.map(tool => tool.name), ["calculator.calculate"]);
+  assert.equal((await f.app.inject({ url: "/health/ready" })).json().connectedUpstreams, 2);
+  assert.ok(dialed.includes("10.42.1.6"), "approved service address is passed literally to the socket boundary");
+  assert.ok(!dialed.includes("10.42.1.5"));
+  assert.ok(!dialed.includes("169.254.169.254"));
+  assert.ok(redirectCalls > 0);
+  assert.equal(targetCalls, 0);
+  assert.deepEqual((await client.callTool({ name: "calculator.calculate", arguments: { a: 6, b: 7 } })).content, [{ type: "text", text: "42" }]);
+});
+
+test("automatic recovery rechecks changed DNS and never dials a newly forbidden address", async (t) => {
+  const calculator = await calculatorUpstream(t);
+  let address = "169.254.169.254";
+  let lookups = 0;
+  let approvedDials = 0;
+  const { buildConnector } = await import("undici");
+  const dial = buildConnector({ timeout: 1000 });
+  const sockets: import("node:net").Socket[] = [];
+  const f = await fixture(t, {
+    upstreams: [calculator.config, { name: "time", url: "http://urumi-time-mcp:3003/mcp", enabled: true }],
+    upstreamNetwork: {
+      async lookup() { lookups++; return [{ address, family: 4 }]; },
+      dial(options, callback) {
+        if (options.hostname !== "10.42.1.5") { dial(options, callback); return; }
+        approvedDials++;
+        const endpoint = new URL(calculator.config.url);
+        dial({ ...options, hostname: endpoint.hostname, port: endpoint.port }, (error, socket) => {
+          if (error) callback(error, null);
+          else { sockets.push(socket); callback(null, socket); }
+        });
+      },
+    },
+  });
+  const client = await f.connect();
+  await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
+  const names = async () => (await client.listTools(undefined, { cacheMode: "bypass" })).tools.map(tool => tool.name);
+  assert.deepEqual(await names(), ["calculator.calculate"]);
+  assert.equal(approvedDials, 0);
+  address = "10.42.1.5";
+  async function waitFor(check: () => Promise<boolean>) {
+    const deadline = Date.now() + 35000;
+    while (Date.now() < deadline) {
+      if (await check()) return;
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    assert.fail("Periodic maintenance did not reach expected state");
+  }
+  await waitFor(async () => (await names()).includes("time.calculate"));
+  assert.ok(approvedDials > 0);
+  const before = approvedDials;
+  const previousLookups = lookups;
+  address = "169.254.169.254";
+  for (const socket of sockets) socket.destroy();
+  await waitFor(async () => lookups > previousLookups && !(await names()).includes("time.calculate"));
+  assert.equal(approvedDials, before);
+  assert.deepEqual((await client.callTool({ name: "calculator.calculate", arguments: { a: 3, b: 7 } })).content, [{ type: "text", text: "21" }]);
+});
+
+
+test("all default service origins and explicitly approved external destinations connect through the application", async (t) => {
+  const calculator = await calculatorUpstream(t);
+  const { buildConnector } = await import("undici");
+  const dial = buildConnector({ timeout: 1000 });
+  const endpoint = new URL(calculator.config.url);
+  const seen: string[] = [];
+  const f = await fixture(t, {
+    upstreams: [
+      { name: "calculator", url: "http://urumi-calculator-mcp:3002/mcp", enabled: true },
+      { name: "woocommerce", url: "http://urumi-woocommerce-mcp:3001/mcp", enabled: true },
+      { name: "time", url: "http://urumi-time-mcp:3003/mcp", enabled: true },
+      { name: "external", url: "http://tools.example.test/mcp", enabled: true },
+    ],
+    destinations: { rules: [{ origin: "http://tools.example.test", cidrs: ["203.0.113.10/32"] }] },
+    upstreamNetwork: {
+      async lookup(host) {
+        seen.push(host);
+        return [{ address: host === "tools.example.test" ? "203.0.113.10" : "10.42.1.5", family: 4 }];
+      },
+      dial(options, callback) { dial({ ...options, hostname: endpoint.hostname, port: endpoint.port }, callback); },
+    },
+  });
+  assert.equal((await f.app.inject({ url: "/health/ready" })).json().connectedUpstreams, 4);
+  assert.deepEqual([...new Set(seen)].sort(), ["tools.example.test", "urumi-calculator-mcp", "urumi-time-mcp", "urumi-woocommerce-mcp"]);
+  const client = await f.connect();
+  assert.deepEqual((await client.callTool({ name: "calculator.calculate", arguments: { a: 2, b: 9 } })).content, [{ type: "text", text: "18" }]);
+});
+
+test("Kubernetes API service IP is denied through approved DNS aliases even on HTTPS 443", async (t) => {
+  const previous = process.env.KUBERNETES_SERVICE_HOST;
+  process.env.KUBERNETES_SERVICE_HOST = "10.96.0.1";
+  t.after(() => {
+    if (previous === undefined) delete process.env.KUBERNETES_SERVICE_HOST;
+    else process.env.KUBERNETES_SERVICE_HOST = previous;
+  });
+  let dials = 0;
+  const f = await fixture(t, {
+    upstreams: [{ name: "time", url: "https://tools.example.test/mcp", enabled: true }],
+    destinations: { rules: [{ origin: "https://tools.example.test", cidrs: ["10.96.0.1/32"] }] },
+    upstreamNetwork: {
+      async lookup() { return [{ address: "10.96.0.1", family: 4 }]; },
+      dial(_options, callback) { dials++; callback(new Error("unexpected dial"), null); },
+    },
+  });
+  assert.deepEqual((await (await f.connect()).listTools(undefined, { cacheMode: "bypass" })).tools, []);
+  assert.equal(dials, 0);
+});
+
+test("operator denials override approvals and production cannot enable development loopback", async () => {
+  await assert.rejects(createGatewayApp({ upstreams: [], destinations: {
+    allowLoopback: true, rules: [{ origin: "http://127.0.0.1:3003", cidrs: ["127.0.0.1/32"] }],
+    deniedCidrs: ["127.0.0.0/8"],
+  } }), /Invalid upstream destination configuration/);
+  const previous = process.env.NODE_ENV;
+  process.env.NODE_ENV = "production";
+  try {
+    await assert.rejects(createGatewayApp({ upstreams: [], destinations: { allowLoopback: true } }), /Invalid upstream destination configuration/);
+  } finally {
+    if (previous === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = previous;
+  }
 });

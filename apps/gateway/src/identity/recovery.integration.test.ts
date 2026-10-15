@@ -88,7 +88,7 @@ test("recovery restores members and disabled administrators with irreversible cr
       upstream.addHook("onClose", () => handler.close());
       t.after(() => upstream.close());
       const address = await upstream.listen({ host: "127.0.0.1", port: 0 });
-      const app = await createGatewayApp({ mongodbUri: uri, upstreams: [{ name: "time", url: `${address}/mcp`, enabled: true }] });
+      const app = await createGatewayApp({ mongodbUri: uri, destinations: { allowLoopback: true, rules: [{ origin: address, cidrs: ["127.0.0.1/32"] }] }, upstreams: [{ name: "time", url: `${address}/mcp`, enabled: true }] });
       t.after(() => app.close());
       const login = async (password: string) => app.inject({ method: "POST", url: "/api/auth/login", headers: { origin },
         payload: { email: user.email, password } });
