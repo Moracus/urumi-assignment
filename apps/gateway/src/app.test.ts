@@ -15,7 +15,7 @@ import type { AuditRecord } from "./audit/logger.js";
 const origin = "http://localhost:3000";
 const password = "a final MCP test password";
 
-async function fixture(t: TestContext, options: Pick<GatewayAppOptions, "upstreams" | "auditLogger" | "destinations" | "upstreamNetwork"> = {}) {
+async function fixture(t: TestContext, options: Pick<GatewayAppOptions, "upstreams" | "auditLogger" | "destinations" | "upstreamNetwork" | "secretReader" | "approvedSecrets"> = {}) {
   assert.ok(process.env.MONGODB_TEST_URI, "Use the real MongoDB integration runner");
   const uri = new URL(process.env.MONGODB_TEST_URI);
   uri.pathname = `/urumi_test_${randomUUID().replaceAll("-", "")}`;
@@ -67,8 +67,9 @@ const httpFailure = (status: number) => (error: unknown) => {
   return true;
 };
 
-async function controlledUpstream(t: TestContext, name: string, register: (server: McpServer) => void) {
+async function controlledUpstream(t: TestContext, name: string, register: (server: McpServer) => void, configure?: (app: ReturnType<typeof createMcpFastifyApp>) => void) {
   const app = createMcpFastifyApp({ host: "127.0.0.1", allowedHosts: ["127.0.0.1", "urumi-time-mcp", "urumi-woocommerce-mcp", "urumi-calculator-mcp", "tools.example.test"] });
+  configure?.(app);
   const handler = createMcpHandler(() => {
     const server = new McpServer({ name, version: "1.0.0" });
     register(server);
@@ -1636,7 +1637,7 @@ test("server PATCH enforces administrator eligibility, CSRF, strict input and ca
   for (const headers of [{ ...f.headers, origin: "https://untrusted.test" }, { ...f.headers, "x-csrf-token": "" }]) {
     assert.equal((await patch({ displayName: "New" }, headers)).statusCode, 403);
   }
-  for (const payload of [{}, { serverId: "renamed" }, { enabled: false }, { authentication: { type: "none" } },
+  for (const payload of [{}, { serverId: "renamed" }, { enabled: false }, { authentication: { type: "unsupported" } },
     { headers: { authorization: "secret" } }, { displayName: " " }, { displayName: "x", unexpected: true },
     { url: "http://unapproved.example/mcp" }, { url: "file:///tmp/mcp" }, { url: "http://user:secret@localhost/mcp" }]) {
     const response = await patch(payload);
@@ -1819,4 +1820,215 @@ test("HTTP endpoint replacement drains a delayed failing old call without poison
   assert.deepEqual((await client.callTool({ name: "extra.echo" })).content, [{ type: "text", text: "replacement" }]);
   assert.equal(oldCalls, 1);
   assert.equal(records.filter(record => record.toolName === "extra.echo" && record.outcome === "upstream_error").length, 1);
+});
+
+
+test("approved bearer Secret authenticates only its upstream through dashboard and MCP", async t => {
+  const secret = "synthetic-upstream-bearer-22";
+  const seen: string[] = [];
+  const extra = await controlledUpstream(t, "extra", server => {
+    server.registerTool("echo", {}, async () => ({ content: [{ type: "text", text: "authenticated" }] }));
+  }, app => app.addHook("onRequest", async (request, reply) => {
+    seen.push(request.headers.authorization ?? "missing");
+    if (request.headers.authorization !== `Bearer ${secret}`) return reply.code(401).send();
+  }));
+  const calculator = await calculatorUpstream(t);
+  const ref = { namespace: "urumi", name: "extra-token", key: "token" };
+  const records: AuditRecord[] = [];
+  const f = await fixture(t, { upstreams: [calculator.config], approvedSecrets: [ref],
+    secretReader: { async read(value) { assert.deepEqual(value, ref); return secret; } },
+    auditLogger: { async write(record) { records.push(record); } },
+    destinations: { allowLoopback: true, rules: [extra, calculator].map(({ config }) => ({ origin: new URL(config.url).origin, cidrs: ["127.0.0.1/32"] })) } });
+  await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
+  const response = await f.app.inject({ method: "POST", url: "/api/admin/servers", headers: f.headers,
+    payload: { serverId: "extra", displayName: "Private", url: extra.config.url, transport: "streamable-http", enabled: true,
+      authentication: { type: "bearer", secretRef: ref } } });
+  assert.equal(response.statusCode, 201, response.body);
+  assert.equal(response.json().server.status, "connected");
+  const client = await f.connect();
+  assert.equal((await client.callTool({ name: "extra.echo" })).isError, undefined);
+  assert.ok(seen.length > 0);
+  assert.ok(seen.every(value => value === `Bearer ${secret}` && !value.includes(f.rawKey)));
+  assert.ok(!JSON.stringify([response.json(), records, await f.db.collection("upstream_registrations").find().toArray()]).includes(secret));
+});
+
+test("Secret reference policy rejects unsafe headers and raw or unapproved credentials before I/O", async t => {
+  const ref = { namespace: "urumi", name: "approved", key: "token" };
+  let reads = 0;
+  const f = await fixture(t, { approvedSecrets: [ref], secretReader: { async read() { reads++; return "synthetic-private-22"; } } });
+  await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
+  const base = { serverId: "extra", displayName: "Extra", url: "http://urumi-time-mcp:3003/mcp", transport: "streamable-http", enabled: true };
+  const invalid = [
+    ...["Host", "Authorization", "Cookie", "Connection", "Content-Type", "Origin", "Mcp-Session-Id", "X-Forwarded-For", "Proxy-Test", "Sec-Fetch-Site", "X-HTTP-Method-Override", "invalid\r\nname"].map(headerName => ({ type: "header", secretRef: ref, headerName })),
+    { type: "bearer", secretRef: { ...ref, namespace: "other" } },
+    { type: "bearer", secretRef: { ...ref, name: "unapproved" } },
+    { type: "bearer", secretRef: { ...ref, key: "password" } },
+    { type: "bearer", secretRef: { ...ref, namespace: "../urumi" } },
+    { type: "bearer", secretRef: { ...ref, name: "../approved" } },
+    { type: "bearer", secretRef: { ...ref, key: "bad/key" } },
+    { type: "bearer", secretRef: ref, headerName: "X-Token" },
+    { type: "none", secretRef: ref }, { type: "none", token: "synthetic-private-22" },
+    { type: "bearer", secretRef: ref, value: "synthetic-private-22" },
+  ];
+  for (const authentication of invalid) {
+    const response = await f.app.inject({ method: "POST", url: "/api/admin/servers", headers: f.headers, payload: { ...base, authentication } });
+    assert.equal(response.statusCode, 400, JSON.stringify(authentication));
+    assert.ok(!response.body.includes("synthetic-private-22"));
+  }
+  const create = await f.app.inject({ method: "POST", url: "/api/admin/servers", headers: f.headers, payload: { ...base, enabled: false, authentication: { type: "none" } } });
+  assert.equal(create.statusCode, 201);
+  for (const authentication of invalid) {
+    const response = await f.app.inject({ method: "PATCH", url: "/api/admin/servers/extra", headers: f.headers, payload: { authentication } });
+    assert.equal(response.statusCode, 400);
+  }
+  assert.equal(reads, 0);
+  const stored = await f.db.collection("upstream_registrations").findOne({ serverId: "extra" });
+  assert.deepEqual(stored?.authentication, { type: "none" });
+  assert.equal(stored?.configurationRevision, 1);
+});
+
+test("credential edits retire old authentication and reconnect rotation resolves current Secret values", async t => {
+  const first = { namespace: "urumi", name: "first", key: "token" };
+  const second = { ...first, name: "second" };
+  let value = "synthetic-first-22";
+  let readFailure = false;
+  let reads = 0;
+  const seen: { bearer?: string; custom?: string }[] = [];
+  const output: string[] = [];
+  for (const method of ["info", "warn", "error"] as const) t.mock.method(console, method, (...args: unknown[]) => output.push(JSON.stringify(args)));
+  let expected = { header: "authorization", value: `Bearer ${value}` };
+  const extra = await controlledUpstream(t, "extra", server => {
+    server.registerTool("echo", {}, async () => ({ content: [{ type: "text", text: "ok" }] }));
+  }, app => app.addHook("onRequest", async (request, reply) => {
+    seen.push({ bearer: request.headers.authorization, custom: String(request.headers["x-upstream-token"] ?? "") });
+    if (request.headers[expected.header] !== expected.value) return reply.code(401).send();
+  }));
+  const healthyHeaders: unknown[] = [];
+  const calculator = await controlledUpstream(t, "calculator", server => {
+    server.registerTool("calculate", {}, async () => ({ content: [] }));
+  }, app => app.addHook("onRequest", async request => { healthyHeaders.push(request.headers.authorization, request.headers["x-upstream-token"]); }));
+  const records: AuditRecord[] = [];
+  const destinations = { allowLoopback: true, rules: [extra, calculator].map(({ config }) => ({ origin: new URL(config.url).origin, cidrs: ["127.0.0.1/32"] })) };
+  const secretReader = { async read() { reads++; if (readFailure) throw new Error(`Forbidden or missing key: ${value}`); return value; } };
+  const f = await fixture(t, { upstreams: [calculator.config], approvedSecrets: [first, second], secretReader,
+    destinations, auditLogger: { async write(record) { records.push(record); } } });
+  const request = (method: "POST" | "PATCH", path: string, payload?: object) => f.app.inject({ method, url: `/api/admin/servers/extra${path}`, headers: f.headers, payload });
+  await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
+  const client = await f.connect();
+  const created = await f.app.inject({ method: "POST", url: "/api/admin/servers", headers: f.headers, payload: {
+    serverId: "extra", displayName: "Extra", url: extra.config.url, transport: "streamable-http", enabled: true,
+    authentication: { type: "bearer", secretRef: first },
+  } });
+  assert.equal(created.statusCode, 201, created.body);
+  await client.callTool({ name: "extra.echo" });
+  // Failure replacing the reference must withdraw the old credential/catalog.
+  readFailure = true;
+  const failed = await request("PATCH", "", { authentication: { type: "bearer", secretRef: second } });
+  assert.equal(failed.statusCode, 200, failed.body);
+  assert.equal(failed.json().server.status, "unreachable");
+  assert.equal(failed.json().server.toolCount, 0);
+  const afterFailure = seen.length;
+  await assert.rejects(client.callTool({ name: "extra.echo" }), ProtocolError);
+  assert.equal(seen.length, afterFailure);
+  await client.callTool({ name: "calculator.calculate" });
+  // Recovery resolves again and sends only the custom header, never stale bearer.
+  readFailure = false;
+  value = "synthetic-second-22";
+  expected = { header: "x-upstream-token", value };
+  const custom = await request("PATCH", "", { authentication: { type: "header", secretRef: second, headerName: "X-Upstream-Token" } });
+  assert.equal(custom.json().server.status, "connected", custom.body);
+  const afterCustom = seen.length;
+  await client.callTool({ name: "extra.echo" });
+  assert.ok(seen.slice(afterCustom).every(headers => headers.custom === value && headers.bearer === undefined));
+  await request("POST", "/disable");
+  value = "synthetic-rotated-22";
+  expected.value = value;
+  const beforeRotation = reads;
+  const enabled = await request("POST", "/enable");
+  assert.equal(enabled.json().server.status, "connected");
+  assert.equal(reads, beforeRotation + 1);
+  await client.callTool({ name: "extra.echo" });
+  assert.equal(seen.at(-1)?.custom, value);
+  // Invalid Secret contents fail closed before HTTP and leave the healthy server usable.
+  await request("POST", "/disable");
+  const beforeInvalid = seen.length;
+  value = "invalid\r\nheader";
+  const invalid = await request("POST", "/enable");
+  assert.equal(invalid.json().server.status, "unreachable");
+  assert.equal(seen.length, beforeInvalid);
+  value = "synthetic-recovered-22";
+  expected.value = value;
+  const recovered = await request("POST", "/refresh");
+  assert.equal(recovered.json().server.status, "connected", recovered.body);
+  await client.callTool({ name: "extra.echo" });
+  assert.equal(seen.at(-1)?.custom, value);
+  // Restart resolves persisted references with the current value, rather than storing headers.
+  await f.app.close();
+  const restarted = await createGatewayApp({ mongodbUri: f.mongodbUri, upstreams: [], destinations, approvedSecrets: [first, second], secretReader });
+  t.after(() => restarted.close());
+  const restored = await restarted.inject({ url: "/api/admin/servers/extra", headers: f.headers });
+  assert.equal(restored.json().server.status, "connected");
+  const persisted = await f.db.collection("upstream_registrations").find().toArray();
+  assert.deepEqual(persisted.find(row => row.serverId === "extra")?.authentication, { type: "header", secretRef: second, headerName: "X-Upstream-Token" });
+  assert.ok(healthyHeaders.every(header => header === undefined));
+  const captured = JSON.stringify([output, records, persisted, failed.json(), custom.json(), invalid.json(), recovered.json(), restored.json()]);
+  assert.ok(!captured.includes("synthetic-"));
+});
+
+test("authenticated upstream redirects cannot disclose credentials and failed Secret reads isolate servers", async t => {
+  const ref = { namespace: "urumi", name: "private", key: "token" };
+  const secret = "synthetic-redirect-secret-22";
+  let destinationCalls = 0;
+  const destination = await controlledUpstream(t, "destination", server => {
+    destinationCalls++;
+    server.registerTool("echo", {}, async () => ({ content: [] }));
+  });
+  let redirectRequests = 0;
+  const redirect = createMcpFastifyApp({ host: "127.0.0.1" });
+  redirect.all("/mcp", async (request, reply) => {
+    redirectRequests++;
+    assert.equal(request.headers.authorization, `Bearer ${secret}`);
+    return reply.redirect(destination.config.url, 307);
+  });
+  t.after(() => redirect.close());
+  const address = await redirect.listen({ host: "127.0.0.1", port: 0 });
+  const calculator = await calculatorUpstream(t);
+  let failure: string | undefined;
+  const f = await fixture(t, { upstreams: [calculator.config], approvedSecrets: [ref],
+    secretReader: { async read() { if (failure) throw new Error(`${failure}: ${secret}`); return secret; } },
+    destinations: { allowLoopback: true, rules: [calculator.config.url, destination.config.url, address].map(url => ({ origin: new URL(url).origin, cidrs: ["127.0.0.1/32"] })) } });
+  await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
+  const created = await f.app.inject({ method: "POST", url: "/api/admin/servers", headers: f.headers, payload: {
+    serverId: "extra", displayName: "Redirecting", url: `${address}/mcp`, transport: "streamable-http", enabled: true,
+    authentication: { type: "bearer", secretRef: ref },
+  } });
+  assert.equal(created.statusCode, 201, created.body);
+  assert.equal(created.json().server.status, "unreachable");
+  assert.ok(redirectRequests > 0);
+  assert.equal(destinationCalls, 0);
+  const client = await f.connect();
+  for (failure of ["missing Secret", "missing key", "forbidden access"]) {
+    const before = redirectRequests;
+    const refreshed = await f.app.inject({ method: "POST", url: "/api/admin/servers/extra/refresh", headers: f.headers });
+    assert.equal(refreshed.statusCode, 200);
+    assert.equal(refreshed.json().server.status, "unreachable");
+    assert.ok(!refreshed.body.includes(secret));
+    assert.ok(!refreshed.body.includes(failure));
+    assert.equal(redirectRequests, before);
+    assert.equal(destinationCalls, 0);
+    await client.callTool({ name: "calculator.calculate", arguments: { a: 6, b: 7 } });
+  }
+});
+
+test("malformed Secret approval fails startup before database access", async () => {
+  const previous = process.env.UPSTREAM_SECRET_REFERENCES;
+  try {
+    for (const invalid of ["not-json", "{}", '[{"namespace":"urumi","name":"token","key":"token","value":"synthetic-private"}]', '[{"namespace":"../urumi","name":"token","key":"token"}]']) {
+      process.env.UPSTREAM_SECRET_REFERENCES = invalid;
+      await assert.rejects(createGatewayApp({ mongodbUri: "invalid" }), /Invalid upstream Secret configuration/);
+    }
+  } finally {
+    if (previous === undefined) delete process.env.UPSTREAM_SECRET_REFERENCES;
+    else process.env.UPSTREAM_SECRET_REFERENCES = previous;
+  }
 });

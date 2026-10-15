@@ -15,6 +15,7 @@ export async function connectToUpstream(
   url: string,
   policy = new DestinationPolicy(),
   network?: DestinationNetwork,
+  headers: Record<string, string> = {},
 ): Promise<UpstreamConnection> {
   const client = new Client({
     name: "urumi-gateway",
@@ -24,6 +25,7 @@ export async function connectToUpstream(
   const approved = policy.validate(url);
   const dispatcher = policy.dispatcher(url, network);
   const transport = new StreamableHTTPClientTransport(approved, {
+    requestInit: { headers },
     fetch: async (input, init) => {
       const requested = new URL(input);
       if (requested.href !== approved.href) throw new Error("Upstream destination denied");

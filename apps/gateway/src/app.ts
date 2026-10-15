@@ -1,3 +1,4 @@
+import { UpstreamCredentials, type SecretReader, type SecretReference } from "./upstream/credentials.js";
 import { DestinationPolicy, type DestinationOptions, type DestinationNetwork } from "./upstream/destination-policy.js";
 import { createMcpFastifyApp } from "@modelcontextprotocol/fastify";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -52,10 +53,13 @@ export interface GatewayAppOptions {
   mongodbUri?: string;
   destinations?: DestinationOptions;
   upstreamNetwork?: DestinationNetwork;
+  secretReader?: SecretReader;
+  approvedSecrets?: SecretReference[];
 }
 
 // Construction owns MCP and registry resources; the caller owns listening.
 export async function createGatewayApp(options: GatewayAppOptions = {}) {
+  const credentials = new UpstreamCredentials(options.approvedSecrets, options.secretReader);
   const policy = new DestinationPolicy(options.destinations);
   const upstreams = options.upstreams ?? getDefaultUpstreams();
   const dashboard = dashboardConfig();
@@ -75,7 +79,7 @@ export async function createGatewayApp(options: GatewayAppOptions = {}) {
     // 1. Initialize upstream registry
     // ------------------------------------------
 
-    const registry = new UpstreamRegistry(policy, options.upstreamNetwork);
+    const registry = new UpstreamRegistry(policy, options.upstreamNetwork, credentials);
 
     for (const server of registrations) {
       registry.register({ name: server.serverId, url: server.url, enabled: server.enabled,
@@ -136,7 +140,7 @@ export async function createGatewayApp(options: GatewayAppOptions = {}) {
       allowedHosts,
     });
 
-    const management = new UpstreamManagement(identityStorage.upstreamRegistrations, registry, policy);
+    const management = new UpstreamManagement(identityStorage.upstreamRegistrations, registry, policy, credentials);
     await registerDashboardRoutes(app, identityStorage, dashboard, admin => {
       registerServerInspectionRoutes(admin, identityStorage.upstreamRegistrations, registry, policy, management);
     });

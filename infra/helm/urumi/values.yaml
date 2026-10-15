@@ -119,6 +119,9 @@ timeMcp:
       cpu: 250m
       memory: 256Mi
 gateway:
+  # Exact key-level application approval; names also generate get-only RBAC.
+  secretReferences: []
+
   destinationPolicy:
     rules: []
     deniedCidrs: []

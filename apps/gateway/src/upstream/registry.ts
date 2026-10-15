@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from "node:util";
+import { UpstreamCredentials } from "./credentials.js";
 import { DestinationPolicy, type DestinationNetwork } from "./destination-policy.js";
 import type { Client } from "@modelcontextprotocol/client";
 
@@ -10,7 +12,7 @@ import {
 import type { DiscoveredTool, UpstreamConfig, UpstreamState } from "./types.js";
 
 export class UpstreamRegistry {
-  constructor(private readonly policy = new DestinationPolicy(), private readonly network?: DestinationNetwork) {}
+  constructor(private readonly policy = new DestinationPolicy(), private readonly network?: DestinationNetwork, private readonly credentials = new UpstreamCredentials()) {}
 
   private closed = false;
   private nextGeneration = 0;
@@ -126,7 +128,7 @@ export class UpstreamRegistry {
     this.policy.validate(config.url);
     const state = this.upstreams.get(config.name);
     if (!state) throw new Error("Unknown upstream");
-    if (state.config.url === config.url) {
+    if (state.config.url === config.url && isDeepStrictEqual(state.config.authentication, config.authentication)) {
       // Metadata revisions do not invalidate a callable catalog or reconnect.
       state.config = { ...config };
       return;
@@ -206,12 +208,9 @@ export class UpstreamRegistry {
     let connection: UpstreamConnection | null = null;
 
     try {
-      // Secret resolution is a separate management capability. Never connect unauthenticated
-      // when persisted configuration requires upstream credentials.
-      if (state.config.authentication && state.config.authentication.type !== "none") {
-        throw new Error("Upstream credentials unavailable");
-      }
-      connection = await connectToUpstream(name, state.config.url, this.policy, this.network);
+      const headers = await this.credentials.resolve(state.config.authentication);
+      if (!current()) return;
+      connection = await connectToUpstream(name, state.config.url, this.policy, this.network, headers);
 
       // Discover tools before marking the upstream healthy.
       const result = await connection.client.listTools(undefined, {

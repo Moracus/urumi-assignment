@@ -1,3 +1,4 @@
+import type { UpstreamCredentials } from "./credentials.js";
 import { DashboardAuthError } from "../identity/dashboard-sessions.js";
 import { createRegistrationInput, editRegistrationInput, type RegistrationStorage, type UpstreamRegistration } from "./registrations.js";
 import type { DestinationPolicy } from "./destination-policy.js";
@@ -9,6 +10,7 @@ export class UpstreamManagement {
     private readonly storage: RegistrationStorage,
     private readonly registry: UpstreamRegistry,
     private readonly policy: DestinationPolicy,
+    private readonly credentials: UpstreamCredentials,
   ) {}
 
   private readonly operations = new Map<string, Promise<unknown>>();
@@ -27,6 +29,7 @@ export class UpstreamManagement {
     let parsed;
     try {
       parsed = editRegistrationInput.parse(input);
+      if (parsed.authentication) this.credentials.validate(parsed.authentication);
       if (parsed.url !== undefined) parsed.url = this.policy.validate(parsed.url).href;
     } catch {
       throw new DashboardAuthError(400, "Invalid server configuration");
@@ -89,6 +92,7 @@ export class UpstreamManagement {
     let parsed;
     try {
       parsed = createRegistrationInput.parse(input);
+      this.credentials.validate(parsed.authentication);
       parsed.url = this.policy.validate(parsed.url).href;
     } catch {
       throw new DashboardAuthError(400, "Invalid server configuration");

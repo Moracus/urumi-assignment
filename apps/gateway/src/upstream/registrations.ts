@@ -4,9 +4,9 @@ import { identityTransactionOptions } from "../identity/storage.js";
 import type { UpstreamConfig } from "./types.js";
 import type { DestinationPolicy } from "./destination-policy.js";
 
-const secretReference = z.strictObject({
+export const secretReference = z.strictObject({
   namespace: z.string().regex(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/).max(63),
-  name: z.string().regex(/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/).max(253),
+  name: z.string().regex(/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*$/).max(253),
   key: z.string().regex(/^[a-zA-Z0-9._-]+$/).max(253),
 });
 const authentication = z.discriminatedUnion("type", [
@@ -14,7 +14,7 @@ const authentication = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("bearer"), secretRef: secretReference }),
   z.strictObject({ type: z.literal("header"), secretRef: secretReference,
     headerName: z.string().regex(/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/).max(100)
-      .refine(value => !/^(authorization|proxy-authorization|host|cookie|connection|content-.*|transfer-encoding|upgrade|te|trailer|keep-alive)$/i.test(value)),
+      .refine(value => !/^(authorization|proxy-.*|host|cookie|set-cookie|connection|content-.*|transfer-encoding|upgrade|te|trailer|keep-alive|accept.*|origin|referer|user-agent|forwarded|x-forwarded-.*|x-real-ip|x-http-.*|sec-.*|mcp-.*|last-event-id)$/i.test(value)),
   }),
 ]);
 export const registrationInput = z.strictObject({
@@ -38,9 +38,9 @@ export type UpstreamRegistration = z.infer<typeof registrationInput>;
 
 // Public creation cannot set revisions, timestamps or submit credentials.
 export const createRegistrationInput = registrationInput.pick({
-  serverId: true, displayName: true, url: true, transport: true, enabled: true,
-}).extend({ authentication: z.strictObject({ type: z.literal("none") }) });
-export const editRegistrationInput = registrationInput.pick({ displayName: true, url: true })
+  serverId: true, displayName: true, url: true, transport: true, enabled: true, authentication: true,
+});
+export const editRegistrationInput = registrationInput.pick({ displayName: true, url: true, authentication: true })
   .partial().refine(value => Object.keys(value).length > 0);
 export type EditRegistrationInput = z.infer<typeof editRegistrationInput>;
 export type CreateRegistrationInput = z.infer<typeof createRegistrationInput>;
