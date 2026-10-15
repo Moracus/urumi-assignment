@@ -1,6 +1,6 @@
-# Dashboard sessions and member onboarding (#4–#7)
+# Dashboard sessions and user administration (#4–#10)
 
-Implemented endpoints are `POST /api/auth/login`, `GET /api/auth/me`, `POST /api/auth/logout`, and `POST /api/auth/change-password`. Administrator member creation, listing, and inspection are also implemented under `/api/admin/users` (see below). [Personal API-key management](api-keys.md) provides session-scoped `GET/POST /api/keys` and `DELETE /api/keys/:keyId`. These endpoints use MongoDB users established through [initial administrator setup](identity-setup.md) or administrator member creation. The React dashboard, administrator password resets, account lifecycle changes, administrator key management, operator recovery, dynamic upstream management, and durable audits remain later tickets. Normal MCP bearer authentication uses [persistent gateway API keys](mcp-authentication.md); dashboard sessions cannot authenticate MCP.
+Implemented endpoints are `POST /api/auth/login`, `GET /api/auth/me`, `POST /api/auth/logout`, and `POST /api/auth/change-password`. Administrator member creation, listing, and inspection are also implemented under `/api/admin/users` (see below). [Personal API-key management](api-keys.md) provides session-scoped `GET/POST /api/keys` and `DELETE /api/keys/:keyId`. These endpoints use MongoDB users established through [initial administrator setup](identity-setup.md) or administrator member creation. Administrator key management and [role changes](#promote-and-demote-administrators-10) are also implemented. The React dashboard, administrator password resets, account disabling, operator recovery, dynamic upstream management, and durable audits remain later tickets. Normal MCP bearer authentication uses [persistent gateway API keys](mcp-authentication.md); dashboard sessions cannot authenticate MCP.
 
 ## Configuration
 
@@ -98,7 +98,7 @@ Fresh login creates an independent 32-byte cryptographically random opaque crede
 
 Argon2 retains its two-job per-process bound. Unknown users incur dummy Argon2 verification to avoid an account-existence timing shortcut. Hashing overload and unexpected authentication/storage failures return safe `503 Authentication unavailable`, with no credential fallback. Storage operations use the existing bounded connection/operation/transaction deadlines. Database outage/recovery tests pause and resume only the disposable test database, verifying safe bounded failures, process liveness, and restoration of the same session.
 
-Session creation transactionally checks current status/password and increments the user's `credentialRevision`. Password replacement updates that same user and invalidates all its sessions in one transaction. Future disable/reset operations must do likewise, as required by the identity ADRs. Account lifecycle endpoints are outside this slice; merely flipping database status back and forth is not the credential-invalidation workflow. Database operator access remains privileged. A lost connection during commit can leave a persisted session even if the client receives 503; it expires after eight hours, and retrying login creates a separate session.
+Session creation transactionally checks current status/password and increments the user's `credentialRevision`. Password replacement updates that same user and invalidates all its sessions in one transaction. Future disable/reset operations must do likewise, as required by the identity ADRs. Account status endpoints are outside this slice; merely flipping database status back and forth is not the credential-invalidation workflow. Database operator access remains privileged. A lost connection during commit can leave a persisted session even if the client receives 503; it expires after eight hours, and retrying login creates a separate session.
 
 ## Helm and validation
 
@@ -152,4 +152,30 @@ curl --fail-with-body --silent --show-error \
 unset member_id
 ```
 
-Deliver the assigned password to the member through your chosen private channel. The member uses a separate cookie jar to log in with that password and obtains their own CSRF token. Until replacement, only `/api/auth/me`, `/api/auth/change-password`, and `/api/auth/logout` are permitted. Follow **Replace a password** above with the assigned password as `currentPassword` and a different final password as `newPassword`. Success invalidates all member sessions; log in again with the final password. The fresh account reports `requiredPasswordChange: false`, while administrator routes remain denied to the member. No invitation/email delivery, role promotion, account status mutation, or dashboard UI is included in this slice. MCP authentication with persistent keys is implemented; public `/api` Ingress remains later work. Bootstrap credentials do not authenticate MCP.
+Deliver the assigned password to the member through your chosen private channel. The member uses a separate cookie jar to log in with that password and obtains their own CSRF token. Until replacement, only `/api/auth/me`, `/api/auth/change-password`, and `/api/auth/logout` are permitted. Follow **Replace a password** above with the assigned password as `currentPassword` and a different final password as `newPassword`. Success invalidates all member sessions; log in again with the final password. The fresh account reports `requiredPasswordChange: false`, while administrator routes remain denied to the member. No invitation/email delivery, account status mutation, or dashboard UI is included; explicit role promotion is documented below. MCP authentication with persistent keys is implemented; public `/api` Ingress remains later work. Bootstrap credentials do not authenticate MCP.
+
+## Promote and demote administrators (#10)
+
+`PATCH /api/admin/users/:userId` accepts JSON containing exactly `role`, either `admin` or `member`. It requires an eligible administrator's live dashboard session, exact trusted Origin, and session-bound CSRF token. Creation still produces members; promotion is a separate explicit action. Every administrator has equal authority, including the ability to demote another administrator or themselves when another active administrator remains.
+
+Using the cookie jar, `me.json`, and member ID from the examples above:
+
+```bash
+member_id=$(jq -r '.user.id' "$session_dir/member.json")
+csrf_token=$(jq -r '.csrfToken' "$session_dir/me.json")
+curl --fail-with-body --silent --show-error \
+  -b "$session_dir/cookies" \
+  -H 'Origin: http://localhost:3000' -H "X-CSRF-Token: $csrf_token" \
+  -H 'Content-Type: application/json' \
+  -X PATCH --data '{"role":"admin"}' \
+  "http://localhost:3000/api/admin/users/$member_id"
+unset csrf_token member_id
+```
+
+Use `{"role":"member"}` to demote. Success returns `200 {"user": safe user object}` with the same safe fields as inspection and `Cache-Control: no-store`. Same-role requests succeed. Role changes preserve passwords, required-password-change state, sessions, API keys, and key IDs. Promoting a disabled or pending-password user does not grant ordinary access until their separate eligibility requirements are met.
+
+Missing/invalid sessions receive `401`; members, pending-password administrators, and Origin/CSRF failures receive `403`. Malformed IDs, missing/invalid roles, and unknown fields receive `400`; a valid missing user ID receives `404 User not found`. Only role changes are supported in this slice: status, email, password, and client identity fields are rejected. Non-JSON requests receive `415`; bodies over 4096 bytes receive `413`.
+
+Demoting the last active administrator returns `409 {"error":"At least one active administrator must remain"}` and rolls back the entire change. Active means `status: active`; disabled administrators do not count. A transaction writes the shared `account_coordination` singleton before changing roles and counting active administrators. Concurrent demotions across gateway instances therefore serialize through MongoDB conflict retries; with two active administrators, competing self-demotions yield one success and one conflict. Future disabling operations must use the same `withActiveAdministrator()` transaction and perform credential invalidation within it. Do not implement disabling as a direct status write.
+
+Existing dashboard sessions and connected MCP clients use the changed database role on their next request without restart or new keys. MCP discovery remains permission-filtered and direct calls independently enforce authorization through the existing execution path. Clients that cache tool catalogs should refresh discovery. Already admitted requests may complete. Storage errors remain safe `503 Authentication unavailable`; an uncertain commit can have succeeded despite a 503, so inspect current account state before retrying. Startup initializes the coordination collection automatically; no new configuration or manual database migration is required. Account disabling, password resets, dashboard UI, public API Ingress, and Kubernetes rollout remain later work.

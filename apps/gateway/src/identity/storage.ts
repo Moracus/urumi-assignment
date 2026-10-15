@@ -72,6 +72,11 @@ const setupSchema = new Schema({
   validationRevision: { type: Number, default: 0 },
 }, { strict: "throw", bufferCommands: false });
 
+const accountCoordinationSchema = new Schema({
+  _id: { type: String, required: true },
+  revision: { type: Number, required: true },
+}, { strict: "throw", bufferCommands: false });
+
 const dashboardSessionSchema = new Schema({
   userId: { type: Schema.Types.ObjectId, required: true },
   credentialHash: { type: String, required: true },
@@ -106,24 +111,30 @@ export async function connectIdentityStorage(uri = process.env.MONGODB_URI) {
     const sessions = connection.model("DashboardSession", dashboardSessionSchema, "dashboard_sessions");
     const loginThrottles = connection.model("LoginThrottle", loginThrottleSchema, "login_throttles");
     const apiKeys = connection.model("ApiKey", apiKeySchema, "api_keys");
+    const accountCoordination = connection.model("AccountCoordination", accountCoordinationSchema, "account_coordination");
     stage = "collections";
     await users.createCollection();
     await setup.createCollection();
     await sessions.createCollection();
     await loginThrottles.createCollection();
     await apiKeys.createCollection();
+    await accountCoordination.createCollection();
     stage = "indexes";
     await users.createIndexes();
     await setup.createIndexes();
     await sessions.createIndexes();
     await loginThrottles.createIndexes();
     await apiKeys.createIndexes();
+    await accountCoordination.createIndexes();
     const indexes = await users.collection.indexes();
     if (!indexes.some((index) => index.name === "unique_normalized_email"
       && index.unique && index.key.email === 1 && !index.sparse && !index.partialFilterExpression)) {
       throw new IdentityStorageError("indexes");
     }
     stage = "transactions";
+    await accountCoordination.updateOne({ _id: "active-administrators" }, {
+      $setOnInsert: { revision: 0 },
+    }, { upsert: true });
     await setup.updateOne({ _id: "initial-administrator" }, {
       $setOnInsert: { consumedAt: null, validationRevision: 0 },
     }, { upsert: true });
@@ -135,7 +146,7 @@ export async function connectIdentityStorage(uri = process.env.MONGODB_URI) {
     }, identityTransactionOptions);
 
     return {
-      connection, users, setup, sessions, loginThrottles, apiKeys,
+      connection, users, setup, sessions, loginThrottles, apiKeys, accountCoordination,
       async isAvailable(): Promise<boolean> {
         try {
           if (connection.readyState !== 1 || !connection.db) return false;

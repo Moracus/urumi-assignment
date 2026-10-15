@@ -236,6 +236,15 @@ test("fresh roles filter discovery and calls, last-use advances on denied tools,
   const records: AuditRecord[] = [];
   const f = await fixture(t, { upstreams: [woocommerce.config, calculator.config, time.config],
     auditLogger: { async write(record) { records.push(record); } } });
+  const otherUser = await f.db.collection("users").insertOne({ email: "admin@example.com", role: "admin", status: "active",
+    requiredPasswordChange: false, passwordHash: await hashPassword(password), createdAt: new Date(), updatedAt: new Date() });
+  const login = await f.app.inject({ method: "POST", url: "/api/auth/login", headers: { origin }, payload: { email: "admin@example.com", password } });
+  assert.equal(login.statusCode, 200);
+  const adminHeaders = { cookie: String(login.headers["set-cookie"]).split(";")[0], origin, "x-csrf-token": login.json().csrfToken };
+  async function changeRole(role: "admin" | "member") {
+    const response = await f.app.inject({ method: "PATCH", url: `/api/admin/users/${f.userId}`, headers: adminHeaders, payload: { role } });
+    assert.equal(response.statusCode, 200, response.body);
+  }
   const client = await f.connect();
   const memberTools = ["calculator.calculate", "time.current", "woocommerce.get_order", "woocommerce.list_orders", "woocommerce.list_products"];
   assert.deepEqual((await client.listTools(undefined, { cacheMode: "bypass" })).tools.map((tool) => tool.name).sort(), memberTools);
@@ -253,7 +262,7 @@ test("fresh roles filter discovery and calls, last-use advances on denied tools,
   await denied("woocommerce.create_product");
   const usedAfter = (await f.app.inject({ url: "/api/keys", headers: f.headers })).json().keys[0].lastUsedAt;
   assert.ok(Date.parse(usedAfter) > Date.parse(usedBefore));
-  await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
+  await changeRole("admin");
   const adminTools = [...memberTools, "woocommerce.create_product", "woocommerce.update_order_status"].sort();
   assert.deepEqual((await client.listTools(undefined, { cacheMode: "bypass" })).tools.map((tool) => tool.name).sort(), adminTools);
   const result = await client.callTool({ name: "woocommerce.create_product" });
@@ -261,15 +270,12 @@ test("fresh roles filter discovery and calls, last-use advances on denied tools,
   assert.equal(writes, 1);
   assert.equal(records[0].userId, f.userId);
   assert.equal(records[0].keyId, f.key.id);
-  await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "member" } });
+  await changeRole("member");
   assert.deepEqual((await client.listTools(undefined, { cacheMode: "bypass" })).tools.map((tool) => tool.name).sort(), memberTools);
   await denied("woocommerce.update_order_status");
   assert.equal(writes, 1);
-  const otherUser = await f.db.collection("users").insertOne({ email: "admin@example.com", role: "admin", status: "active",
-    requiredPasswordChange: false, passwordHash: await hashPassword(password), createdAt: new Date(), updatedAt: new Date() });
-  const login = await f.app.inject({ method: "POST", url: "/api/auth/login", headers: { origin }, payload: { email: "admin@example.com", password } });
   const issued = await f.app.inject({ method: "POST", url: "/api/keys", payload: {},
-    headers: { cookie: String(login.headers["set-cookie"]).split(";")[0], origin, "x-csrf-token": login.json().csrfToken } });
+    headers: adminHeaders });
   assert.equal(issued.statusCode, 201);
   const admin = await f.connect(issued.json().rawKey);
   const offset = records.length;
