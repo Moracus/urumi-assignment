@@ -129,7 +129,7 @@ Read/write WooCommerce credentials are supplied only to the adapter through its 
 
 ## Network boundaries
 
-The chart contains six ingress-only NetworkPolicies, enabled by default:
+The chart preserves six ingress NetworkPolicies, enabled by default, and adds a gateway egress policy:
 
 | Destination | Allowed source | TCP port |
 | --- | --- | --- |
@@ -140,13 +140,13 @@ The chart contains six ingress-only NetworkPolicies, enabled by default:
 | WordPress | Controller-namespace Pods **or** same-namespace WooCommerce MCP Pods | 80 |
 | MariaDB | Same-namespace WordPress Pods | 3306 |
 
-Ports for the gateway and MCP services are configurable in values. All selected workloads remain unrestricted for egress under these policies. This is not a cluster-wide default-deny configuration for arbitrary Pods.
+Ports for the gateway and MCP services are configurable in values. Gateway egress permits narrow DNS and enabled bundled MCP destinations, plus explicit operator MongoDB/API/additional approvals. Other workloads retain unrestricted egress. Empty MongoDB/API approvals fail closed; site overlays are required. API IP approvals also become application upstream hard denials. See [policy, CNI limits and verification](gateway-egress.md). This is not a cluster-wide default-deny configuration for arbitrary Pods.
 
 Controller access is selected by namespace name rather than controller Pod labels. Workload access is selected by Pod labels rather than authenticated service identity. Anyone able to create suitably labeled Pods in the application namespace may satisfy those selectors; namespace access and Kubernetes RBAC therefore remain separate requirements. Other matching allow policies can also broaden access.
 
 NetworkPolicy enforcement depends on the cluster network plugin. ClusterIP does not imply isolation, and the supplied Kind YAML does not install an enforcing plugin. Administrative port-forwarding does not demonstrate or enforce these ordinary Pod-network boundaries.
 
-Upstream MCP endpoints contain no bearer-authentication boundary of their own. Their intended protection is internal exposure plus enforced policies. Internal traffic uses HTTP by default, and the Ingress templates have no TLS configuration. TLS termination and egress restrictions are not current chart capabilities. The gateway can authenticate additional upstreams through approved Secret references, as described in #22 below; the bundled upstream servers remain unchanged.
+Upstream MCP endpoints contain no bearer-authentication boundary of their own. Their intended protection is internal exposure plus enforced policies. Internal traffic uses HTTP by default, and the Ingress templates have no TLS configuration. TLS termination is not a current chart capability. Gateway egress restrictions require site configuration and an enforcing CNI. The gateway can authenticate additional upstreams through approved Secret references, as described in #22 below; the bundled upstream servers remain unchanged.
 
 ## Deployment and persistence
 
@@ -180,7 +180,7 @@ These records cover calls that enter the execution boundary. Failed HTTP authent
 
 The repository includes unit tests for execution authorization/audit and aggregation/resolution, plus runnable registry, aggregation, routing, WooCommerce REST, and interactive failure-isolation scripts. Internal routing scripts construct identities directly and do not test public HTTP authentication. The README separates those checks from MCP-client and cluster-policy validation.
 
-The current architecture provides a functional execution and routing boundary, but is not a complete multi-user management platform. [Personal key management](api-keys.md) persists SHA-256 key digests and safe owner-scoped metadata, with one-time disclosure and idempotent revocation. Issuance transactionally checks eligibility and enforces the 20-active-key limit across gateway instances. Its HTTP routes use dashboard sessions and Origin/CSRF protection. Durable audit storage, dashboard features, chat orchestration, TLS deployment, broader request rate limiting, egress controls, backups, and high availability are absent. Additions should update this document when their source and deployment behavior exist.
+The current architecture provides a functional execution and routing boundary, but is not a complete multi-user management platform. [Personal key management](api-keys.md) persists SHA-256 key digests and safe owner-scoped metadata, with one-time disclosure and idempotent revocation. Issuance transactionally checks eligibility and enforces the 20-active-key limit across gateway instances. Its HTTP routes use dashboard sessions and Origin/CSRF protection. Durable audit storage, dashboard features, chat orchestration, TLS deployment, broader request rate limiting, backups and high availability are absent; gateway egress controls require operator configuration and live verification. Additions should update this document when their source and deployment behavior exist.
 
 ## Member account administration (#6)
 

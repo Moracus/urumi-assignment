@@ -1,0 +1,55 @@
+{{- if and .Values.networkPolicy.enabled .Values.gateway.enabled }}
+{{- $egress := .Values.networkPolicy.gatewayEgress }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: urumi-gateway-egress
+spec:
+  podSelector:
+    matchLabels:
+      app: urumi-gateway
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $egress.dns.namespace | quote }}
+          podSelector:
+            matchLabels: {{ toJson $egress.dns.podLabels }}
+        {{- range $egress.dns.serviceCidrs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
+        {{- end }}
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    {{- range $name, $upstream := dict "woocommerce-mcp" .Values.woocommerceMcp "calculator-mcp" .Values.calculatorMcp "time-mcp" .Values.timeMcp }}
+    {{- if $upstream.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app: urumi-{{ $name }}
+      ports:
+        - protocol: TCP
+          port: {{ $upstream.port }}
+    {{- end }}
+    {{- end }}
+    {{- range concat $egress.mongodb $egress.kubernetesApi $egress.additionalDestinations }}
+    - to:
+        {{- if hasKey . "cidr" }}
+        - ipBlock:
+            cidr: {{ .cidr | quote }}
+        {{- else }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .namespace | quote }}
+          podSelector:
+            matchLabels: {{ toJson .podLabels }}
+        {{- end }}
+      ports:
+        {{- range .ports }}
+        - protocol: TCP
+          port: {{ . }}
+        {{- end }}
+    {{- end }}
+{{- end }}

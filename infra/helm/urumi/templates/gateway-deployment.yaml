@@ -71,7 +71,11 @@ spec:
               value: {{ toJson .Values.gateway.destinationPolicy.rules | quote }}
 
             - name: UPSTREAM_DENIED_CIDRS
-              value: {{ toJson .Values.gateway.destinationPolicy.deniedCidrs | quote }}
+              {{- $apiCidrs := list }}
+              {{- range .Values.networkPolicy.gatewayEgress.kubernetesApi }}
+              {{- $apiCidrs = append $apiCidrs .cidr }}
+              {{- end }}
+              value: {{ toJson (concat .Values.gateway.destinationPolicy.deniedCidrs $apiCidrs | uniq) | quote }}
 
             - name: UPSTREAM_ALLOW_LOOPBACK
               value: {{ .Values.gateway.destinationPolicy.allowLoopback | quote }}

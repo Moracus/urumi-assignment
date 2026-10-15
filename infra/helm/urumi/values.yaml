@@ -177,5 +177,20 @@ networkPolicy:
   enabled: true
 
   ingressNamespace: traefik
+
+  # Gateway egress is isolated whenever networkPolicy.enabled is true.
+  gatewayEgress:
+    dns:
+      namespace: kube-system
+      podLabels:
+        k8s-app: kube-dns
+      # Exact resolver IPs for CNIs matching pre-DNAT or NodeLocal DNS.
+      serviceCidrs: []
+    # Fail closed until operators supply every replica-set destination.
+    mongodb: []
+    # Exact API Service/backend IPs; no cluster-wide or node subnet allowance.
+    kubernetesApi: []
+    # Independent of gateway.destinationPolicy; both approvals are required.
+    additionalDestinations: []
   
 # Never put raw credentials in values files.

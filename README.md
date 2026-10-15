@@ -1,6 +1,6 @@
 # Urumi MCP Gateway
 
-A TypeScript MCP gateway that exposes WooCommerce, calculator, and time tools through one authenticated Streamable HTTP endpoint. Kubernetes workloads are packaged in a Helm chart, with WordPress and MariaDB persistence, gateway and storefront Ingress resources, and ingress NetworkPolicies.
+A TypeScript MCP gateway that exposes WooCommerce, calculator, and time tools through one authenticated Streamable HTTP endpoint. Kubernetes workloads are packaged in a Helm chart, with WordPress and MariaDB persistence, gateway and storefront Ingress resources, and ingress plus gateway egress NetworkPolicies.
 
 Repository: [Moracus/urumi-assignment](https://github.com/Moracus/urumi-assignment).
 
@@ -127,7 +127,7 @@ Use an MCP-capable client with Streamable HTTP and the header `Authorization: Be
 
 ## Deploy to local Kubernetes
 
-The chart now also requires a transaction-capable MongoDB replica set and a URI Secret; it does not provision them. Supply `gateway.mongodbSecretName` (default `urumi-identity-storage`) with key `uri` before enabling the gateway. The existing cluster alone is insufficient for this image. See [deployment limitations](docs/identity-setup.md#kubernetes-limitation).
+The chart now also requires a transaction-capable MongoDB replica set and a URI Secret; it does not provision them. Supply `gateway.mongodbSecretName` (default `urumi-identity-storage`) with key `uri` before enabling the gateway. The existing cluster alone is insufficient for this image. Before rollout, supply a reviewed [gateway egress site overlay](docs/gateway-egress.md) permitting DNS, every MongoDB member and required Kubernetes API addresses; include that overlay in Helm commands below. See [deployment limitations](docs/identity-setup.md#kubernetes-limitation).
 
 Commands below use namespace `urumi` and release name `urumi`. Resource names and default DNS/allowed-host settings are fixed around those names; alternate namespaces or multiple releases need additional configuration or template changes.
 
@@ -286,7 +286,7 @@ Verify network isolation using ordinary test Pods: unrelated Pods should be deni
 - MCP uses individually revocable hashed API keys with per-request eligibility/role lookup. Users, one-time CLI setup, independent eight-hour dashboard sessions, shared login throttling, and key metadata are persisted. Administrator key management is available through session-protected APIs; role changes preserve an active administrator; account disabling permanently invalidates sessions and keys. [Operator recovery](docs/identity-setup.md#operator-recovery-13) restores an existing administrator through a separate database-authorized CLI and permanently invalidates their credentials.
 - [Desired upstream registrations](docs/upstream-registrations.md) persist in MongoDB with transactional one-time default migration, administrator inspection APIs, live unauthenticated registration, and durable disable/enable/remove controls. Connections and discovery remain in memory; authenticated upstreams resolve approved pre-provisioned Kubernetes Secret references in backend memory. See [credential configuration and rotation](docs/upstream-credentials.md). Administrators can manually refresh enabled servers and recover connections through the [refresh API](docs/upstream-registrations.md#refresh-tools-and-recover-connections-21). Run one gateway replica.
 - Audits are console records, with no durable audit database, queue, query API, or dashboard. Authentication failures and SDK-level validation failures do not necessarily reach the execution audit boundary.
-- NetworkPolicies cover ingress only. They do not restrict egress and require an enforcing network plugin. Controller namespace and workload-label selectors are broader than cryptographic service identity.
+- NetworkPolicies preserve workload ingress isolation and restrict gateway egress. Supply explicit MongoDB/API site approvals and an enforcing CNI; defaults fail closed for those destinations. See [egress configuration and live verification](docs/gateway-egress.md). Controller namespace and workload-label selectors require trusted namespace administration.
 - Upstream bearer/custom-header authentication uses approved Kubernetes Secret references; mutual TLS is not implemented. Cluster networking and destination policy still apply.
 - No TLS block in the Ingress templates, broader request rate limiting beyond dashboard login, or automatic retry of failed tool calls. Failed writes can have uncertain outcomes and need inspection before retrying.
 - Single-replica workloads; database and WordPress persistence use PVCs with `Recreate` Deployments. Backups, high availability, restore automation, and production hardening are not supplied.
