@@ -2,7 +2,7 @@
 
 Eligible members and administrators can issue, list, and revoke their own keys using a dashboard session. All operations derive ownership from the authenticated session; bearer credentials cannot authenticate these endpoints. Disabled users receive `401 Unauthorized`; users awaiting password replacement receive `403 Password change required`. Complete [password replacement and fresh login](dashboard-sessions.md#replace-a-password) first when required.
 
-Keys now authenticate external clients at `/mcp` with current eligibility and roles checked on every request; successful authentication advances `lastUsedAt`. See [read-only MCP requests and revocation](mcp-authentication.md). Administrators can also manage other users' keys through the endpoints below. Account lifecycle changes and the React dashboard belong to later tickets. The chart exposes only `/mcp`; use direct local access for `/api` until the public API rollout is implemented.
+Keys now authenticate external clients at `/mcp` with current eligibility and roles checked on every request; successful authentication advances `lastUsedAt`. See [read-only MCP requests and revocation](mcp-authentication.md). Administrators can also manage other users' keys through the endpoints below. [Account disabling](dashboard-sessions.md#disable-and-re-enable-users-11) permanently revokes existing keys; re-enabling requires new keys. The React dashboard belongs to a later ticket. The chart exposes only `/mcp`; use direct local access for `/api` until the public API rollout is implemented.
 
 | Endpoint | Request | Successful response |
 | --- | --- | --- |

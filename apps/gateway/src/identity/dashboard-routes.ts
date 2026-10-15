@@ -10,7 +10,7 @@ import { createMember } from "./member-accounts.js";
 import { safeUser } from "./safe-user.js";
 import { registerApiKeyRoutes } from "./api-key-routes.js";
 import { paginationInput } from "./pagination.js";
-import { changeUserRole } from "./user-roles.js";
+import { changeUserAccess } from "./user-roles.js";
 
 const cookieName = "urumi_dashboard";
 const passwordInput = z.string().refine((value) => {
@@ -139,9 +139,12 @@ export async function registerDashboardRoutes(app: FastifyInstance, storage: Ide
       admin.patch("/api/admin/users/:userId", { bodyLimit: 4096 }, async (request) => {
         if (!/^application\/json(?:\s*;.*)?$/i.test(request.headers["content-type"] ?? "")) throw new DashboardAuthError(415, "Invalid request");
         const params = z.strictObject({ userId: z.string().regex(/^[a-fA-F0-9]{24}$/) }).safeParse(request.params);
-        const body = z.strictObject({ role: z.enum(["admin", "member"]) }).safeParse(request.body);
+        const body = z.strictObject({
+          role: z.enum(["admin", "member"]).optional(),
+          status: z.enum(["active", "disabled"]).optional(),
+        }).refine((value) => value.role !== undefined || value.status !== undefined).safeParse(request.body);
         if (!params.success || !body.success) throw new DashboardAuthError(400, "Invalid request");
-        return { user: await changeUserRole(storage, params.data.userId, body.data.role) };
+        return { user: await changeUserAccess(storage, params.data.userId, body.data) };
       });
       admin.get("/api/admin/users", async (request) => {
         const parsed = paginationInput.safeParse(request.query);

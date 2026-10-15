@@ -2,7 +2,7 @@ import type { ClientSession } from "mongoose";
 import { identityTransactionOptions, type IdentityStorage } from "./storage.js";
 import { DashboardAuthError } from "./dashboard-sessions.js";
 
-// Every role change and future disable operation must use this transaction.
+// Every role/status change must use this transaction.
 // The shared write precedes reads so concurrent changes retry with a fresh
 // snapshot, avoiding write skew when they affect different administrators.
 export async function withActiveAdministrator<T>(

@@ -163,6 +163,7 @@ test("database outage fails readiness and MCP safely while liveness stays health
     { url: "/api/auth/me", headers: { cookie } },
     { method: "POST" as const, url: "/api/auth/logout", headers: { cookie, origin: "http://localhost:3000", "x-csrf-token": login.json().csrfToken } },
     { method: "POST" as const, url: "/api/auth/login", headers: { origin: "http://localhost:3000" }, payload: { email: "outage@example.com", password: "outage test password" } },
+    { method: "PATCH" as const, url: "/api/admin/users/000000000000000000000000", headers: keyHeaders, payload: { status: "disabled" } },
     { url: "/api/keys", headers: keyHeaders },
     { method: "POST" as const, url: "/api/keys", headers: keyHeaders, payload: {} },
     { method: "DELETE" as const, url: `/api/keys/${keyId}`, headers: keyHeaders },
