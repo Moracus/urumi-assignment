@@ -1,4 +1,5 @@
 export interface AggregatedTool {
+  generation?: number;
   name: string;
 
   description?: string;

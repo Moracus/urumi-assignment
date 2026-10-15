@@ -12,6 +12,9 @@ import type { DiscoveredTool, UpstreamConfig, UpstreamState } from "./types.js";
 export class UpstreamRegistry {
   constructor(private readonly policy = new DestinationPolicy(), private readonly network?: DestinationNetwork) {}
 
+  private closed = false;
+  private nextGeneration = 0;
+
   private upstreams = new Map<string, UpstreamState>();
 
   private connections = new Map<string, UpstreamConnection>();
@@ -24,6 +27,7 @@ export class UpstreamRegistry {
   private refreshRunning = false;
 
   register(config: UpstreamConfig): void {
+    if (this.closed) throw new Error("Registry closed");
     if (this.upstreams.has(config.name)) {
       throw new Error(`Upstream already registered: ${config.name}`);
     }
@@ -37,6 +41,7 @@ export class UpstreamRegistry {
 
     this.upstreams.set(config.name, {
       config: { ...config },
+      generation: ++this.nextGeneration,
 
       status: config.enabled ? "disconnected" : "disabled",
 
@@ -52,9 +57,10 @@ export class UpstreamRegistry {
     name: string,
     operation: () => Promise<void>,
   ): Promise<void> {
+    if (this.closed) return;
     const previous = this.maintenance.get(name) ?? Promise.resolve();
 
-    const current = previous.catch(() => {}).then(operation);
+    const current = previous.catch(() => {}).then(() => this.closed ? undefined : operation());
 
     this.maintenance.set(name, current);
 
@@ -99,9 +105,13 @@ export class UpstreamRegistry {
       return;
     }
 
+    const generation = state.generation = ++this.nextGeneration;
+    const current = () => !this.closed && this.upstreams.get(name) === state && state.generation === generation;
+
     // Replace the previous connection when reconnecting.
     await this.closeConnection(name);
 
+    if (!current()) return;
     state.status = "connecting";
     state.lastError = null;
 
@@ -126,6 +136,12 @@ export class UpstreamRegistry {
         inputSchema: tool.inputSchema,
       }));
 
+      if (!current()) {
+        await disconnectFromUpstream(connection).catch(() => {});
+        return;
+      }
+      this.validateTools(tools);
+
       // Replace cached definitions atomically after success.
       state.tools = tools;
 
@@ -139,6 +155,10 @@ export class UpstreamRegistry {
 
       console.info(`[Registry] ${name}: discovered ${tools.length} tools`);
     } catch {
+      if (!current()) {
+        if (connection) await disconnectFromUpstream(connection).catch(() => {});
+        return;
+      }
       state.status = "unreachable";
       state.lastError = "Connection or tool discovery failed";
 
@@ -150,6 +170,12 @@ export class UpstreamRegistry {
       state.client = null;
 
       console.error(`[Registry] ${name}: unavailable`);
+    }
+  }
+
+  private validateTools(tools: DiscoveredTool[]): void {
+    if (new Set(tools.map(tool => tool.name)).size !== tools.length) {
+      throw new Error("Duplicate upstream tool names");
     }
   }
 
@@ -165,20 +191,28 @@ export class UpstreamRegistry {
       return;
     }
 
+    const generation = state.generation;
+    const client = state.client;
+    const current = () => !this.closed && this.upstreams.get(name) === state && state.generation === generation && state.client === client;
     try {
-      const result = await state.client.listTools(undefined, {
+      const result = await client.listTools(undefined, {
         timeout: 5_000,
       });
 
-      state.tools = result.tools.map((tool) => ({
+      const tools = result.tools.map((tool) => ({
         name: tool.name,
         description: tool.description,
         inputSchema: tool.inputSchema,
       }));
 
+      if (!current()) return;
+      this.validateTools(tools);
+      state.tools = tools;
+      state.generation = ++this.nextGeneration;
       state.lastDiscoveredAt = new Date();
       state.lastError = null;
     } catch {
+      if (!current()) return;
       state.status = "unreachable";
       state.lastError = "Tool discovery failed";
 
@@ -206,6 +240,7 @@ export class UpstreamRegistry {
     name: string,
     reason = "Upstream request failed",
     failedClient?: Client,
+    failedGeneration?: number,
   ): Promise<void> {
     await this.runMaintenance(name, async () => {
       const state = this.upstreams.get(name);
@@ -214,6 +249,7 @@ export class UpstreamRegistry {
         return;
       }
 
+      if (failedGeneration !== undefined && state.generation !== failedGeneration) return;
       if (failedClient && state.client !== failedClient) {
         return;
       }
@@ -280,11 +316,14 @@ export class UpstreamRegistry {
   }
 
   async close(): Promise<void> {
+    this.closed = true;
     if (this.refreshTimer) {
       clearInterval(this.refreshTimer);
       this.refreshTimer = null;
     }
 
+    // Let bounded maintenance discard late results before releasing transports.
+    await Promise.allSettled([...this.maintenance.values()]);
     await Promise.allSettled(
       [...this.connections.keys()].map((name) => this.closeConnection(name)),
     );

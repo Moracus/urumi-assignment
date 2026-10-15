@@ -758,3 +758,256 @@ test("completed migration ignores obsolete unapproved defaults on restart", asyn
   t.after(() => restarted.close());
   assert.equal((await restarted.inject({ url: "/health/ready" })).statusCode, 200);
 });
+
+test("administrator registers a durable upstream visible to an already connected MCP client", async (t) => {
+  const calculator = await calculatorUpstream(t);
+  const extra = await controlledUpstream(t, "extra", server => {
+    server.registerTool("echo", { description: "Echo a value", inputSchema: z.object({ value: z.number().int() }) }, async ({ value }) => ({
+      content: [{ type: "text", text: String(value) }], structuredContent: { value }, isError: value < 0,
+    }));
+  });
+  const records: AuditRecord[] = [];
+  const f = await fixture(t, { upstreams: [calculator.config], auditLogger: { async write(record) { records.push(record); } },
+    destinations: { allowLoopback: true, rules: [calculator.config, extra.config].map(config => ({
+      origin: new URL(config.url).origin, cidrs: ["127.0.0.1/32"],
+    })) } });
+  await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
+  const client = await f.connect();
+  assert.deepEqual((await client.listTools(undefined, { cacheMode: "bypass" })).tools.map(tool => tool.name), ["calculator.calculate"]);
+  const response = await f.app.inject({ method: "POST", url: "/api/admin/servers", headers: f.headers, payload: {
+    serverId: "extra", displayName: "Extra tools", url: extra.config.url, transport: "streamable-http", enabled: true, authentication: { type: "none" },
+  } });
+  assert.equal(response.statusCode, 201, response.body);
+  const created = response.json().server;
+  assert.equal(created.status, "connected");
+  assert.equal(created.toolCount, 1);
+  assert.equal(created.configurationRevision, 1);
+  assert.equal(created.url, extra.config.url);
+  assert.equal((await f.app.inject({ url: "/api/admin/servers", headers: f.headers })).json().servers.length, 2);
+  assert.deepEqual((await f.app.inject({ url: "/api/admin/servers/extra", headers: f.headers })).json().server, created);
+  const tools = (await client.listTools(undefined, { cacheMode: "bypass" })).tools;
+  assert.deepEqual(tools.map(tool => tool.name), ["calculator.calculate", "extra.echo"]);
+  const schema = tools[1].inputSchema;
+  assert.equal(tools[1].description, "Echo a value");
+  assert.deepEqual(schema.required, ["value"]);
+  assert.deepEqual((await f.app.inject({ url: "/api/admin/servers/extra/tools", headers: f.headers })).json().tools, [tools[1]]);
+  assert.deepEqual((await client.callTool({ name: "extra.echo", arguments: { value: 42 } })).structuredContent, { value: 42 });
+  assert.equal((await client.callTool({ name: "extra.echo", arguments: { value: -1 } })).isError, true);
+  assert.equal(records.at(-1)?.outcome, "tool_error");
+  assert.equal(records.at(-1)?.userId, f.userId);
+  assert.equal(records.at(-1)?.keyId, f.key.id);
+  assert.equal(records.at(-1)?.upstreamName, "extra");
+  await f.app.close();
+  const restarted = await createGatewayApp({ mongodbUri: f.mongodbUri, upstreams: [], destinations: { allowLoopback: true,
+    rules: [calculator.config, extra.config].map(config => ({ origin: new URL(config.url).origin, cidrs: ["127.0.0.1/32"] })) } });
+  t.after(() => restarted.close());
+  const restored = (await restarted.inject({ url: "/api/admin/servers/extra", headers: f.headers })).json().server;
+  assert.equal(restored.status, "connected");
+  assert.equal(restored.createdAt, created.createdAt);
+  assert.deepEqual((await restarted.inject({ url: "/api/admin/servers/extra/tools", headers: f.headers })).json().tools, [tools[1]]);
+});
+
+test("registration validates strict input and concurrent canonical duplicates before outbound access", async (t) => {
+  const calculator = await calculatorUpstream(t);
+  const extra = await calculatorUpstream(t);
+  const f = await fixture(t, { upstreams: [calculator.config], destinations: { allowLoopback: true,
+    rules: [calculator.config, extra.config].map(config => ({ origin: new URL(config.url).origin, cidrs: ["127.0.0.1/32"] })) } });
+  await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
+  const payload = { serverId: "extra", displayName: " Extra ", url: extra.config.url, transport: "streamable-http", enabled: true, authentication: { type: "none" } };
+  for (const invalid of [
+    { serverId: "bad.name" }, { serverId: "UPPER" }, { displayName: " " }, { enabled: "true" },
+    { transport: "sse" }, { configurationRevision: 5 }, { createdAt: new Date().toISOString() },
+    { url: "http://169.254.169.254/mcp" }, { url: "file:///mcp" }, { url: `${extra.config.url}#secret` },
+    { url: extra.config.url.replace("http://", "http://user:synthetic-secret@") },
+    { authentication: { type: "bearer", secretRef: { namespace: "urumi", name: "token", key: "token" } } },
+    { authentication: { type: "none", token: "synthetic-secret" } }, { headers: { authorization: "synthetic-secret" } },
+  ]) {
+    const response = await f.app.inject({ method: "POST", url: "/api/admin/servers", headers: f.headers, payload: { ...payload, ...invalid } });
+    assert.equal(response.statusCode, 400, response.body);
+    assert.ok(!response.body.includes("synthetic-secret"));
+  }
+  assert.equal((await f.app.inject({ url: "/api/admin/servers", headers: f.headers })).json().servers.length, 1);
+  const create = (value: object) => f.app.inject({ method: "POST", url: "/api/admin/servers", headers: f.headers, payload: value });
+  const byId = await Promise.all([create(payload), create({ ...payload, url: `${extra.config.url}?different=1` })]);
+  assert.deepEqual(byId.map(response => response.statusCode).sort(), [201, 409]);
+  const winner = byId.find(response => response.statusCode === 201)!.json().server;
+  const byUrl = await Promise.all([create({ ...payload, serverId: "alias", url: winner.url.replace("/mcp", "/unused/../mcp") }),
+    create({ ...payload, serverId: "alias2", url: winner.url })]);
+  assert.deepEqual(byUrl.map(response => response.statusCode), [409, 409]);
+  // URL's standard canonical form folds host case, default ports, and path dot segments.
+  const canonical = await create({ ...payload, serverId: "canonical", enabled: false, url: "http://URUMI-TIME-MCP:3003/path/../mcp" });
+  assert.equal(canonical.statusCode, 201, canonical.body);
+  assert.equal(canonical.json().server.url, "http://urumi-time-mcp:3003/mcp");
+  assert.equal((await create({ ...payload, serverId: "canonical2", url: "http://urumi-time-mcp:3003/mcp" })).statusCode, 409);
+});
+
+test("registration enforces dashboard session eligibility, role, trusted Origin and CSRF independently of MCP keys", async (t) => {
+  const f = await fixture(t);
+  const payload = { serverId: "time", displayName: "Time", url: "http://urumi-time-mcp:3003/mcp", transport: "streamable-http", enabled: false, authentication: { type: "none" } };
+  const create = (headers: Record<string, string>) => f.app.inject({ method: "POST", url: "/api/admin/servers", headers, payload });
+  assert.equal((await create({})).statusCode, 401);
+  assert.equal((await create({ authorization: `Bearer ${f.rawKey}`, origin })).statusCode, 401);
+  assert.equal((await create(f.headers)).statusCode, 403);
+  await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
+  for (const headers of [
+    { ...f.headers, origin: "" }, { ...f.headers, origin: "http://evil.test" },
+    { ...f.headers, "x-csrf-token": "" }, { ...f.headers, "x-csrf-token": "a".repeat(64) },
+  ]) assert.equal((await create(headers)).statusCode, 403);
+  for (const status of [{ requiredPasswordChange: true }, { requiredPasswordChange: false, status: "disabled" }]) {
+    await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: status });
+    assert.equal((await create(f.headers)).statusCode, status.requiredPasswordChange ? 403 : 401);
+  }
+  assert.equal(await f.db.collection("upstream_registrations").countDocuments(), 0);
+});
+
+test("offline creation is durable, leaves unrelated requests responsive and recovers on the same MCP client", async (t) => {
+  const calculator = await calculatorUpstream(t);
+  let calls = 0;
+  const extra = await controlledUpstream(t, "extra", server => {
+    server.registerTool("calculate", { description: "Recovered tool", inputSchema: z.object({ a: z.number(), b: z.number() }) }, async () => {
+      calls++;
+      return { content: [{ type: "text", text: "recovered" }] };
+    });
+  });
+  let release!: () => void;
+  let entered!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const blocked = new Promise<void>(resolve => { release = resolve; });
+  t.after(() => release());
+  let online = false;
+  const { buildConnector } = await import("undici");
+  const dial = buildConnector({ timeout: 1000 });
+  const endpoint = new URL(extra.config.url);
+  const records: AuditRecord[] = [];
+  const f = await fixture(t, { upstreams: [calculator.config], auditLogger: { async write(record) { records.push(record); } },
+    destinations: { allowLoopback: true, rules: [{ origin: new URL(calculator.config.url).origin, cidrs: ["127.0.0.1/32"] },
+      { origin: "http://tools.example.test", cidrs: ["203.0.113.10/32"] }] },
+    upstreamNetwork: {
+      async lookup() {
+        entered();
+        if (!online) { await blocked; throw new Error("synthetic-secret offline diagnostic"); }
+        return [{ address: "203.0.113.10", family: 4 }];
+      },
+      dial(options, callback) {
+        dial(options.hostname === "203.0.113.10" ? { ...options, hostname: endpoint.hostname, port: endpoint.port } : options, callback);
+      },
+    },
+  });
+  await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
+  const client = await f.connect();
+  const create = f.app.inject({ method: "POST", url: "/api/admin/servers", headers: f.headers, payload: {
+    serverId: "extra", displayName: "Offline tools", url: "http://tools.example.test/mcp", transport: "streamable-http", enabled: true, authentication: { type: "none" },
+  } });
+  // Start the injection before waiting for its controlled external I/O barrier.
+  const pending = create.then(response => response);
+  await started;
+  const observed = (await f.app.inject({ url: "/api/admin/servers/extra", headers: f.headers })).json().server;
+  assert.equal(observed.status, "connecting");
+  assert.equal(observed.toolCount, 0);
+  assert.equal((await f.app.inject({ url: "/api/auth/me", headers: f.headers })).statusCode, 200);
+  assert.deepEqual((await client.callTool({ name: "calculator.calculate", arguments: { a: 6, b: 7 } })).content, [{ type: "text", text: "42" }]);
+  release();
+  const response = await pending;
+  assert.equal(response.statusCode, 201, response.body);
+  assert.equal(response.json().server.status, "unreachable");
+  assert.equal(response.json().server.lastError, "Upstream unavailable");
+  assert.ok(!response.body.includes("synthetic-secret"));
+  assert.deepEqual((await f.app.inject({ url: "/api/admin/servers/extra/tools", headers: f.headers })).json().tools, []);
+  online = true;
+  const deadline = Date.now() + 35000;
+  while (Date.now() < deadline) {
+    if ((await client.listTools(undefined, { cacheMode: "bypass" })).tools.some(tool => tool.name === "extra.calculate")) break;
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  assert.ok((await client.listTools(undefined, { cacheMode: "bypass" })).tools.some(tool => tool.name === "extra.calculate"));
+  assert.equal((await client.callTool({ name: "extra.calculate", arguments: { a: 1, b: 2 } })).isError, undefined);
+  assert.equal(calls, 1);
+  assert.equal(records.at(-1)?.outcome, "success");
+  assert.equal(records.at(-1)?.keyId, f.key.id);
+  await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "member" } });
+  assert.deepEqual((await client.listTools(undefined, { cacheMode: "bypass" })).tools.map(tool => tool.name), ["calculator.calculate"]);
+  await assert.rejects(client.callTool({ name: "extra.calculate", arguments: { a: 1, b: 2 } }), ProtocolError);
+  assert.equal(calls, 1);
+  assert.equal((await f.app.inject({ method: "DELETE", url: `/api/keys/${f.key.id}`, headers: f.headers })).statusCode, 204);
+  await assert.rejects(client.listTools(undefined, { cacheMode: "bypass" }), httpFailure(401));
+});
+
+test("failed registration persistence never publishes or connects the requested upstream", async (t) => {
+  let connections = 0;
+  const extra = await controlledUpstream(t, "extra", server => {
+    connections++;
+    server.registerTool("echo", {}, async () => ({ content: [] }));
+  });
+  const f = await fixture(t, { destinations: { allowLoopback: true, rules: [{ origin: new URL(extra.config.url).origin, cidrs: ["127.0.0.1/32"] }] } });
+  await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
+  // Inject a failure at the real persistence boundary, after session authentication remains usable.
+  await f.db.db!.command({ collMod: "upstream_registrations", validator: { serverId: { $ne: "extra" } }, validationLevel: "strict" });
+  const response = await f.app.inject({ method: "POST", url: "/api/admin/servers", headers: f.headers, payload: {
+    serverId: "extra", displayName: "Extra", url: extra.config.url, transport: "streamable-http", enabled: true, authentication: { type: "none" },
+  } });
+  assert.equal(response.statusCode, 503);
+  assert.equal(connections, 0);
+  assert.deepEqual((await f.app.inject({ url: "/api/admin/servers", headers: f.headers })).json(), { servers: [] });
+  assert.deepEqual((await (await f.connect()).listTools(undefined, { cacheMode: "bypass" })).tools, []);
+});
+
+test("executeTool rejects a mapping from an older generation and ignores its late failure after reconnection", async (t) => {
+  const { UpstreamRegistry } = await import("./upstream/registry.js");
+  const { DestinationPolicy } = await import("./upstream/destination-policy.js");
+  const { ToolAggregator } = await import("./tools/aggregator.js");
+  const { AggregatedToolResolver } = await import("./tools/resolver.js");
+  const { McpUpstreamInvoker } = await import("./tools/invoker.js");
+  const { executeTool } = await import("./execution/execute-tool.js");
+  let calls = 0;
+  const extra = await controlledUpstream(t, "extra", server => {
+    server.registerTool("echo", {}, async () => { calls++; return { content: [] }; });
+  });
+  const registry = new UpstreamRegistry(new DestinationPolicy({ allowLoopback: true,
+    rules: [{ origin: new URL(extra.config.url).origin, cidrs: ["127.0.0.1/32"] }] }));
+  t.after(() => registry.close());
+  registry.register(extra.config);
+  await registry.connect("extra");
+  const resolver = new AggregatedToolResolver(new ToolAggregator(registry), registry);
+  const old = await resolver.resolve("extra.echo");
+  assert.ok(old);
+  const previousClient = registry.getClient("extra")!;
+  await registry.connect("extra");
+  await registry.markUnreachable("extra", "Late failure", previousClient, old.generation);
+  assert.equal(registry.getState("extra")?.status, "connected");
+  const records: AuditRecord[] = [];
+  const dependencies = { resolver: { async resolve() { return old; } }, invoker: new McpUpstreamInvoker(registry),
+    auditLogger: { async write(record: AuditRecord) { records.push(record); } } };
+  const request = { identity: { userId: "admin", role: "admin" as const, keyId: "key" }, toolName: "extra.echo", arguments: {}, requestId: "stale" };
+  await assert.rejects(executeTool(request, dependencies), { name: "UpstreamUnavailableError" });
+  assert.equal(calls, 0);
+  assert.equal(records[0].outcome, "upstream_unavailable");
+  await executeTool({ ...request, requestId: "fresh" }, { ...dependencies, resolver });
+  assert.equal(calls, 1);
+  assert.equal(records[1].outcome, "success");
+  await assert.rejects(executeTool({ ...request, identity: { ...request.identity, role: "member" } }, { ...dependencies, resolver }), { name: "AuthorizationError" });
+  assert.equal(calls, 1);
+  assert.equal(records[2].outcome, "unauthorized");
+});
+
+test("duplicate discovered names cannot publish a partial catalog or disrupt healthy tools", async (t) => {
+  const calculator = await calculatorUpstream(t);
+  const extra = await controlledUpstream(t, "extra", server => {
+    server.registerTool("echo", {}, async () => ({ content: [] }));
+    server.server.setRequestHandler("tools/list", async () => ({ tools: [
+      { name: "echo", description: "First", inputSchema: { type: "object", properties: {} } },
+      { name: "echo", description: "Collision", inputSchema: { type: "object", properties: {} } },
+    ] }));
+  });
+  const f = await fixture(t, { upstreams: [calculator.config], destinations: { allowLoopback: true,
+    rules: [calculator.config, extra.config].map(config => ({ origin: new URL(config.url).origin, cidrs: ["127.0.0.1/32"] })) } });
+  await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
+  const client = await f.connect();
+  const response = await f.app.inject({ method: "POST", url: "/api/admin/servers", headers: f.headers, payload: {
+    serverId: "extra", displayName: "Colliding tools", url: extra.config.url, transport: "streamable-http", enabled: true, authentication: { type: "none" },
+  } });
+  assert.equal(response.statusCode, 201, response.body);
+  assert.equal(response.json().server.status, "unreachable");
+  assert.equal(response.json().server.toolCount, 0);
+  assert.deepEqual((await client.listTools(undefined, { cacheMode: "bypass" })).tools.map(tool => tool.name), ["calculator.calculate"]);
+  assert.deepEqual((await client.callTool({ name: "calculator.calculate", arguments: { a: 6, b: 7 } })).content, [{ type: "text", text: "42" }]);
+});

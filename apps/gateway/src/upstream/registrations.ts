@@ -36,6 +36,12 @@ export const registrationInput = z.strictObject({
 });
 export type UpstreamRegistration = z.infer<typeof registrationInput>;
 
+// Public creation cannot set revisions, timestamps or submit credentials.
+export const createRegistrationInput = registrationInput.pick({
+  serverId: true, displayName: true, url: true, transport: true, enabled: true,
+}).extend({ authentication: z.strictObject({ type: z.literal("none") }) });
+export type CreateRegistrationInput = z.infer<typeof createRegistrationInput>;
+
 const registrationSchema = new Schema<UpstreamRegistration>({
   serverId: { type: String, required: true },
   displayName: { type: String, required: true },
@@ -68,6 +74,12 @@ export async function createRegistrationStorage(connection: Connection) {
   await migrations.createCollection();
   await registrations.createIndexes();
   return {
+    async create(input: CreateRegistrationInput): Promise<UpstreamRegistration> {
+      const now = new Date();
+      const desired = registrationInput.parse({ ...input, configurationRevision: 1, createdAt: now, updatedAt: now });
+      await registrations.create(desired);
+      return desired;
+    },
     async migrate(defaults: UpstreamConfig[], policy: DestinationPolicy) {
       // Create the coordination row before the transaction. A competing upsert may win.
       try {

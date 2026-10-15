@@ -41,6 +41,7 @@ import type { UpstreamConfig } from "./upstream/types.js";
 import { connectIdentityStorage } from "./identity/storage.js";
 import { dashboardConfig } from "./identity/dashboard-config.js";
 import { registerDashboardRoutes } from "./identity/dashboard-routes.js";
+import { UpstreamManagement } from "./upstream/management.js";
 import { registerServerInspectionRoutes } from "./upstream/inspection-routes.js";
 
 export interface GatewayAppOptions {
@@ -78,7 +79,7 @@ export async function createGatewayApp(options: GatewayAppOptions = {}) {
 
     for (const server of registrations) {
       registry.register({ name: server.serverId, url: server.url, enabled: server.enabled,
-        authentication: server.authentication });
+        authentication: server.authentication, configurationRevision: server.configurationRevision });
     }
 
     // ------------------------------------------
@@ -135,8 +136,9 @@ export async function createGatewayApp(options: GatewayAppOptions = {}) {
       allowedHosts,
     });
 
+    const management = new UpstreamManagement(identityStorage.upstreamRegistrations, registry, policy);
     await registerDashboardRoutes(app, identityStorage, dashboard, admin => {
-      registerServerInspectionRoutes(admin, identityStorage.upstreamRegistrations, registry, policy, registrations);
+      registerServerInspectionRoutes(admin, identityStorage.upstreamRegistrations, registry, policy, management);
     });
 
     // ------------------------------------------

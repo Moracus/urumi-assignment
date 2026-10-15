@@ -2,15 +2,16 @@ import type { FastifyInstance } from "fastify";
 import { DashboardAuthError } from "../identity/dashboard-sessions.js";
 import type { RegistrationStorage, UpstreamRegistration } from "./registrations.js";
 import type { UpstreamRegistry } from "./registry.js";
+import type { UpstreamManagement } from "./management.js";
 import type { DestinationPolicy } from "./destination-policy.js";
 
 export function registerServerInspectionRoutes(
   app: FastifyInstance, storage: RegistrationStorage, registry: UpstreamRegistry,
-  policy: DestinationPolicy, restored: UpstreamRegistration[],
+  policy: DestinationPolicy, management: UpstreamManagement,
 ) {
-  const revisions = new Map(restored.map(server => [server.serverId, server.configurationRevision]));
   function observed(server: UpstreamRegistration) {
-    return revisions.get(server.serverId) === server.configurationRevision ? registry.getState(server.serverId) : undefined;
+    const state = registry.getState(server.serverId);
+    return state?.config.configurationRevision === server.configurationRevision ? state : undefined;
   }
   function summary(server: UpstreamRegistration) {
     const state = observed(server);
@@ -25,6 +26,19 @@ export function registerServerInspectionRoutes(
       lastError: state?.lastError ? "Upstream unavailable" : null,
     };
   }
+  function detail(server: UpstreamRegistration) {
+    return {
+      ...summary(server), url: server.url, transport: server.transport,
+      authentication: { type: server.authentication.type, referenceConfigured: server.authentication.type !== "none" },
+    };
+  }
+  app.post("/api/admin/servers", { bodyLimit: 8192 }, async (request, reply) => {
+    if (!/^application\/json(?:\s*;.*)?$/i.test(request.headers["content-type"] ?? "")) {
+      throw new DashboardAuthError(415, "Invalid request");
+    }
+    const server = await management.create(request.body);
+    return reply.code(201).send({ server: detail(server) });
+  });
   async function find(serverId: string) {
     const server = (await storage.list(policy)).find(server => server.serverId === serverId);
     if (!server) throw new DashboardAuthError(404, "Server not found");
@@ -33,10 +47,7 @@ export function registerServerInspectionRoutes(
   app.get("/api/admin/servers", async () => ({ servers: (await storage.list(policy)).map(summary) }));
   app.get<{ Params: { serverId: string } }>("/api/admin/servers/:serverId", async request => {
     const server = await find(request.params.serverId);
-    return { server: {
-      ...summary(server), url: server.url, transport: server.transport,
-      authentication: { type: server.authentication.type, referenceConfigured: server.authentication.type !== "none" },
-    } };
+    return { server: detail(server) };
   });
   app.get<{ Params: { serverId: string } }>("/api/admin/servers/:serverId/tools", async request => {
     const server = await find(request.params.serverId);

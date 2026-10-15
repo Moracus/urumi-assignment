@@ -32,7 +32,8 @@ export class McpUpstreamInvoker
     if (
       !upstream ||
       !upstream.config.enabled ||
-      upstream.status !== "connected"
+      upstream.status !== "connected" ||
+      (tool.generation !== undefined && upstream.generation !== tool.generation)
     ) {
       throw new UpstreamUnavailableError(
         tool.upstreamName,
@@ -98,6 +99,7 @@ export class McpUpstreamInvoker
           ? "Tool request timed out"
           : "MCP request failed",
         client,
+        upstream.generation,
       );
 
       if (timedOut) {
@@ -129,6 +131,7 @@ export class McpUpstreamInvoker
         tool.upstreamName,
         "Invalid MCP response",
         client,
+        upstream.generation,
       );
 
       throw new UpstreamCallError(

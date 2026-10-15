@@ -14,6 +14,7 @@ export interface UpstreamConfig {
   url: string;
 
   enabled: boolean;
+  configurationRevision?: number;
   authentication?: UpstreamRegistration["authentication"];
 }
 
@@ -26,6 +27,7 @@ export interface DiscoveredTool {
 }
 
 export interface UpstreamState {
+  generation: number;
   config: UpstreamConfig;
 
   status: UpstreamStatus;

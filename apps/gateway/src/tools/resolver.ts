@@ -34,6 +34,7 @@ export class AggregatedToolResolver
     if (tool) {
       return {
         publicName: tool.name,
+        generation: tool.generation,
         upstreamName: tool.upstreamName,
         upstreamToolName: tool.upstreamToolName,
       };

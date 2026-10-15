@@ -13,6 +13,7 @@ export interface ToolExecutionRequest {
 }
 
 export interface ResolvedTool {
+  generation?: number;
   publicName: string;
 
   upstreamName: string;

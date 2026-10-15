@@ -42,6 +42,7 @@ export class ToolAggregator {
 
         aggregated.set(publicName, {
           name: publicName,
+          generation: upstream.generation,
 
           description: tool.description,
 

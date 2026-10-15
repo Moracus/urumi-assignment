@@ -21,6 +21,7 @@ function createState(
   toolNames: string[],
 ): UpstreamState {
   return {
+    generation: 1,
     config: {
       name,
       url: `http://${name}:3000/mcp`,
@@ -159,6 +160,7 @@ test("resolves public names to original upstream tools", async () => {
   );
 
   assert.deepEqual(resolved, {
+    generation: 1,
     publicName: "calculator.calculate",
     upstreamName: "calculator",
     upstreamToolName: "calculate",
