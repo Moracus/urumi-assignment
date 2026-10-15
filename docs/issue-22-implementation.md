@@ -31,6 +31,8 @@ Both Helm lints and all rendered RBAC assertions passed. No shared packages or c
 
 Live Kubernetes checks were separate from rendered assertions. `kubectl get pods -n urumi` showed all six existing workloads 1/1 Running at inspection time. A unique temporary namespace received only the rendered ServiceAccount/Role/RoleBinding plus two synthetic Secrets. Actual impersonated GET succeeded on the approved named Secret and failed on the other Secret. `kubectl auth can-i` denied list/watch/create/update/patch/delete and cross-namespace GET. The temporary namespace was removed. Existing workloads, production Secrets and volumes were not changed. This checks live RBAC, not the production adapter's Pod-network path, CNI enforcement, rollout readiness or Ingress behavior.
 
+The full real-MongoDB integration runner passed **132/132 tests**, with zero failures, cancellations or skips, and removed its disposable replica-set/standalone containers. This includes the complete configured application, execution, aggregation and identity suites.
+
 ## Operator steps and limitations
 
 Pre-provision dedicated upstream Secrets, add exact namespace/name/key metadata to `gateway.secretReferences`, approve destinations separately, and deploy the rebuilt image/chart with one gateway replica. Existing default upstreams need no credentials. Use administrator session/Origin/CSRF-protected POST/PATCH requests to configure authentication. Extend approvals through Helm so application allowlist and RBAC change together. See [full examples](upstream-credentials.md).
@@ -38,3 +40,14 @@ Pre-provision dedicated upstream Secrets, add exact namespace/name/key metadata 
 Every reconnect reads current Secret values. For immediate same-reference rotation, disable/enable the server; healthy refresh uses its existing transport. Already-started calls may finish; failed credential replacement never reuses old credentials. Missing/unapproved/forbidden reads leave only that server unavailable. Resolved values are never persisted; malicious upstream-returned data remains untrusted.
 
 No full gateway rollout, Pod-network Kubernetes API read, allowed/blocked connectivity matrix, Ingress smoke test or WooCommerce mutation was performed. Existing ingress-only NetworkPolicies are unchanged; deployments enforcing egress must approve DNS/API/upstreams/MongoDB explicitly. Multiple gateway replicas, frontend management UI and durable audit storage remain unsupported by this work. Pre-existing user changes are excluded from the commit.
+
+
+## Standards
+
+No actionable Standards findings. The independent review checked the committed diff against AGENTS.md, GLOSSARY.md, all four identity ADRs and the code-review smell baseline. The change preserves the shared execution boundary, backend authorization, registry failure isolation and existing MCP transport. Credentials remain transient; persistence stores references, errors are sanitized, and Kubernetes access uses a dedicated ServiceAccount with named get-only RBAC. No baseline smell warranted an actionable recommendation.
+
+## Spec
+
+No Spec findings. The independent review confirmed approved none/bearer/custom-header configuration, validation before persistence or Secret access, fresh resolution on reconnect, generation retirement on credential edits, failure isolation, sanitized errors and existing execution/authentication boundaries. The ServiceAccount and named namespaced get-only RBAC match the issue. HTTP/MCP tests use isolated MongoDB and substitute only the external Secret reader, covering persisted/output inspection, rotation, failed replacement, redirect denial and healthy-server isolation. No scope creep was identified. Documentation distinguishes rendered/live RBAC checks from unperformed Pod-network and rollout checks.
+
+Review baseline: user-approved starting HEAD `4fac068038fd0dec954f3cc0c1381b0b2600fb8b`; reviewed implementation commit `8bd2610`. Standards: 0 findings; Spec: 0 findings. Only these validation/review notes changed after the full passing suite and implementation review.
