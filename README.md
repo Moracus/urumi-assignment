@@ -85,6 +85,8 @@ The chart does not install the controller, network plugin, WooCommerce plugin, o
 
 ## Run the applications locally
 
+For the complete identity workflow, follow the [Phase 1 operator demonstration](docs/phase1-operator-demo.md): replica-set startup, first administrator, Origin/CSRF login, member password replacement, key issuance, read-only MCP calls, same-client revocation, and recovery. It also lists the existing Helm configuration and deferred deployment work.
+
 Clone the repository, then install from its root:
 
 ```bash

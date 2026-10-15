@@ -1,5 +1,7 @@
 # Persistent identity storage and initial administrator setup (#3)
 
+For one ordered walkthrough across setup, sessions, members, keys, MCP revocation, and recovery, use the [Phase 1 operator demonstration](phase1-operator-demo.md).
+
 This ticket implements storage, passwords, one-time CLI enrollment, and database health. Dashboard login, sessions and password replacement are implemented by [tickets #4–#5](dashboard-sessions.md). [Personal key management](api-keys.md) and [persistent MCP authentication](mcp-authentication.md) are implemented by tickets #7–#8. [Administrator account disabling](dashboard-sessions.md#disable-and-re-enable-users-11), [administrator password resets](dashboard-sessions.md#reset-a-password-12), and [operator recovery](#operator-recovery-13) are implemented. Dashboard UI, dynamic upstream persistence, and durable audits remain later work. Create the first administrator, log in through the dashboard API, and issue an individual key for MCP use. The bootstrap credential never authenticates MCP. This is an incremental development slice, not a production completion claim.
 
 ## Local replica set
