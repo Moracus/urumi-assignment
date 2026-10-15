@@ -39,6 +39,16 @@ export function registerServerInspectionRoutes(
     const server = await management.create(request.body);
     return reply.code(201).send({ server: detail(server) });
   });
+  for (const action of ["enable", "disable"] as const) {
+    app.post<{ Params: { serverId: string } }>(`/api/admin/servers/:serverId/${action}`, { bodyLimit: 4096 }, async request => {
+      const server = await management.setEnabled(request.params.serverId, action === "enable");
+      return { server: detail(server) };
+    });
+  }
+  app.delete<{ Params: { serverId: string } }>("/api/admin/servers/:serverId", async (request, reply) => {
+    await management.remove(request.params.serverId);
+    return reply.code(204).send();
+  });
   async function find(serverId: string) {
     const server = (await storage.list(policy)).find(server => server.serverId === serverId);
     if (!server) throw new DashboardAuthError(404, "Server not found");

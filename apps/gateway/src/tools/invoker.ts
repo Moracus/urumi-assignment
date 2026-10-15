@@ -73,7 +73,7 @@ export class McpUpstreamInvoker
     let result: unknown;
 
     try {
-      result = await client.callTool(
+      result = await this.registry.withInvocation(client, () => client.callTool(
         {
           name: tool.upstreamToolName,
           arguments: args,
@@ -81,7 +81,7 @@ export class McpUpstreamInvoker
         {
           timeout: 10_000,
         },
-      );
+      ));
     } catch (error) {
       const timedOut =
         error instanceof Error &&

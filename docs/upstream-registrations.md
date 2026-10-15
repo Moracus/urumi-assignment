@@ -1,4 +1,4 @@
-# Persistent upstream registrations (#17, #18)
+# Persistent upstream registrations (#17, #18, #19)
 
 MongoDB is the source of desired upstream configuration. The existing registry owns observed status, MCP clients, discovered tools, and connection/discovery timestamps in memory. These observations are never written over desired configuration and are rebuilt on every restart. Tool execution still uses `executeTool()`, existing role policies, and per-request gateway API-key authentication.
 
@@ -20,7 +20,7 @@ Readiness is unchanged: available MongoDB and at least one connected upstream ar
 
 ## Administrator API
 
-All endpoints require an eligible administrator **dashboard cookie session** and return `Cache-Control: no-store`. Gateway bearer keys do not grant access. Pending-password users, members, disabled accounts and revoked sessions retain existing session rules. GET requests require no CSRF token. POST requires the existing exact trusted Origin and session-bound `X-CSRF-Token`.
+All endpoints require an eligible administrator **dashboard cookie session** and return `Cache-Control: no-store`. Gateway bearer keys do not grant access. Pending-password users, members, disabled accounts and revoked sessions retain existing session rules. GET requests require no CSRF token. Mutations require the existing exact trusted Origin and session-bound `X-CSRF-Token`.
 
 | Endpoint | Success response |
 | --- | --- |
@@ -45,11 +45,11 @@ curl --cookie "$COOKIE_JAR" "$GATEWAY_URL/api/admin/servers/calculator/tools"
 
 ## Operator rollout and limits
 
-Run **one gateway replica**. Concurrent migration is safe, but runtime configuration/catalog synchronization between replicas is absent. Future lifecycle management needs additional coordination before multiple replicas are supported. Out-of-band database edits require a restart; they are not a supported live-management API. Inspection rereads desired state but cannot reconcile external edits with existing connections.
+Run **one gateway replica**. Concurrent migration is safe, but runtime configuration/catalog synchronization between replicas is absent. Live lifecycle management needs additional coordination before multiple replicas are supported. Out-of-band database edits require a restart; they are not a supported live-management API. Inspection rereads desired state but cannot reconcile external edits with existing connections.
 
 Back up MongoDB, confirm replica-set transaction support, approve the intended default destinations, and deploy the rebuilt gateway image. First startup automatically migrates; no new environment variables, Helm values, Secret, Service, Ingress or PVC changes are required. Inspect the three GET APIs with an administrator dashboard session, compare names/schemas with MCP `tools/list`, perform a read-only calculator/time call, and restart to confirm restored registrations and fresh timestamps. Existing default URL overrides only affect first migration. Do not manually set persisted connection status or tool definitions.
 
-Regression tests cover first/repeat/concurrent migration, rollback after a duplicate canonical URL, preserving desired edits/deletions/references, disabled restoration without connection, independent startup with a dead server, fresh discovery, SDK result compatibility, eligibility/role/bearer separation, malformed stored configuration and storage outage responses. The full MongoDB runner provisions disposable replica-set and standalone databases. It does not prove live Kubernetes health, RBAC, egress enforcement or WooCommerce connectivity. No cluster rollout was performed. Credential resolution, edit/enable/disable/remove/manual-refresh APIs, frontend screens, durable observations/audits, and multi-replica coordination remain later work.
+Regression tests cover first/repeat/concurrent migration, rollback after a duplicate canonical URL, preserving desired edits/deletions/references, disabled restoration without connection, independent startup with a dead server, fresh discovery, SDK result compatibility, eligibility/role/bearer separation, malformed stored configuration and storage outage responses. The full MongoDB runner provisions disposable replica-set and standalone databases. It does not prove live Kubernetes health, RBAC, egress enforcement or WooCommerce connectivity. No cluster rollout was performed. Credential resolution, edit/manual-refresh APIs, frontend screens, durable observations/audits, and multi-replica coordination remain later work.
 
 
 ## Register without restart (#18)
@@ -74,3 +74,42 @@ Connection, refresh and failure work is serialized per server. Runtime generatio
 The current MCP handler constructs its server from the current permitted catalog per request. An already connected client sees additions on its next uncached `tools/list` (SDK clients can use `cacheMode: "bypass"`); no reconnect or notification is required. New namespaces grant no additional member permissions. Roles and API-key eligibility/revocation remain checked on every MCP HTTP request. Administrator cookies alone cannot invoke MCP.
 
 For verification without commerce mutations, register a controlled approved server, inspect its detail/tools, list and call from an MCP client connected before creation, and restart the gateway to verify restoration. Stop that upstream to verify unavailable isolation and restart it to observe periodic recovery. No Helm changes or cluster reset are required by this ticket. Run one gateway replica; other replicas do not observe live registrations until restart.
+
+
+## Disable, enable and remove (#19)
+
+These endpoints use the same eligible administrator dashboard session, trusted Origin and session-bound CSRF checks as creation. Bearer credentials cannot manage servers. No body is required.
+
+| Endpoint | Success response |
+| --- | --- |
+| `POST /api/admin/servers/:serverId/disable` | `200 { "server": detail }`, disabled with no public tools |
+| `POST /api/admin/servers/:serverId/enable` | `200 { "server": detail }`, enabled and freshly discovered or unreachable |
+| `DELETE /api/admin/servers/:serverId` | `204`, after durable disable, connection cleanup and deletion |
+
+Unknown identifiers return 404, including repeated deletion. Repeated disable is safe; repeated enable deliberately reconnects and rediscovers. Each change increments the configuration revision. Enable retains the stable namespace, URL and authentication reference. It checks the current destination policy on every connection, including DNS/socket checks; failed connections leave the registration enabled/unreachable with zero public tools and a sanitized error. Healthy upstreams remain available and periodic maintenance retries enabled unavailable servers.
+
+```bash
+curl --cookie "$COOKIE_JAR" -X POST \
+  -H "Origin: $DASHBOARD_ORIGIN" -H "X-CSRF-Token: $CSRF_TOKEN" \
+  "$GATEWAY_URL/api/admin/servers/calculator/disable"
+curl --cookie "$COOKIE_JAR" -X POST \
+  -H "Origin: $DASHBOARD_ORIGIN" -H "X-CSRF-Token: $CSRF_TOKEN" \
+  "$GATEWAY_URL/api/admin/servers/calculator/enable"
+curl --cookie "$COOKIE_JAR" -X DELETE \
+  -H "Origin: $DASHBOARD_ORIGIN" -H "X-CSRF-Token: $CSRF_TOKEN" \
+  "$GATEWAY_URL/api/admin/servers/inventory"
+```
+
+### Ordering and in-flight calls
+
+Management serializes creation, enable, disable and removal for each stable ID; unrelated servers remain independent. Enable persists enabled configuration before reconnecting. Disable persists disabled configuration, then synchronously advances the runtime generation, withdraws the client/tools and establishes the invocation barrier. It waits for per-server maintenance and connection cleanup before acknowledging success. Remove uses the same durable disable and barrier, waits for cleanup, deletes the record, then drops runtime state. It never deletes Kubernetes Secrets, PVCs or other resources. Completed default migration prevents removed defaults from being recreated on restart.
+
+The registry serializes connection, periodic refresh, cleanup and failure handling per server. Delayed connection/discovery results cannot publish after the barrier; late failures from a replaced client cannot mark its replacement unhealthy. The existing invoker checks live enabled state, current generation and discovered membership immediately before starting a call. A mapping resolved before disable/remove cannot bypass these checks. An already-started call may complete, retaining its normal ten-second timeout, result and execution audit attribution. Cleanup drains these calls before closing the connection; disable/remove responses can consequently wait for in-flight calls and bounded five-second discovery/connection work. No tool call is automatically retried.
+
+An existing MCP client sees withdrawn or restored tools on its next uncached discovery request; remembered names/schemas do not confer permission. Role checks and gateway API-key revocation still run independently on every MCP request. Disabled state and removal survive restart; enabled state is freshly discovered on startup.
+
+### Partial failures and recovery
+
+A persistence or cleanup error returns the existing safe 503 envelope, never a successful removal acknowledgement. A failed initial state write leaves the existing runtime untouched; the result may be ambiguous if MongoDB committed before a connection failure. Inspect GET and retry the intended action, or restart to reconcile durable state. If disable persisted before cleanup failed, it remains disabled and non-callable; failed cleanup retains connection handles for a later cleanup attempt. Retry disable or removal after correcting the failure. If final deletion fails, the durable disabled record remains available for inspection and retry, including after restart. If deletion committed but the response was lost, GET/DELETE returns 404; that is a completed removal. If enable persisted but cleanup failed, it remains non-callable in this process; retry enable or restart to reconcile the enabled intent. An unreachable connection after otherwise successful enable is a 200 observed outcome, not a persistence failure.
+
+Use one gateway replica. Live changes are process-local and out-of-band database edits are unsupported without restart. Inspect desired enabled state and live status/tools after an ambiguous response. Do not delete the defaults migration marker. Rebuild/deploy the gateway image; no new production environment variables, Helm values or cluster resource changes are required. Test-only MongoDB failure injection is enabled solely in the disposable integration compose service, never production deployment configuration.

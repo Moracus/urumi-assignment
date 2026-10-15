@@ -80,6 +80,17 @@ export async function createRegistrationStorage(connection: Connection) {
       await registrations.create(desired);
       return desired;
     },
+    async setEnabled(serverId: string, enabled: boolean): Promise<UpstreamRegistration | null> {
+      const document = await registrations.findOneAndUpdate({ serverId }, {
+        $set: { enabled, updatedAt: new Date() }, $inc: { configurationRevision: 1 },
+      }, { returnDocument: "after", runValidators: true }).lean();
+      if (!document) return null;
+      const { _id, ...value } = document;
+      return registrationInput.parse(value);
+    },
+    async remove(serverId: string): Promise<void> {
+      await registrations.deleteOne({ serverId });
+    },
     async migrate(defaults: UpstreamConfig[], policy: DestinationPolicy) {
       // Create the coordination row before the transaction. A competing upsert may win.
       try {

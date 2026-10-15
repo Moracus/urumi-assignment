@@ -19,7 +19,9 @@ export class UpstreamRegistry {
 
   private connections = new Map<string, UpstreamConnection>();
 
-  private inFlight = new Map<string, Promise<void>>();
+  private activeCalls = new Map<Client, Set<Promise<unknown>>>();
+
+  private retiredConnections = new Map<string, Set<UpstreamConnection>>();
 
   private refreshTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -76,8 +78,6 @@ export class UpstreamRegistry {
   private async closeConnection(name: string): Promise<void> {
     const connection = this.connections.get(name);
 
-    this.connections.delete(name);
-
     const state = this.upstreams.get(name);
 
     if (state) {
@@ -85,8 +85,71 @@ export class UpstreamRegistry {
     }
 
     if (connection) {
-      await disconnectFromUpstream(connection).catch(() => {});
+      // Calls already sent retain their existing ten-second bound. The barrier
+      // prevents new entries, so cleanup can drain this finite set safely.
+      await Promise.allSettled([...(this.activeCalls.get(connection.client) ?? [])]);
+      await disconnectFromUpstream(connection);
+      if (this.connections.get(name) === connection) this.connections.delete(name);
     }
+    const retired = this.retiredConnections.get(name);
+    if (retired) {
+      for (const obsolete of retired) {
+        await disconnectFromUpstream(obsolete);
+        retired.delete(obsolete);
+      }
+      if (retired.size === 0) this.retiredConnections.delete(name);
+    }
+  }
+
+  async withInvocation<T>(client: Client, operation: () => Promise<T>): Promise<T> {
+    const calls = this.activeCalls.get(client) ?? new Set<Promise<unknown>>();
+    const call = operation();
+    calls.add(call);
+    this.activeCalls.set(client, calls);
+    try { return await call; }
+    finally {
+      calls.delete(call);
+      if (calls.size === 0) this.activeCalls.delete(client);
+    }
+  }
+
+  private async retireConnection(name: string, connection: UpstreamConnection): Promise<void> {
+    try { await disconnectFromUpstream(connection); }
+    catch {
+      const retired = this.retiredConnections.get(name) ?? new Set<UpstreamConnection>();
+      retired.add(connection);
+      this.retiredConnections.set(name, retired);
+    }
+  }
+
+  async disable(name: string, configurationRevision?: number): Promise<void> {
+    const state = this.upstreams.get(name);
+    if (!state) throw new Error("Unknown upstream");
+    // Synchronous barrier: discovery already awaiting I/O cannot publish afterwards.
+    state.generation = ++this.nextGeneration;
+    state.config = { ...state.config, enabled: false, configurationRevision };
+    state.status = "disabled";
+    state.tools = [];
+    state.client = null;
+    state.lastError = null;
+    await this.runMaintenance(name, () => this.closeConnection(name));
+  }
+
+  async enable(name: string, configurationRevision?: number): Promise<void> {
+    await this.runMaintenance(name, async () => {
+      const state = this.upstreams.get(name);
+      if (!state) throw new Error("Unknown upstream");
+      state.config = { ...state.config, enabled: true, configurationRevision };
+      await this.connectInternal(name);
+    });
+  }
+
+  remove(name: string): void {
+    const state = this.upstreams.get(name);
+    if (state?.config.enabled || this.connections.has(name) || this.retiredConnections.has(name)) {
+      throw new Error("Upstream cleanup incomplete");
+    }
+    this.upstreams.delete(name);
   }
 
   async connect(name: string): Promise<void> {
@@ -137,7 +200,7 @@ export class UpstreamRegistry {
       }));
 
       if (!current()) {
-        await disconnectFromUpstream(connection).catch(() => {});
+        await this.retireConnection(name, connection);
         return;
       }
       this.validateTools(tools);
@@ -156,14 +219,14 @@ export class UpstreamRegistry {
       console.info(`[Registry] ${name}: discovered ${tools.length} tools`);
     } catch {
       if (!current()) {
-        if (connection) await disconnectFromUpstream(connection).catch(() => {});
+        if (connection) await this.retireConnection(name, connection);
         return;
       }
       state.status = "unreachable";
       state.lastError = "Connection or tool discovery failed";
 
       if (connection) {
-        await disconnectFromUpstream(connection).catch(() => {});
+        await this.retireConnection(name, connection);
       }
 
       // Preserve the previous cached tool definitions.
@@ -325,7 +388,7 @@ export class UpstreamRegistry {
     // Let bounded maintenance discard late results before releasing transports.
     await Promise.allSettled([...this.maintenance.values()]);
     await Promise.allSettled(
-      [...this.connections.keys()].map((name) => this.closeConnection(name)),
+      [...new Set([...this.connections.keys(), ...this.retiredConnections.keys()])].map((name) => this.closeConnection(name)),
     );
   }
 }

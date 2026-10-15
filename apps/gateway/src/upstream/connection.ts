@@ -62,8 +62,6 @@ export async function disconnectFromUpstream(
 ): Promise<void> {
   try {
     await connection.client.close();
-  } catch {
-    // Local connection cleanup is best-effort.
   } finally {
     await connection.closeNetwork();
   }
