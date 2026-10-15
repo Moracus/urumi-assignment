@@ -39,7 +39,9 @@ function cookie(value: string, expires: Date, secure: boolean, maxAge = dashboar
   return `${cookieName}=${value}; Path=/api; HttpOnly; SameSite=Lax; Max-Age=${maxAge}; Expires=${expires.toUTCString()}${secure ? "; Secure" : ""}`;
 }
 
-export async function registerDashboardRoutes(app: FastifyInstance, storage: IdentityStorage, config: DashboardConfig) {
+export async function registerDashboardRoutes(app: FastifyInstance, storage: IdentityStorage, config: DashboardConfig,
+  registerAdminRoutes?: (admin: FastifyInstance) => void,
+) {
   const sessions = await createDashboardSessions(storage);
   await app.register(async (routes) => {
     routes.addHook("onRequest", async (_request, reply) => { reply.header("Cache-Control", "no-store"); });
@@ -114,6 +116,7 @@ export async function registerDashboardRoutes(app: FastifyInstance, storage: Ide
           requireCsrf(request, authenticated.csrfToken);
         }
       });
+      registerAdminRoutes?.(admin);
       await registerApiKeyRoutes(admin, storage, async (request) => {
         const parsed = z.object({ userId: z.string().regex(/^[a-fA-F0-9]{24}$/) }).safeParse(request.params);
         if (!parsed.success) throw new DashboardAuthError(404, "User not found");

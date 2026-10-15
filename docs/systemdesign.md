@@ -30,7 +30,7 @@ The controller is installed separately from the application chart. Internal MCP 
 
 | Component | Responsibility | State |
 | --- | --- | --- |
-| Gateway | Authenticate requests, filter discovery, authorize calls, resolve tools, invoke upstreams, emit audit records. | In-memory registry, cached schemas, MCP clients, refresh timer. |
+| Gateway | Authenticate requests, filter discovery, authorize calls, resolve tools, invoke upstreams, emit audit records. | MongoDB desired registrations; in-memory observed registry, cached schemas, MCP clients, refresh timer. |
 | WooCommerce MCP | Validate tool inputs and translate commerce operations into REST API calls. | Environment-backed REST credentials; commerce data stays in WooCommerce. |
 | Calculator MCP | Perform four arithmetic operations with bounded input types and result checks. | No persisted application state. |
 | Time MCP | Format current time using an IANA timezone. | No persisted application state. |
@@ -40,7 +40,7 @@ The controller is installed separately from the application chart. Internal MCP 
 
 ## Gateway initialization and discovery
 
-`apps/gateway/src/app.ts` exports `createGatewayApp()`, which constructs the Fastify application, connects the registry, and starts discovery refresh without opening a listening socket. Its optional upstream configurations, audit logger, host, and allowed hosts let HTTP tests use controlled MCP servers while retaining the real registry and execution pipeline. Defaults register WooCommerce, calculator, and time endpoints from environment variables or cluster DNS. These registrations are application configuration, not a remotely editable registry. `index.ts` owns listening and process shutdown.
+`apps/gateway/src/app.ts` exports `createGatewayApp()`, which constructs the Fastify application, connects the registry, and starts discovery refresh without opening a listening socket. Its optional upstream configurations, audit logger, host, and allowed hosts let HTTP tests use controlled MCP servers while retaining the real registry and execution pipeline. Defaults supply a one-time transactional MongoDB migration for WooCommerce, calculator, and time endpoints from environment variables or cluster DNS. Startup restores persisted desired registrations and rebuilds observed connections and catalogs. Administrator dashboard sessions can inspect servers through three read-only APIs; mutation APIs remain later work. See [storage, migration and API contracts](upstream-registrations.md). Run a single gateway replica until runtime-change coordination exists. `index.ts` owns listening and process shutdown.
 
 The registry connects to all upstreams independently using `Promise.allSettled`. A failed upstream does not abort initialization of healthy ones. Each connection uses the MCP client and Streamable HTTP transport. Connection setup and tool discovery each have a five-second timeout.
 

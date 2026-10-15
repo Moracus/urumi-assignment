@@ -48,7 +48,7 @@ async function fixture(t: TestContext, options: Pick<GatewayAppOptions, "upstrea
   assert.equal(issued.statusCode, 201);
   const { key, rawKey } = issued.json();
   return {
-    app, db, address, userId: user.insertedId.toHexString(), headers, key, rawKey,
+    app, db, mongodbUri: uri.toString(), address, userId: user.insertedId.toHexString(), headers, key, rawKey,
     async connect(credential = rawKey) {
       const client = new Client({ name: "gateway-test", version: "1.0.0" });
       t.after(() => client.close());
@@ -84,11 +84,47 @@ async function controlledUpstream(t: TestContext, name: string, register: (serve
 
 function calculatorUpstream(t: TestContext) {
   return controlledUpstream(t, "calculator", (server) => {
-    server.registerTool("calculate", { inputSchema: z.object({ a: z.number(), b: z.number() }) }, async ({ a, b }) => ({
+    server.registerTool("calculate", { description: "Controlled calculator", inputSchema: z.object({ a: z.number(), b: z.number() }) }, async ({ a, b }) => ({
       content: [{ type: "text", text: String(a * b) }],
     }));
   });
 }
+
+test("server inspection requires an eligible administrator session and preserves discovered tool contracts", async (t) => {
+  const calculator = await calculatorUpstream(t);
+  const f = await fixture(t, { upstreams: [calculator.config] });
+  for (const url of ["/api/admin/servers", "/api/admin/servers/calculator", "/api/admin/servers/calculator/tools"]) {
+    assert.equal((await f.app.inject({ url })).statusCode, 401);
+    assert.equal((await f.app.inject({ url, headers: { authorization: `Bearer ${f.rawKey}` } })).statusCode, 401);
+    assert.equal((await f.app.inject({ url, headers: f.headers })).statusCode, 403);
+  }
+  await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
+  const listed = await f.app.inject({ url: "/api/admin/servers", headers: f.headers });
+  assert.equal(listed.statusCode, 200, listed.body);
+  assert.equal(listed.headers["cache-control"], "no-store");
+  const summary = listed.json().servers[0];
+  assert.equal(summary.serverId, "calculator");
+  assert.equal(summary.displayName, "calculator");
+  assert.equal(summary.status, "connected");
+  assert.equal(summary.toolCount, 1);
+  assert.equal(summary.configurationRevision, 1);
+  assert.ok(summary.createdAt && summary.updatedAt && summary.lastConnectedAt && summary.lastDiscoveredAt);
+  assert.equal(summary.url, undefined);
+  const detail = (await f.app.inject({ url: "/api/admin/servers/calculator", headers: f.headers })).json().server;
+  assert.equal(detail.url, calculator.config.url);
+  assert.equal(detail.transport, "streamable-http");
+  assert.deepEqual(detail.authentication, { type: "none", referenceConfigured: false });
+  const tools = await f.app.inject({ url: "/api/admin/servers/calculator/tools", headers: f.headers });
+  const client = await f.connect();
+  assert.deepEqual(tools.json().tools, (await client.listTools()).tools);
+  for (const suffix of ["", "/tools"]) {
+    assert.equal((await f.app.inject({ url: `/api/admin/servers/missing${suffix}`, headers: f.headers })).statusCode, 404);
+  }
+  for (const status of [{ requiredPasswordChange: true }, { requiredPasswordChange: false, status: "disabled" }]) {
+    await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: status });
+    assert.equal((await f.app.inject({ url: "/api/admin/servers", headers: f.headers })).statusCode, status.requiredPasswordChange ? 403 : 401);
+  }
+});
 
 test("SDK discovery and calls use a controlled upstream and injected audit logger", async (t) => {
 
@@ -372,7 +408,10 @@ test("invalid destination policy fails startup before storage or network access"
   }
 });
 
-test("startup rejects unapproved endpoints and sensitive targets even with explicit rules", async () => {
+test("first migration rejects unapproved endpoints and sensitive targets even with explicit rules", async (t) => {
+  const f = await fixture(t);
+  await f.app.close();
+  await f.db.collection("upstream_migrations").deleteMany({});
   for (const url of [
     "ftp://urumi-time-mcp:3003/mcp", "http://user:secret@urumi-time-mcp:3003/mcp",
     "http://urumi-time-mcp:3002/mcp", "http://urumi-time-mcp.other.svc:3003/mcp",
@@ -380,7 +419,7 @@ test("startup rejects unapproved endpoints and sensitive targets even with expli
     "http://database:27017/mcp", "http://[::ffff:127.0.0.1]:3003/mcp",
   ]) {
     const parsed = new URL(url);
-    await assert.rejects(createGatewayApp({ upstreams: [{ name: "time", url, enabled: true }],
+    await assert.rejects(createGatewayApp({ mongodbUri: f.mongodbUri, upstreams: [{ name: "time", url, enabled: true }],
       destinations: { rules: ["urumi-time-mcp:3002", "other.svc"].some(value => url.includes(value)) ? [] : [{ origin: parsed.origin, cidrs: ["0.0.0.0/0", "::/0"] }] },
     }), /destination/);
   }
@@ -543,4 +582,179 @@ test("operator denials override approvals and production cannot enable developme
     if (previous === undefined) delete process.env.NODE_ENV;
     else process.env.NODE_ENV = previous;
   }
+});
+
+
+test("restart restores desired registrations, preserves edits and deletions, and discovers enabled servers afresh", async (t) => {
+  let description = "First discovery";
+  let disabledConnections = 0;
+  const calculator = await controlledUpstream(t, "calculator", server => {
+    server.registerTool("calculate", { description, inputSchema: z.object({ a: z.number() }) }, async ({ a }) => ({
+      content: [{ type: "text", text: String(a) }], structuredContent: { value: a },
+    }));
+  });
+  const disabled = await controlledUpstream(t, "time", server => {
+    disabledConnections++;
+    server.registerTool("current", {}, async () => ({ content: [] }));
+  });
+  const dead = await controlledUpstream(t, "woocommerce", server => {
+    server.registerTool("list_products", {}, async () => ({ content: [] }));
+  });
+  await dead.app.close();
+  const configs = [calculator.config, { ...disabled.config, enabled: false }, dead.config];
+  const f = await fixture(t, { upstreams: configs });
+  await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
+  assert.equal(disabledConnections, 0);
+  const before = (await f.app.inject({ url: "/api/admin/servers/calculator", headers: f.headers })).json().server;
+  const changedAt = new Date();
+  await f.db.collection("upstream_registrations").updateOne({ serverId: "calculator" }, {
+    $set: { displayName: "Arithmetic", configurationRevision: 2, updatedAt: changedAt },
+  });
+  await f.db.collection("upstream_registrations").deleteOne({ serverId: "time" });
+  // Restore a disabled registration requiring a Secret, without ever connecting to it.
+  await f.db.collection("upstream_registrations").insertOne({
+    serverId: "suspended", displayName: "Suspended", url: disabled.config.url, transport: "streamable-http", enabled: false,
+    authentication: { type: "bearer", secretRef: { namespace: "urumi", name: "private-token", key: "token" } },
+    configurationRevision: 7, createdAt: changedAt, updatedAt: changedAt,
+  });
+  await f.app.close();
+  description = "Fresh discovery";
+  const restarted = await createGatewayApp({ mongodbUri: f.mongodbUri, upstreams: configs.map(config => ({ ...config, enabled: true })),
+    destinations: { allowLoopback: true, rules: configs.map(config => ({ origin: new URL(config.url).origin, cidrs: ["127.0.0.1/32"] })) },
+  });
+  t.after(() => restarted.close());
+  const servers = (await restarted.inject({ url: "/api/admin/servers", headers: f.headers })).json().servers;
+  assert.deepEqual(servers.map((server: { serverId: string }) => server.serverId), ["calculator", "suspended", "woocommerce"]);
+  const calculatorState = servers[0];
+  assert.equal(calculatorState.displayName, "Arithmetic");
+  assert.equal(calculatorState.configurationRevision, 2);
+  assert.equal(calculatorState.updatedAt, changedAt.toISOString());
+  assert.equal(calculatorState.createdAt, before.createdAt);
+  assert.ok(Date.parse(calculatorState.lastDiscoveredAt) > Date.parse(before.lastDiscoveredAt));
+  assert.equal(servers[1].status, "disabled");
+  assert.equal(servers[1].lastConnectedAt, null);
+  assert.equal(disabledConnections, 0);
+  assert.equal(servers[2].status, "unreachable");
+  assert.equal(servers[2].toolCount, 0);
+  assert.equal(servers[2].lastError, "Upstream unavailable");
+  const response = await restarted.inject({ url: "/api/admin/servers/suspended", headers: f.headers });
+  assert.deepEqual(response.json().server.authentication, { type: "bearer", referenceConfigured: true });
+  assert.ok(!response.body.includes("private-token"));
+  assert.deepEqual((await restarted.inject({ url: "/api/admin/servers/woocommerce/tools", headers: f.headers })).json(), { tools: [] });
+  assert.deepEqual((await restarted.inject({ url: "/api/admin/servers/suspended/tools", headers: f.headers })).json(), { tools: [] });
+  const address = await restarted.listen({ host: "127.0.0.1", port: 0 });
+  const client = new Client({ name: "restored-test", version: "1.0.0" });
+  t.after(() => client.close());
+  await client.connect(new StreamableHTTPClientTransport(new URL(`${address}/mcp`), {
+    requestInit: { headers: { authorization: `Bearer ${f.rawKey}` } },
+  }));
+  const tools = (await client.listTools(undefined, { cacheMode: "bypass" })).tools;
+  assert.deepEqual(tools.map(tool => tool.name), ["calculator.calculate"]);
+  assert.equal(tools[0].description, "Fresh discovery");
+  assert.deepEqual((await client.callTool({ name: "calculator.calculate", arguments: { a: 42 } })).structuredContent, { value: 42 });
+  assert.equal((await restarted.inject({ url: "/health/ready" })).statusCode, 200);
+});
+
+test("concurrent migration fills only missing defaults and completed migration never reseeds a removed server", async (t) => {
+  const calculator = await calculatorUpstream(t);
+  const time = await controlledUpstream(t, "time", server => {
+    server.registerTool("current", {}, async () => ({ content: [] }));
+  });
+  const f = await fixture(t, { upstreams: [calculator.config] });
+  await f.app.close();
+  await f.db.collection("upstream_migrations").deleteMany({});
+  const now = new Date();
+  await f.db.collection("upstream_registrations").updateOne({ serverId: "calculator" }, { $set: {
+    displayName: "Preserved", enabled: false, configurationRevision: 3, updatedAt: now,
+    authentication: { type: "header", headerName: "x-api-key", secretRef: { namespace: "urumi", name: "calculator-auth", key: "token" } },
+  } });
+  const options = { mongodbUri: f.mongodbUri, upstreams: [{ ...calculator.config, url: time.config.url }, time.config],
+    destinations: { allowLoopback: true, rules: [calculator.config, time.config].map(config => ({ origin: new URL(config.url).origin, cidrs: ["127.0.0.1/32"] })) },
+  };
+  const started = await Promise.allSettled([createGatewayApp(options), createGatewayApp(options)]);
+  for (const result of started) if (result.status === "fulfilled") t.after(() => result.value.close());
+  assert.ok(started.every(result => result.status === "fulfilled"), JSON.stringify(started));
+  const documents = await f.db.collection("upstream_registrations").find().sort({ serverId: 1 }).toArray();
+  assert.equal(documents.length, 2);
+  assert.equal(documents[0].url, calculator.config.url);
+  assert.equal(documents[0].displayName, "Preserved");
+  assert.equal(documents[0].enabled, false);
+  assert.equal(documents[0].configurationRevision, 3);
+  assert.equal(documents[0].authentication.secretRef.name, "calculator-auth");
+  assert.ok((await f.db.collection("upstream_migrations").findOne())?.completedAt);
+  for (const result of started) if (result.status === "fulfilled") await result.value.close();
+  await f.db.collection("upstream_registrations").deleteOne({ serverId: "time" });
+  const restarted = await createGatewayApp(options);
+  t.after(() => restarted.close());
+  assert.equal(await f.db.collection("upstream_registrations").countDocuments(), 1);
+  assert.equal((await restarted.inject({ url: "/health/ready" })).statusCode, 503);
+});
+
+test("failed migration rolls back all inserts and completion before a later startup retries", async (t) => {
+  const calculator = await calculatorUpstream(t);
+  const f = await fixture(t);
+  await f.app.close();
+  await f.db.collection("upstream_migrations").deleteMany({});
+  const options = { mongodbUri: f.mongodbUri, destinations: { allowLoopback: true,
+    rules: [{ origin: new URL(calculator.config.url).origin, cidrs: ["127.0.0.1/32"] }] } };
+  await assert.rejects(createGatewayApp({ ...options, upstreams: [calculator.config, { ...calculator.config, name: "time", url: `${new URL(calculator.config.url).origin}/extra/../mcp` }] }));
+  assert.equal(await f.db.collection("upstream_registrations").countDocuments(), 0);
+  assert.equal((await f.db.collection("upstream_migrations").findOne())?.completedAt, null);
+  const restarted = await createGatewayApp({ ...options, upstreams: [calculator.config] });
+  t.after(() => restarted.close());
+  assert.equal(await f.db.collection("upstream_registrations").countDocuments(), 1);
+  assert.ok((await f.db.collection("upstream_migrations").findOne())?.completedAt);
+});
+
+
+test("startup rejects malformed persisted desired configuration and never downgrades Secret authentication", async (t) => {
+  let connections = 0;
+  const time = await controlledUpstream(t, "time", server => {
+    connections++;
+    server.registerTool("current", {}, async () => ({ content: [] }));
+  });
+  const f = await fixture(t);
+  await f.app.close();
+  const desired = { serverId: "time", displayName: "Private time", url: time.config.url,
+    transport: "streamable-http", enabled: true, configurationRevision: 1, createdAt: new Date(), updatedAt: new Date(),
+    authentication: { type: "bearer", secretRef: { namespace: "urumi", name: "time-token", key: "token" } },
+  };
+  const options = { mongodbUri: f.mongodbUri, upstreams: [], destinations: { allowLoopback: true,
+    rules: [{ origin: new URL(time.config.url).origin, cidrs: ["127.0.0.1/32"] }] } };
+  for (const invalid of [
+    { serverId: "time.invalid" }, { configurationRevision: 0 }, { enabled: "false" }, { transport: "sse" },
+    { authentication: { type: "bearer", rawKey: "synthetic-secret" } },
+    { authentication: { type: "header", headerName: "Host", secretRef: desired.authentication.secretRef } },
+    { url: time.config.url.replace("http://", "http://user:synthetic-secret@") },
+    { url: `${time.config.url}#fragment` }, { rawKey: "synthetic-secret" },
+  ]) {
+    await f.db.collection("upstream_registrations").deleteMany({});
+    await f.db.collection("upstream_registrations").insertOne({ ...desired, ...invalid });
+    await assert.rejects(createGatewayApp(options));
+  }
+  assert.equal(connections, 0);
+  await f.db.collection("upstream_registrations").deleteMany({});
+  await f.db.collection("upstream_registrations").insertOne(desired);
+  const app = await createGatewayApp(options);
+  t.after(() => app.close());
+  await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
+  const server = (await app.inject({ url: "/api/admin/servers/time", headers: f.headers })).json().server;
+  assert.equal(server.enabled, true);
+  assert.equal(server.status, "unreachable");
+  assert.deepEqual(server.authentication, { type: "bearer", referenceConfigured: true });
+  assert.equal(connections, 0);
+  assert.equal((await app.inject({ url: "/health/ready" })).statusCode, 503);
+});
+
+
+test("completed migration ignores obsolete unapproved defaults on restart", async (t) => {
+  const calculator = await calculatorUpstream(t);
+  const f = await fixture(t, { upstreams: [calculator.config] });
+  await f.app.close();
+  const restarted = await createGatewayApp({ mongodbUri: f.mongodbUri,
+    upstreams: [{ name: "calculator", url: "http://169.254.169.254/mcp", enabled: false }],
+    destinations: { allowLoopback: true, rules: [{ origin: new URL(calculator.config.url).origin, cidrs: ["127.0.0.1/32"] }] },
+  });
+  t.after(() => restarted.close());
+  assert.equal((await restarted.inject({ url: "/health/ready" })).statusCode, 200);
 });

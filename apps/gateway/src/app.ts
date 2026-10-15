@@ -41,6 +41,7 @@ import type { UpstreamConfig } from "./upstream/types.js";
 import { connectIdentityStorage } from "./identity/storage.js";
 import { dashboardConfig } from "./identity/dashboard-config.js";
 import { registerDashboardRoutes } from "./identity/dashboard-routes.js";
+import { registerServerInspectionRoutes } from "./upstream/inspection-routes.js";
 
 export interface GatewayAppOptions {
   host?: string;
@@ -56,7 +57,6 @@ export interface GatewayAppOptions {
 export async function createGatewayApp(options: GatewayAppOptions = {}) {
   const policy = new DestinationPolicy(options.destinations);
   const upstreams = options.upstreams ?? getDefaultUpstreams();
-  for (const upstream of upstreams) policy.validate(upstream.url);
   const dashboard = dashboardConfig();
   const host = options.host ?? process.env.HOST ?? "127.0.0.1";
   const allowedHosts = options.allowedHosts ?? (
@@ -67,6 +67,8 @@ export async function createGatewayApp(options: GatewayAppOptions = {}) {
   const identityStorage = await connectIdentityStorage(options.mongodbUri);
 
   try {
+    await identityStorage.upstreamRegistrations.migrate(upstreams, policy);
+    const registrations = await identityStorage.upstreamRegistrations.list(policy);
 
     // ------------------------------------------
     // 1. Initialize upstream registry
@@ -74,8 +76,9 @@ export async function createGatewayApp(options: GatewayAppOptions = {}) {
 
     const registry = new UpstreamRegistry(policy, options.upstreamNetwork);
 
-    for (const config of upstreams) {
-      registry.register(config);
+    for (const server of registrations) {
+      registry.register({ name: server.serverId, url: server.url, enabled: server.enabled,
+        authentication: server.authentication });
     }
 
     // ------------------------------------------
@@ -132,7 +135,9 @@ export async function createGatewayApp(options: GatewayAppOptions = {}) {
       allowedHosts,
     });
 
-    await registerDashboardRoutes(app, identityStorage, dashboard);
+    await registerDashboardRoutes(app, identityStorage, dashboard, admin => {
+      registerServerInspectionRoutes(admin, identityStorage.upstreamRegistrations, registry, policy, registrations);
+    });
 
     // ------------------------------------------
     // 5. Health endpoints

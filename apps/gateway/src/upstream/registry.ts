@@ -108,6 +108,11 @@ export class UpstreamRegistry {
     let connection: UpstreamConnection | null = null;
 
     try {
+      // Secret resolution is a separate management capability. Never connect unauthenticated
+      // when persisted configuration requires upstream credentials.
+      if (state.config.authentication && state.config.authentication.type !== "none") {
+        throw new Error("Upstream credentials unavailable");
+      }
       connection = await connectToUpstream(name, state.config.url, this.policy, this.network);
 
       // Discover tools before marking the upstream healthy.
@@ -193,7 +198,7 @@ export class UpstreamRegistry {
 
   async refreshAll(): Promise<void> {
     await Promise.allSettled(
-      [...this.upstreams.keys()].map((name) => this.refreshInternal(name)),
+      [...this.upstreams.keys()].map((name) => this.runMaintenance(name, () => this.refreshInternal(name))),
     );
   }
 

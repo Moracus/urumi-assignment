@@ -354,7 +354,9 @@ test("connected MCP client is denied on the next request and old credentials sta
   await assert.rejects(client.callTool({ name: "time.current", arguments: {} }), unauthorized);
   assert.equal((await f.app.inject({ method: "PATCH", url, headers: admin, payload: { status: "active" } })).statusCode, 200);
   await assert.rejects(client.listTools(undefined, { cacheMode: "bypass" }), unauthorized);
-  const freshGateway = await createGatewayApp({ mongodbUri: f.uri, upstreams: [] });
+  const freshGateway = await createGatewayApp({ mongodbUri: f.uri, upstreams: [],
+    destinations: { allowLoopback: true, rules: [{ origin: address, cidrs: ["127.0.0.1/32"] }] },
+  });
   t.after(() => freshGateway.close());
   assert.equal((await freshGateway.inject({ url: "/api/auth/me", headers: member })).statusCode, 401);
   assert.equal((await freshGateway.inject({ url: "/mcp", headers: { authorization: `Bearer ${issued.json().rawKey}` } })).statusCode, 401);

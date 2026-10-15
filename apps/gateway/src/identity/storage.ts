@@ -1,4 +1,5 @@
 import mongoose, { Schema } from "mongoose";
+import { createRegistrationStorage } from "../upstream/registrations.js";
 
 // Mongoose passes these to withTransaction; its declaration omits the driver's timeout.
 export const identityTransactionOptions = {
@@ -126,6 +127,7 @@ export async function connectIdentityStorage(uri = process.env.MONGODB_URI) {
     await loginThrottles.createIndexes();
     await apiKeys.createIndexes();
     await accountCoordination.createIndexes();
+    const upstreamRegistrations = await createRegistrationStorage(connection);
     const indexes = await users.collection.indexes();
     if (!indexes.some((index) => index.name === "unique_normalized_email"
       && index.unique && index.key.email === 1 && !index.sparse && !index.partialFilterExpression)) {
@@ -146,7 +148,7 @@ export async function connectIdentityStorage(uri = process.env.MONGODB_URI) {
     }, identityTransactionOptions);
 
     return {
-      connection, users, setup, sessions, loginThrottles, apiKeys, accountCoordination,
+      connection, users, setup, sessions, loginThrottles, apiKeys, accountCoordination, upstreamRegistrations,
       async isAvailable(): Promise<boolean> {
         try {
           if (connection.readyState !== 1 || !connection.db) return false;

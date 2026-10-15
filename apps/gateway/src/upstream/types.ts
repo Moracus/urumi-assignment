@@ -1,4 +1,5 @@
 import type { Client } from "@modelcontextprotocol/client";
+import type { UpstreamRegistration } from "./registrations.js";
 
 export type UpstreamStatus =
   | "disconnected"
@@ -13,6 +14,7 @@ export interface UpstreamConfig {
   url: string;
 
   enabled: boolean;
+  authentication?: UpstreamRegistration["authentication"];
 }
 
 export interface DiscoveredTool {
