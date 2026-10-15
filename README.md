@@ -236,7 +236,7 @@ Port-forwarding is administrative access and is not evidence that pod-to-pod Net
 | `PORT`, `HOST` | Backends | Listen address; local defaults use loopback, containers use `0.0.0.0`. |
 | `MCP_ALLOWED_HOSTS` | Backends | Comma-separated allowed HTTP hostnames. |
 | `GATEWAY_BOOTSTRAP_KEY` | Setup CLI | Initial administrator setup secret; never authenticates normal MCP requests. The legacy chart still injects it into the gateway. |
-| `MONGODB_URI` | Gateway and setup CLI | Required transaction-capable identity database; Helm reads Secret key `uri`. |
+| `MONGODB_URI` | Gateway, setup and recovery CLIs | Required transaction-capable identity database; Helm reads Secret key `uri`. |
 | `DASHBOARD_TRUSTED_ORIGINS` | Gateway | Exact trusted public origins for dashboard login and mutations; empty denies them. |
 | `DASHBOARD_ALLOW_HTTP` | Gateway | Explicit development HTTP mode; defaults false and is rejected in production. |
 | `DASHBOARD_TRUSTED_PROXIES` | Gateway | Exact proxy IP addresses trusted for forwarded client IP/HTTPS headers; defaults empty. |
@@ -281,7 +281,7 @@ Verify network isolation using ordinary test Pods: unrelated Pods should be deni
 
 ## Current limitations
 
-- MCP uses individually revocable hashed API keys with per-request eligibility/role lookup. Users, one-time CLI setup, independent eight-hour dashboard sessions, shared login throttling, and key metadata are persisted. Administrator key management is available through session-protected APIs; role changes preserve an active administrator; account disabling permanently invalidates sessions and keys; operator recovery remains a later ticket.
+- MCP uses individually revocable hashed API keys with per-request eligibility/role lookup. Users, one-time CLI setup, independent eight-hour dashboard sessions, shared login throttling, and key metadata are persisted. Administrator key management is available through session-protected APIs; role changes preserve an active administrator; account disabling permanently invalidates sessions and keys. [Operator recovery](docs/identity-setup.md#operator-recovery-13) restores an existing administrator through a separate database-authorized CLI and permanently invalidates their credentials.
 - Registry, discovery cache, and connections are in memory. No registry CRUD API or persisted upstream configuration.
 - Audits are console records, with no durable audit database, queue, query API, or dashboard. Authentication failures and SDK-level validation failures do not necessarily reach the execution audit boundary.
 - NetworkPolicies cover ingress only. They do not restrict egress and require an enforcing network plugin. Controller namespace and workload-label selectors are broader than cryptographic service identity.

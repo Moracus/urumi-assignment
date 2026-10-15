@@ -9,6 +9,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "setup-admin": "node dist/identity/setup-cli.js",
+    "recover-admin": "node dist/identity/recovery-cli.js",
     "test": "node --test --test-concurrency=1 dist/app.test.js dist/execution/*.test.js dist/tools/*.test.js dist/identity/*.integration.test.js",
     "test:integration": "bash ../../infra/mongodb/test.sh"
   },

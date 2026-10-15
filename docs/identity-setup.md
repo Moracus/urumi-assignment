@@ -1,6 +1,6 @@
 # Persistent identity storage and initial administrator setup (#3)
 
-This ticket implements storage, passwords, one-time CLI enrollment, and database health. Dashboard login, sessions and password replacement are implemented by [tickets #4–#5](dashboard-sessions.md). [Personal key management](api-keys.md) and [persistent MCP authentication](mcp-authentication.md) are implemented by tickets #7–#8. [Administrator account disabling](dashboard-sessions.md#disable-and-re-enable-users-11) is implemented. [Administrator password resets](dashboard-sessions.md#reset-a-password-12) are implemented; operator recovery, dashboard UI, dynamic upstream persistence, and durable audits remain later work. Create the first administrator, log in through the dashboard API, and issue an individual key for MCP use. The bootstrap credential never authenticates MCP. This is an incremental development slice, not a production completion claim.
+This ticket implements storage, passwords, one-time CLI enrollment, and database health. Dashboard login, sessions and password replacement are implemented by [tickets #4–#5](dashboard-sessions.md). [Personal key management](api-keys.md) and [persistent MCP authentication](mcp-authentication.md) are implemented by tickets #7–#8. [Administrator account disabling](dashboard-sessions.md#disable-and-re-enable-users-11), [administrator password resets](dashboard-sessions.md#reset-a-password-12), and [operator recovery](#operator-recovery-13) are implemented. Dashboard UI, dynamic upstream persistence, and durable audits remain later work. Create the first administrator, log in through the dashboard API, and issue an individual key for MCP use. The bootstrap credential never authenticates MCP. This is an incremental development slice, not a production completion claim.
 
 ## Local replica set
 
@@ -46,7 +46,33 @@ Passwords accept 12–128 Unicode code points, with no composition rules or norm
 
 Successful setup returns safe user JSON: canonical ObjectId string `id`, normalized email, role `admin`, status `active`, `requiredPasswordChange: false`, and timestamps. Password hashes are excluded from default model queries and document serialization and are never included in CLI responses. Emails are trimmed and lowercased and have a unique index. Administrator-created members and resets require password replacement; the first administrator chooses their final password here.
 
-The `initial_setup` singleton is permanently consumed in the same majority-write transaction that creates the administrator. Competing setup processes can create only one initial administrator. Repetition, deleted/disabled administrators, and connectivity errors do not reset that state. Do not delete the marker to recover access; operator recovery is a separate later ticket. A failed transaction rolls back both user creation and consumption. If a connection fails during commit, the CLI can report failure after MongoDB committed; inspect the setup marker through authorized database administration before any recovery action. Retrying setup cannot create another initial administrator.
+The `initial_setup` singleton is permanently consumed in the same majority-write transaction that creates the administrator. Competing setup processes can create only one initial administrator. Repetition, deleted/disabled administrators, and connectivity errors do not reset that state. Do not delete the marker to recover access; use the separate operator recovery command below. A failed transaction rolls back both user creation and consumption. If a connection fails during commit, the CLI can report failure after MongoDB committed; inspect the setup marker through authorized database administration before any recovery action. Retrying setup cannot create another initial administrator.
+
+## Operator recovery (#13)
+
+Recovery is CLI-only and requires database operator access through `MONGODB_URI` to the intended transaction-capable database, with the collection/index and transactional read/write privileges described below. Provision that URI through the operator's secret environment; do not put database credentials in command arguments or shell history. No dashboard session or bootstrap secret authorizes recovery, and there is no HTTP recovery endpoint.
+
+Identify the existing target's canonical user ID through authorized database tooling or the administrator user listing. Replace the example ID below with that exact ID; no email lookup or implicit account creation occurs. Missing, malformed, or nonexistent IDs fail.
+
+Build and run interactively from the repository root; the temporary password prompt hides input:
+
+```bash
+pnpm --filter @urumi/gateway build
+pnpm --filter @urumi/gateway recover-admin --user-id 0123456789abcdef01234567
+```
+
+For noninteractive operation, mount an operator-managed password file with restrictive permissions and use:
+
+```bash
+pnpm --filter @urumi/gateway recover-admin --user-id 0123456789abcdef01234567 \
+  --password-file /run/secrets/recovery-password
+```
+
+Password validation and file handling match initial setup. Literal password arguments are rejected. Successful output contains safe user JSON only. One majority-write transaction restores the existing user to active administrator, stores the temporary password as an Argon2id hash with replacement required, deletes all target dashboard sessions, and permanently revokes all unrevoked gateway API keys. Previously revoked keys retain their timestamps. The transaction coordinates with login, password replacement, key issuance and role/status management; failures roll back all these recovery changes. Other users' credentials are unaffected. Already admitted requests may finish.
+
+Recovery never changes setup consumption or enables bootstrap MCP authentication. Unlike ordinary administrator password reset, recovery restores role/status **and permanently revokes all existing API keys**. After recovery, log in with the temporary password, complete [mandatory password replacement](dashboard-sessions.md), log in again, and issue a fresh API key. Existing keys remain unusable after replacement. Old passwords and sessions remain invalid.
+
+A connection loss at commit can report failure after a successful recovery. Inspect the target's state using authorized database tooling before retrying; another successful recovery invalidates any credentials obtained since the previous run. Do not delete setup state or database records as a recovery shortcut.
 
 ## Startup, runtime health, and shutdown
 
