@@ -240,7 +240,6 @@ export class UpstreamRegistry {
     name: string,
     reason = "Upstream request failed",
     failedClient?: Client,
-    failedGeneration?: number,
   ): Promise<void> {
     await this.runMaintenance(name, async () => {
       const state = this.upstreams.get(name);
@@ -249,7 +248,8 @@ export class UpstreamRegistry {
         return;
       }
 
-      if (failedGeneration !== undefined && state.generation !== failedGeneration) return;
+      // Catalog refresh keeps the transport: its failures still matter. Only a
+      // replacement client makes an in-flight transport failure obsolete.
       if (failedClient && state.client !== failedClient) {
         return;
       }

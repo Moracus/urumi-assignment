@@ -99,7 +99,6 @@ export class McpUpstreamInvoker
           ? "Tool request timed out"
           : "MCP request failed",
         client,
-        upstream.generation,
       );
 
       if (timedOut) {
@@ -131,7 +130,6 @@ export class McpUpstreamInvoker
         tool.upstreamName,
         "Invalid MCP response",
         client,
-        upstream.generation,
       );
 
       throw new UpstreamCallError(

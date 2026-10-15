@@ -972,7 +972,7 @@ test("executeTool rejects a mapping from an older generation and ignores its lat
   assert.ok(old);
   const previousClient = registry.getClient("extra")!;
   await registry.connect("extra");
-  await registry.markUnreachable("extra", "Late failure", previousClient, old.generation);
+  await registry.markUnreachable("extra", "Late failure", previousClient);
   assert.equal(registry.getState("extra")?.status, "connected");
   const records: AuditRecord[] = [];
   const dependencies = { resolver: { async resolve() { return old; } }, invoker: new McpUpstreamInvoker(registry),
@@ -1010,4 +1010,20 @@ test("duplicate discovered names cannot publish a partial catalog or disrupt hea
   assert.equal(response.json().server.toolCount, 0);
   assert.deepEqual((await client.listTools(undefined, { cacheMode: "bypass" })).tools.map(tool => tool.name), ["calculator.calculate"]);
   assert.deepEqual((await client.callTool({ name: "calculator.calculate", arguments: { a: 6, b: 7 } })).content, [{ type: "text", text: "42" }]);
+});
+
+test("a transport failure from the current client remains effective after a successful catalog refresh", async (t) => {
+  const { UpstreamRegistry } = await import("./upstream/registry.js");
+  const { DestinationPolicy } = await import("./upstream/destination-policy.js");
+  const extra = await calculatorUpstream(t);
+  const registry = new UpstreamRegistry(new DestinationPolicy({ allowLoopback: true,
+    rules: [{ origin: new URL(extra.config.url).origin, cidrs: ["127.0.0.1/32"] }] }));
+  t.after(() => registry.close());
+  registry.register(extra.config);
+  await registry.connect(extra.config.name);
+  const client = registry.getClient(extra.config.name)!;
+  await registry.refreshAll();
+  await registry.markUnreachable(extra.config.name, "MCP request failed", client);
+  assert.equal(registry.getState(extra.config.name)?.status, "unreachable");
+  assert.equal(registry.getClient(extra.config.name), null);
 });
