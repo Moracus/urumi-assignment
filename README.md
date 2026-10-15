@@ -19,7 +19,7 @@ This document describes the current repository implementation. Deployment checks
 - Dockerfiles for the gateway and upstream services; Helm Deployments, ClusterIP Services, health probes, resource settings, and persistent volumes for WordPress and MariaDB.
 - Gateway `/mcp` and storefront `/` Ingress routes, plus ingress restrictions between platform components.
 
-The React dashboard is a scaffold. Administrator member creation, listing, and inspection are available through the [backend API](docs/dashboard-sessions.md#create-and-inspect-members-6). Eligible users can [manage their personal gateway API keys](docs/api-keys.md), with one-time disclosure, safe metadata, and revocation. Account lifecycle changes, administrator key management, audit browsing, server management, and chat remain later work.
+The React dashboard is a scaffold. Administrator member creation, listing, and inspection are available through the [backend API](docs/dashboard-sessions.md#create-and-inspect-members-6). Eligible users can [manage their personal gateway API keys](docs/api-keys.md), with one-time disclosure, safe metadata, and revocation. Administrators can also [manage another user’s keys](docs/api-keys.md#administrator-assistance-9). Account lifecycle changes, audit browsing, server management, and chat remain later work.
 
 ## Architecture
 
@@ -281,7 +281,7 @@ Verify network isolation using ordinary test Pods: unrelated Pods should be deni
 
 ## Current limitations
 
-- MCP uses individually revocable hashed API keys with per-request eligibility/role lookup. Users, one-time CLI setup, independent eight-hour dashboard sessions, shared login throttling, and key metadata are persisted. Administrator key management, account lifecycle management, and operator recovery remain later tickets.
+- MCP uses individually revocable hashed API keys with per-request eligibility/role lookup. Users, one-time CLI setup, independent eight-hour dashboard sessions, shared login throttling, and key metadata are persisted. Administrator key management is available through session-protected APIs; account lifecycle management and operator recovery remain later tickets.
 - Registry, discovery cache, and connections are in memory. No registry CRUD API or persisted upstream configuration.
 - Audits are console records, with no durable audit database, queue, query API, or dashboard. Authentication failures and SDK-level validation failures do not necessarily reach the execution audit boundary.
 - NetworkPolicies cover ingress only. They do not restrict egress and require an enforcing network plugin. Controller namespace and workload-label selectors are broader than cryptographic service identity.

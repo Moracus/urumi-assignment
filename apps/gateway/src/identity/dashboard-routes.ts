@@ -107,11 +107,18 @@ export async function registerDashboardRoutes(app: FastifyInstance, storage: Ide
       admin.addHook("preHandler", async (request) => {
         const authenticated = await sessions.authenticate(credential(request));
         if (authenticated.user.role !== "admin") throw new DashboardAuthError(403, "Forbidden");
-        if (request.method === "POST") {
+        if (request.method !== "GET") {
           requireTrustedOrigin(request, config);
           requireCsrf(request, authenticated.csrfToken);
         }
       });
+      await registerApiKeyRoutes(admin, storage, async (request) => {
+        const parsed = z.object({ userId: z.string().regex(/^[a-fA-F0-9]{24}$/) }).safeParse(request.params);
+        if (!parsed.success) throw new DashboardAuthError(404, "User not found");
+        const user = await storage.users.findById(parsed.data.userId);
+        if (!user) throw new DashboardAuthError(404, "User not found");
+        return user._id.toHexString();
+      }, "/api/admin/users/:userId/keys");
       admin.post("/api/admin/users", { bodyLimit: 4096 }, async (request, reply) => {
         if (!/^application\/json(?:\s*;.*)?$/i.test(request.headers["content-type"] ?? "")) throw new DashboardAuthError(415, "Invalid request");
         const parsed = z.strictObject({

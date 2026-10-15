@@ -9,8 +9,9 @@ export async function registerApiKeyRoutes(
   app: FastifyInstance,
   storage: IdentityStorage,
   authenticate: (request: FastifyRequest) => Promise<string>,
+  path = "/api/keys",
 ) {
-  app.post("/api/keys", { bodyLimit: 4096 }, async (request, reply) => {
+  app.post(path, { bodyLimit: 4096 }, async (request, reply) => {
     const userId = await authenticate(request);
     if (!z.strictObject({}).safeParse(request.query).success) throw new DashboardAuthError(400, "Invalid request");
     if (!/^application\/json(?:\s*;.*)?$/i.test(request.headers["content-type"] ?? "")) throw new DashboardAuthError(415, "Invalid request");
@@ -18,7 +19,7 @@ export async function registerApiKeyRoutes(
     if (!parsed.success) throw new DashboardAuthError(400, "Invalid request");
     return reply.code(201).send(await issueApiKey(storage, userId, parsed.data.name));
   });
-  app.get("/api/keys", async (request) => {
+  app.get(path, async (request) => {
     const userId = await authenticate(request);
     const parsed = paginationInput.safeParse(request.query);
     if (!parsed.success) throw new DashboardAuthError(400, "Invalid request");
@@ -26,13 +27,13 @@ export async function registerApiKeyRoutes(
     const keys = await storage.apiKeys.find({ userId }).sort({ _id: 1 }).skip((page - 1) * limit).limit(limit);
     return { keys: keys.map(safeApiKey), page, limit };
   });
-  app.delete("/api/keys/:keyId", { bodyLimit: 4096 }, async (request, reply) => {
+  app.delete(`${path}/:keyId`, { bodyLimit: 4096 }, async (request, reply) => {
     const userId = await authenticate(request);
     if (!z.strictObject({}).safeParse(request.query).success
       || (request.body !== undefined && !z.strictObject({}).safeParse(request.body).success)) {
       throw new DashboardAuthError(400, "Invalid request");
     }
-    const parsed = z.strictObject({ keyId: z.string().regex(/^[a-fA-F0-9]{24}$/) }).safeParse(request.params);
+    const parsed = z.object({ keyId: z.string().regex(/^[a-fA-F0-9]{24}$/) }).safeParse(request.params);
     if (!parsed.success) throw new DashboardAuthError(404, "Key not found");
     await revokeApiKey(storage, userId, parsed.data.keyId);
     return reply.code(204).send();

@@ -52,6 +52,124 @@ async function fixture(t: TestContext) {
 
 const metadataFields = ["createdAt", "id", "lastUsedAt", "name", "prefix", "revokedAt"];
 
+test("administrator issues another user's key once, lists safe metadata, and revokes it idempotently", async (t) => {
+  const f = await fixture(t);
+  const headers = await f.login("other@example.com");
+  const ownerHeaders = await f.login();
+  const url = `/api/admin/users/${f.userId}/keys`;
+  const created = await f.app.inject({ method: "POST", url, headers, payload: { name: "Assisted client" } });
+  assert.equal(created.statusCode, 201, created.body);
+  assert.equal(created.headers["cache-control"], "no-store");
+  const { key, rawKey } = created.json();
+  assert.deepEqual(Object.keys(created.json()).sort(), ["key", "rawKey"]);
+  assert.deepEqual(Object.keys(key).sort(), metadataFields);
+  assert.match(rawKey, /^ugw_[A-Za-z0-9_-]{43}$/);
+  const stored = await f.db.collection("api_keys").findOne({ _id: new mongoose.Types.ObjectId(key.id) });
+  assert.ok(stored);
+  assert.equal(stored.userId.toString(), f.userId.toString());
+  assert.equal(stored.keyHash, createHash("sha256").update(rawKey).digest("hex"));
+  assert.ok(!JSON.stringify(stored).includes(rawKey));
+  await f.restart();
+  for (const [listUrl, listHeaders] of [[url, headers], ["/api/keys", ownerHeaders]] as const) {
+    const listed = await f.app.inject({ url: listUrl, headers: listHeaders });
+    assert.equal(listed.statusCode, 200, listed.body);
+    assert.equal(listed.headers["cache-control"], "no-store");
+    assert.deepEqual(listed.json(), { keys: [key], page: 1, limit: 20 });
+    assert.ok(!listed.body.includes(rawKey));
+    assert.ok(!listed.body.includes(stored.keyHash));
+  }
+  const revoke = () => f.app.inject({ method: "DELETE", url: `${url}/${key.id}`, headers });
+  assert.equal((await revoke()).statusCode, 204);
+  const first = await f.app.inject({ url, headers });
+  const revoked = first.json().keys[0];
+  assert.ok(Number.isFinite(Date.parse(revoked.revokedAt)));
+  assert.equal((await revoke()).statusCode, 204);
+  assert.deepEqual((await f.app.inject({ url, headers })).json().keys, [revoked]);
+  assert.equal(await f.db.collection("api_keys").countDocuments(), 1);
+});
+
+test("administrator key routes enforce current session eligibility, role, Origin and CSRF", async (t) => {
+  const f = await fixture(t);
+  const headers = await f.login("other@example.com");
+  const second = await f.login("other@example.com");
+  const member = await f.login();
+  const url = `/api/admin/users/${f.userId}/keys`;
+  const created = await f.app.inject({ method: "POST", url, headers, payload: {} });
+  assert.equal(created.statusCode, 201, created.body);
+  const { key, rawKey } = created.json();
+  const requests = [
+    { method: "GET" as const, url },
+    { method: "POST" as const, url, payload: {} },
+    { method: "DELETE" as const, url: `${url}/${key.id}` },
+  ];
+  for (const [authHeaders, status] of [
+    [{ origin }, 401], [{ origin, authorization: `Bearer ${rawKey}` }, 401], [member, 403],
+  ] as const) {
+    for (const request of requests) {
+      const response = await f.app.inject({ ...request, headers: authHeaders });
+      assert.equal(response.statusCode, status, response.body);
+    }
+  }
+  for (const denied of [
+    { cookie: headers.cookie, origin },
+    { cookie: headers.cookie, "x-csrf-token": headers["x-csrf-token"] },
+    { ...headers, origin: "http://localhost:3001" },
+    { ...headers, "x-csrf-token": second["x-csrf-token"] },
+    { ...headers, "x-csrf-token": "invalid" },
+  ]) {
+    for (const request of requests.filter((request) => request.method !== "GET")) {
+      const response = await f.app.inject({ ...request, headers: denied });
+      assert.equal(response.statusCode, 403, response.body);
+    }
+  }
+  for (const [changes, status] of [
+    [{ role: "member" }, 403],
+    [{ role: "admin", requiredPasswordChange: true }, 403],
+    [{ requiredPasswordChange: false, status: "disabled" }, 401],
+  ] as const) {
+    await f.db.collection("users").updateOne({ email: "other@example.com" }, { $set: changes });
+    for (const request of requests) {
+      const response = await f.app.inject({ ...request, headers });
+      assert.equal(response.statusCode, status, response.body);
+    }
+  }
+  assert.equal(await f.db.collection("api_keys").countDocuments(), 1);
+  assert.equal((await f.db.collection("api_keys").findOne())?.revokedAt, null);
+});
+
+test("administrator key operations check route ownership and reject issuance to ineligible owners", async (t) => {
+  const f = await fixture(t);
+  const headers = await f.login("other@example.com");
+  const admin = await f.db.collection("users").findOne({ email: "other@example.com" });
+  assert.ok(admin);
+  const own = await f.app.inject({ method: "POST", url: "/api/keys", headers, payload: {} });
+  assert.equal(own.statusCode, 201);
+  const url = `/api/admin/users/${f.userId}/keys`;
+  for (const keyId of [own.json().key.id, "000000000000000000000000", "invalid"]) {
+    const response = await f.app.inject({ method: "DELETE", url: `${url}/${keyId}`, headers });
+    assert.equal(response.statusCode, 404, response.body);
+    assert.deepEqual(response.json(), { error: "Key not found" });
+  }
+  assert.equal((await f.app.inject({ url: "/api/keys", headers })).json().keys[0].revokedAt, null);
+  for (const userId of ["000000000000000000000000", "invalid"]) {
+    for (const request of [
+      { method: "GET" as const, url: `/api/admin/users/${userId}/keys` },
+      { method: "POST" as const, url: `/api/admin/users/${userId}/keys`, payload: {} },
+      { method: "DELETE" as const, url: `/api/admin/users/${userId}/keys/${own.json().key.id}` },
+    ]) {
+      assert.equal((await f.app.inject({ ...request, headers })).statusCode, 404);
+    }
+  }
+  for (const changes of [{ requiredPasswordChange: true }, { requiredPasswordChange: false, status: "disabled" }]) {
+    await f.db.collection("users").updateOne({ _id: f.userId }, { $set: changes });
+    const response = await f.app.inject({ method: "POST", url, headers, payload: {} });
+    assert.equal(response.statusCode, 403, response.body);
+    assert.deepEqual(response.json(), { error: "Forbidden" });
+  }
+  assert.equal(await f.db.collection("api_keys").countDocuments(), 1);
+  assert.equal((await f.db.collection("api_keys").findOne())?.revokedAt, null);
+});
+
 test("member receives a gateway key once and only safe metadata survives storage and restart", async (t) => {
   const f = await fixture(t);
   const headers = await f.login();
@@ -123,36 +241,40 @@ test("revocation is owner-scoped, retains metadata, and is idempotent", async (t
   assert.ok(!listed.body.includes(rawKey));
 });
 
-test("key lists paginate safe metadata with strict bounded query inputs", async (t) => {
-  const f = await fixture(t);
-  const headers = await f.login();
-  const keys = [];
-  for (const name of ["First", "Second", "Third"]) {
-    const response = await f.app.inject({ method: "POST", url: "/api/keys", headers, payload: { name } });
-    assert.equal(response.statusCode, 201, response.body);
-    keys.push(response.json().key);
-  }
-  const pages = [];
-  for (let page = 1; page <= 4; page++) {
-    const response = await f.app.inject({ url: `/api/keys?page=${page}&limit=1`, headers });
-    assert.equal(response.statusCode, 200, response.body);
-    assert.equal(response.json().page, page);
-    assert.equal(response.json().limit, 1);
-    pages.push(...response.json().keys);
-  }
-  assert.deepEqual(pages, keys);
-  assert.equal((await f.app.inject({ url: "/api/keys?limit=100", headers })).statusCode, 200);
-  for (const query of ["limit=101", "limit=0", "limit=-1", "limit=1.5", "limit=", "limit=abc",
-    "page=0", "page=1.5", "page=9007199254740991", "userId=someone", "limit=1&limit=2"]) {
-    const response = await f.app.inject({ url: `/api/keys?${query}`, headers });
-    assert.equal(response.statusCode, 400, query);
-    assert.deepEqual(response.json(), { error: "Invalid request" });
-  }
-});
+for (const scope of ["self", "admin"] as const) {
+  test(`key lists paginate safe metadata with strict bounded query inputs (${scope})`, async (t) => {
+    const f = await fixture(t);
+    const headers = await f.login(scope === "admin" ? "other@example.com" : undefined);
+    const url = scope === "admin" ? `/api/admin/users/${f.userId}/keys` : "/api/keys";
+    const keys = [];
+    for (const name of ["First", "Second", "Third"]) {
+      const response = await f.app.inject({ method: "POST", url, headers, payload: { name } });
+      assert.equal(response.statusCode, 201, response.body);
+      keys.push(response.json().key);
+    }
+    const pages = [];
+    for (let page = 1; page <= 4; page++) {
+      const response = await f.app.inject({ url: `${url}?page=${page}&limit=1`, headers });
+      assert.equal(response.statusCode, 200, response.body);
+      assert.equal(response.json().page, page);
+      assert.equal(response.json().limit, 1);
+      pages.push(...response.json().keys);
+    }
+    assert.deepEqual(pages, keys);
+    assert.equal((await f.app.inject({ url: `${url}?limit=100`, headers })).statusCode, 200);
+    for (const query of ["limit=101", "limit=0", "limit=-1", "limit=1.5", "limit=", "limit=abc",
+      "page=0", "page=1.5", "page=9007199254740991", "userId=someone", "limit=1&limit=2"]) {
+      const response = await f.app.inject({ url: `${url}?${query}`, headers });
+      assert.equal(response.statusCode, 400, query);
+      assert.deepEqual(response.json(), { error: "Invalid request" });
+    }
+  });
+}
 
 test("concurrent issuance across gateways cannot exceed twenty active keys and revocation frees a slot", async (t) => {
   const f = await fixture(t);
   const headers = await f.login();
+  const adminHeaders = await f.login("other@example.com");
   for (let index = 0; index < 19; index++) {
     const response = await f.app.inject({ method: "POST", url: "/api/keys", headers, payload: {} });
     assert.equal(response.statusCode, 201, response.body);
@@ -160,7 +282,9 @@ test("concurrent issuance across gateways cannot exceed twenty active keys and r
   const other = await createGatewayApp({ mongodbUri: f.uri, upstreams: [] });
   t.after(() => other.close());
   const results = await Promise.all(Array.from({ length: 8 }, (_, index) =>
-    (index % 2 ? other : f.app).inject({ method: "POST", url: "/api/keys", headers, payload: {} })));
+    (index % 2 ? other : f.app).inject({ method: "POST",
+      url: index % 2 ? `/api/admin/users/${f.userId}/keys` : "/api/keys",
+      headers: index % 2 ? adminHeaders : headers, payload: {} })));
   assert.equal(results.filter((response) => response.statusCode === 201).length, 1);
   for (const response of results.filter((response) => response.statusCode !== 201)) {
     assert.equal(response.statusCode, 409, response.body);
@@ -178,41 +302,44 @@ test("concurrent issuance across gateways cannot exceed twenty active keys and r
   assert.equal(after.json().keys.filter((key: { revokedAt: string | null }) => key.revokedAt === null).length, 20);
 });
 
-test("key mutations reject unknown inputs and invalid names without issuing or revoking", async (t) => {
-  const f = await fixture(t);
-  const headers = await f.login();
-  for (const payload of [{ name: "x".repeat(101) }, { name: 123 }, { name: null },
-    { userId: String(f.userId) }, { role: "admin" }, { keyHash: "hash" }, { revokedAt: null },
-    { prefix: "ugw_custom" }, { unexpected: true }, null, []]) {
-    const response = await f.app.inject({ method: "POST", url: "/api/keys",
-      headers: { ...headers, "content-type": "application/json" }, payload: JSON.stringify(payload) });
-    assert.equal(response.statusCode, 400, response.body);
-    assert.deepEqual(response.json(), { error: "Invalid request" });
-  }
-  for (const [contentType, payload, status] of [
-    ["application/json", "{invalid", 400], ["text/plain", "invalid", 415], ["application/json", "x".repeat(5000), 413],
-  ] as const) {
-    const response = await f.app.inject({ method: "POST", url: "/api/keys",
-      headers: { ...headers, "content-type": contentType }, payload });
-    assert.equal(response.statusCode, status, response.body);
-    assert.deepEqual(response.json(), { error: "Invalid request" });
-  }
-  const query = await f.app.inject({ method: "POST", url: "/api/keys?userId=other", headers, payload: {} });
-  assert.equal(query.statusCode, 400, query.body);
-  assert.deepEqual((await f.app.inject({ url: "/api/keys", headers })).json().keys, []);
-  const created = await f.app.inject({ method: "POST", url: "/api/keys", headers, payload: { name: "x".repeat(100) } });
-  assert.equal(created.statusCode, 201, created.body);
-  const keyId = created.json().key.id;
-  for (const request of [
-    { url: `/api/keys/${keyId}`, payload: { userId: "other" } },
-    { url: `/api/keys/${keyId}?userId=other` },
-  ]) {
-    const response = await f.app.inject({ method: "DELETE", headers, ...request });
-    assert.equal(response.statusCode, 400, response.body);
-    assert.deepEqual(response.json(), { error: "Invalid request" });
-  }
-  assert.equal((await f.app.inject({ url: "/api/keys", headers })).json().keys[0].revokedAt, null);
-});
+for (const scope of ["self", "admin"] as const) {
+  test(`key mutations reject unknown inputs and invalid names without issuing or revoking (${scope})`, async (t) => {
+    const f = await fixture(t);
+    const headers = await f.login(scope === "admin" ? "other@example.com" : undefined);
+    const url = scope === "admin" ? `/api/admin/users/${f.userId}/keys` : "/api/keys";
+    for (const payload of [{ name: "x".repeat(101) }, { name: 123 }, { name: null },
+      { userId: String(f.userId) }, { role: "admin" }, { keyHash: "hash" }, { revokedAt: null },
+      { prefix: "ugw_custom" }, { unexpected: true }, null, []]) {
+      const response = await f.app.inject({ method: "POST", url,
+        headers: { ...headers, "content-type": "application/json" }, payload: JSON.stringify(payload) });
+      assert.equal(response.statusCode, 400, response.body);
+      assert.deepEqual(response.json(), { error: "Invalid request" });
+    }
+    for (const [contentType, payload, status] of [
+      ["application/json", "{invalid", 400], ["text/plain", "invalid", 415], ["application/json", "x".repeat(5000), 413],
+    ] as const) {
+      const response = await f.app.inject({ method: "POST", url,
+        headers: { ...headers, "content-type": contentType }, payload });
+      assert.equal(response.statusCode, status, response.body);
+      assert.deepEqual(response.json(), { error: "Invalid request" });
+    }
+    const query = await f.app.inject({ method: "POST", url: `${url}?userId=other`, headers, payload: {} });
+    assert.equal(query.statusCode, 400, query.body);
+    assert.deepEqual((await f.app.inject({ url, headers })).json().keys, []);
+    const created = await f.app.inject({ method: "POST", url, headers, payload: { name: "x".repeat(100) } });
+    assert.equal(created.statusCode, 201, created.body);
+    const keyId = created.json().key.id;
+    for (const request of [
+      { url: `${url}/${keyId}`, payload: { userId: "other" } },
+      { url: `${url}/${keyId}?userId=other` },
+    ]) {
+      const response = await f.app.inject({ method: "DELETE", headers, ...request });
+      assert.equal(response.statusCode, 400, response.body);
+      assert.deepEqual(response.json(), { error: "Invalid request" });
+    }
+    assert.equal((await f.app.inject({ url, headers })).json().keys[0].revokedAt, null);
+  });
+}
 
 test("key routes require eligible sessions and mutations require trusted Origin and session CSRF", async (t) => {
   const f = await fixture(t);
