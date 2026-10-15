@@ -18,7 +18,8 @@ Issue: Enforce and verify gateway egress restrictions.
 - `ruby infra/helm/urumi/test-secret-rbac.rb` passed for both environments and default/configured Secret approvals.
 - `node --check infra/helm/urumi/verify-gateway-egress.mjs` and `--help` passed.
 - `node --test infra/helm/urumi/verify-gateway-egress.test.mjs`: 4/4 passed. Cases cover complete matrix, failed controls/refused sockets, missing/forbidden Secrets, dependency failure, incomplete matrix and remote-payload suppression.
-- Full real-MongoDB integration runner started with `pnpm --filter @urumi/gateway test:integration`; final result will be recorded after completion.
+- `pnpm --filter @urumi/gateway test:integration` passed the full compiled application/execution/aggregation/identity suite against real isolated replica-set and standalone MongoDB: **132/132 passed**, zero failures/cancellations/skips. Disposable test containers/network were removed by the runner.
+- `git diff --check` passed.
 - No shared package/consumer changed, so workspace-wide checks are not applicable.
 
 ## Live inspection and skipped checks
@@ -32,3 +33,13 @@ The current cluster does not supply an enforcing CNI through this repository's c
 Follow [gateway egress configuration and verification](gateway-egress.md). Supply a reviewed overlay for real DNS/CNI behavior, all MongoDB members and exact API Service/backend addresses/ports. Provision the existing URI Secret and dedicated approved upstream Secrets separately. Configure both application and network approvals for additional upstreams; apply destination ingress policies too. Lint/render local/production plus the overlay, then use the existing Helm rollout procedure with one gateway replica and verify fresh connections.
 
 Default empty MongoDB/API approvals intentionally fail closed; values files are renderable examples, not complete deployments. Policies cannot restrict API HTTPS paths; the fixed TLS reader, application Secret allowlist and named get-only RBAC enforce that boundary. Additive policies, node exemptions, DNAT, mesh proxies, mutable DNS/labels/Services and connection tracking remain environment-specific limits. Preserve PVCs and data. The full MongoDB workload and final Brief 3 integration remain outside this issue.
+
+## Standards
+
+No findings. The independent review found no documented-standard violations or actionable baseline smells. A follow-up review of the strengthened Service/Pod/Ingress/PVC assertions and completed validation notes also found no issues.
+
+## Spec
+
+One partial requirement: the enforcing-CNI live connectivity and approved/denied Secret GET matrix remains outstanding. The current cluster lacks the prerequisites; complete the documented procedure in an operator-provided enforcing environment before claiming full issue acceptance. No confirmed implementation defects or scope creep were found. A follow-up review confirmed stronger exposure/storage coverage and the 132/132 integration result, with no new findings.
+
+Review baseline: user-selected starting commit `2ecfd69b87706e555aa17842c976bdbd6dec5a00`; implementation commit `d2585b5`, followed by read-only review of the regression/notes follow-up. Standards: 0 findings; Spec: 1 outstanding live-validation requirement. The implementation is committed; deployment and live enforcement acceptance remain pending.

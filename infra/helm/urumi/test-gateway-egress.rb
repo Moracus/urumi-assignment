@@ -64,6 +64,26 @@ end
   check(unaffected.call(docs) == unaffected.call(configured), 'Egress configuration must not alter other resources')
   services = docs.select { |d| d['kind'] == 'Service' }
   check(services.size == 6 && services.all? { |d| d.dig('spec', 'type') == 'ClusterIP' }, 'All services must remain internal')
+  {'urumi-gateway' => 3000, 'urumi-woocommerce-mcp' => 3001, 'urumi-calculator-mcp' => 3002,
+   'urumi-time-mcp' => 3003, 'urumi-wordpress' => 80, 'urumi-mariadb' => 3306}.each do |name, port|
+    service = services.find { |d| d.dig('metadata', 'name') == name }
+    check(service && service.dig('spec', 'selector') == {'app' => name}, 'Service selector must remain stable')
+    check(service.dig('spec', 'ports').map { |p| p['port'] } == [port], 'Established Service port must remain stable')
+    deployment = docs.find { |d| d['kind'] == 'Deployment' && d.dig('metadata', 'name') == name }
+    check(deployment.dig('spec', 'template', 'metadata', 'labels', 'app') == name, 'Pod labels must match policy selectors')
+  end
+  {'urumi-gateway' => ['/mcp', 'Exact', 3000], 'urumi-wordpress' => ['/', 'Prefix', 80]}.each do |name, route|
+    ingress = docs.find { |d| d['kind'] == 'Ingress' && d.dig('metadata', 'name') == name }
+    paths = ingress.dig('spec', 'rules', 0, 'http', 'paths')
+    check(paths.size == 1 && [paths[0]['path'], paths[0]['pathType'], paths[0].dig('backend', 'service', 'port', 'number')] == route, 'Existing Ingress routing must remain stable')
+    check(paths[0].dig('backend', 'service', 'name') == name, 'Ingress backend must remain stable')
+  end
+  docs.select { |d| d['kind'] == 'PersistentVolumeClaim' }.each do |pvc|
+    check(pvc['spec'] == {'accessModes' => ['ReadWriteOnce'], 'storageClassName' => environment == 'local' ? 'standard' : 'local-path', 'resources' => {'requests' => {'storage' => '5Gi'}}}, 'Persistent storage specification must remain stable')
+    name = pvc.dig('metadata', 'name').delete_suffix('-pvc')
+    deployment = docs.find { |d| d['kind'] == 'Deployment' && d.dig('metadata', 'name') == name }
+    check(deployment.dig('spec', 'template', 'spec', 'volumes').any? { |v| v.dig('persistentVolumeClaim', 'claimName') == pvc.dig('metadata', 'name') }, 'Deployment must retain persistent storage')
+  end
   check(docs.select { |d| d['kind'] == 'Ingress' }.map { |d| d.dig('metadata', 'name') }.sort == ['urumi-gateway', 'urumi-wordpress'], 'Only existing public Ingress resources allowed')
   check(docs.select { |d| d['kind'] == 'PersistentVolumeClaim' }.map { |d| d.dig('metadata', 'name') }.sort == ['urumi-mariadb-pvc', 'urumi-wordpress-pvc'], 'Persistent volumes must remain')
   check(render(environment, {'gateway.enabled' => false}).none? { |d| d.dig('metadata', 'name') == 'urumi-gateway-egress' }, 'Disabled gateway must omit policy')
