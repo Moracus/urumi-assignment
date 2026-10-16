@@ -17,3 +17,11 @@ a[aria-current] { font-weight: bold; }
 [role=alert] { color: #9d2020; }
 [role=status] { padding: 12px; background: #edf2fa; }
 @media (max-width: 600px) { main { margin: 0; padding: 20px; } }
+.table-scroll, pre { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { padding: 10px; border-bottom: 1px solid #d7dce5; text-align: left; }
+pre { padding: 16px; background: #edf2fa; }
+.pagination { display: flex; align-items: center; gap: 12px; margin-top: 16px; }
+[aria-label="One-time key creation"], [role="dialog"] { padding: 16px; border: 1px solid #8795aa; margin: 16px 0; }
+[aria-label="One-time key creation"] input { font-family: monospace; }
+section button + button { margin-left: 8px; }

@@ -1,3 +1,4 @@
+import { createRequire } from 'node:module';
 import { randomUUID, createHash } from 'node:crypto';
 import { createServer } from 'vite';
 import { createGatewayApp } from '../../gateway/dist/app.js';
@@ -14,12 +15,43 @@ await initializeAdministrator(storage, {
   email: 'admin@example.com', password: 'browser administrator password',
   suppliedSecret: 'test-only', configuredSecret: 'test-only',
 });
-const gateway = await createGatewayApp({ mongodbUri: uri.toString(), upstreams: [] });
+// Resolve controlled-upstream dependencies from the gateway workspace that owns them.
+const requireGateway = createRequire(new URL('../../gateway/package.json', import.meta.url));
+const { createMcpFastifyApp } = requireGateway('@modelcontextprotocol/fastify');
+const { toNodeHandler } = requireGateway('@modelcontextprotocol/node');
+const { createMcpHandler, McpServer } = requireGateway('@modelcontextprotocol/server');
+const { z } = requireGateway('zod/v4');
+const upstream = createMcpFastifyApp({ host: '127.0.0.1' });
+const handler = createMcpHandler(() => {
+  const server = new McpServer({ name: 'browser-controlled', version: '1' });
+  server.registerTool('calculate', { inputSchema: z.object({ operation: z.literal('multiply'), a: z.number(), b: z.number() }) },
+    async ({ a, b }) => ({ content: [{ type: 'text', text: String(a * b) }] }));
+  server.registerTool('current', { inputSchema: z.object({ timezone: z.string() }) },
+    async () => ({ content: [{ type: 'text', text: '2026-10-16T00:00:00Z' }] }));
+  server.registerTool('list_products', {}, async () => ({ content: [{ type: 'text', text: 'Controlled product' }] }));
+  for (const name of ['create_product', 'update_order_status']) {
+    server.registerTool(name, {}, async () => ({ content: [{ type: 'text', text: 'WRITE WAS INVOKED' }] }));
+  }
+  return server;
+});
+const nodeHandler = toNodeHandler(handler);
+upstream.all('/mcp/:namespace', (request, reply) => nodeHandler(request.raw, reply.raw, request.body));
+upstream.addHook('onClose', () => handler.close());
+const upstreamAddress = await upstream.listen({ host: '127.0.0.1', port: 0 });
+const gateway = await createGatewayApp({ mongodbUri: uri.toString(),
+  upstreams: ['calculator', 'time', 'woocommerce'].map(name => ({ name, url: `${upstreamAddress}/mcp/${name}`, enabled: true })),
+  destinations: { allowLoopback: true, rules: [{ origin: upstreamAddress, cidrs: ['127.0.0.1/32'] }] },
+});
 await gateway.listen({ host: '127.0.0.1', port: 3009 });
 const vite = await createServer({
+  define: { 'import.meta.env.VITE_PUBLIC_MCP_URL': JSON.stringify('http://localhost:5174/mcp') },
   // Test arrangement only; this middleware is absent from production Vite config.
   plugins: [{ name: 'expire-test-session', configureServer(server) {
     server.middlewares.use(async (request, response, next) => {
+      if (request.url === '/api/__test/reset-login-budget' && request.method === 'POST') {
+        await storage.loginThrottles.deleteMany({});
+        response.statusCode = 204; response.end(); return;
+      }
       if (request.url !== '/api/__test/expire-session' || request.method !== 'POST') return next();
       const cookie = (request.headers.cookie ?? '').split(';').map(value => value.trim())
         .find(value => value.startsWith('urumi_dashboard='))?.slice('urumi_dashboard='.length);
@@ -41,6 +73,7 @@ async function close() {
   closing = true;
   await vite.close();
   await gateway.close();
+  await upstream.close();
   await storage.connection.dropDatabase();
   await storage.close();
   process.exit(0);

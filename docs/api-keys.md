@@ -2,7 +2,7 @@
 
 Eligible members and administrators can issue, list, and revoke their own keys using a dashboard session. All operations derive ownership from the authenticated session; bearer credentials cannot authenticate these endpoints. Disabled users receive `401 Unauthorized`; users awaiting password replacement receive `403 Password change required`. Complete [password replacement and fresh login](dashboard-sessions.md#replace-a-password) first when required.
 
-Keys now authenticate external clients at `/mcp` with current eligibility and roles checked on every request; successful authentication advances `lastUsedAt`. See [read-only MCP requests and revocation](mcp-authentication.md). Administrators can also manage other users' keys through the endpoints below. [Account disabling](dashboard-sessions.md#disable-and-re-enable-users-11) permanently revokes existing keys; re-enabling requires new keys. The React dashboard belongs to a later ticket. The chart exposes only `/mcp`; use direct local access for `/api` until the public API rollout is implemented.
+Keys now authenticate external clients at `/mcp` with current eligibility and roles checked on every request; successful authentication advances `lastUsedAt`. See [read-only MCP requests and revocation](mcp-authentication.md). Administrators can also manage other users' keys through the endpoints below. [Account disabling](dashboard-sessions.md#disable-and-re-enable-users-11) permanently revokes existing keys; re-enabling requires new keys. The [React personal-key dashboard](#personal-key-dashboard-26) supports these self-service operations. The chart exposes only `/mcp`; use direct local access for `/api` until the public API rollout is implemented.
 
 | Endpoint | Request | Successful response |
 | --- | --- | --- |
@@ -100,3 +100,27 @@ rm "$session_dir/admin-created-key.json"
 ## Validation and deployment
 
 Run `pnpm typecheck`, `pnpm build`, and `pnpm --filter @urumi/gateway test:integration`. The integration runner includes real replica-set HTTP tests for disclosure/storage/log safety, ownership, eligibility, CSRF, strict inputs, pagination, idempotence, concurrent issuance, and outages. No dependencies, environment variables, Helm resources, or public routes change. Restart the gateway with its existing transaction-capable MongoDB configuration; startup creates the key collection/indexes. Full Kubernetes/API routing remains unimplemented.
+
+## Personal-key dashboard (#26)
+
+After login and any required password replacement, open **API keys** (`/keys`). Both roles can browse only their own safe metadata, ten records per page, including revoked records. Use Previous/Next page and Refresh metadata to fetch authoritative state; loading, empty, safe error and retry states are explicit. A full final page may be followed by an empty page because the API does not return totals.
+
+Enter a name (1–100 characters) and select Create key. Save the raw credential from the creation view before dismissing it; existing credentials cannot be recovered. Copy key reports clipboard success or failure and supports manual selection. The dashboard retains the raw value only in transient component state, clearing it on dismissal, page exit, reload, account/session changes, and successful logout. Clipboard content deliberately copied by the user is outside that state and is not erased. Passwords, CSRF tokens and keys never enter browser storage, URLs or management Authorization headers. A creation failure is never retried automatically: inspect refreshed metadata and revoke an unwanted record before issuing another credential because the server may have committed issuance.
+
+Revocation opens an explicit confirmation with Cancel. While pending, controls prevent duplicate actions. Success refetches metadata and retains the revoked record and timestamp. The dashboard session continues; the next request of an already-connected MCP client receives 401. Requests already admitted may finish.
+
+### Public URL and demonstrated client
+
+Set `VITE_PUBLIC_MCP_URL` to the externally reachable gateway `/mcp` URL when starting Vite or building the dashboard, for example:
+
+```bash
+VITE_PUBLIC_MCP_URL=http://gateway.localhost:8080/mcp pnpm --filter @urumi/dashboard dev
+# Or bake the public URL into a static build:
+VITE_PUBLIC_MCP_URL=https://gateway.example.com/mcp pnpm --filter @urumi/dashboard build
+```
+
+This is public, build-time configuration. Never put credentials or internal upstream URLs in it. An absent/invalid URL displays an operator configuration message; the dashboard does not infer the gateway from its own origin because the MCP Ingress may use a separate hostname. No Helm/dashboard deployment is added by #26; configure this variable in the future dashboard image build. Existing local gateway MongoDB, trusted-Origin and HTTP settings are described in [dashboard setup](dashboard-sessions.md#browser-dashboard-25).
+
+The connection panel shows the configured URL and a runnable Node.js ESM example using `@modelcontextprotocol/client` v2 `Client` and `StreamableHTTPClientTransport`, with `Authorization: Bearer <YOUR_GATEWAY_API_KEY>`. Install the SDK in the external client's project and replace the placeholder privately in memory. Do not commit or log credentials. The example lists permitted tools and calls `calculator.calculate` with multiplication of 6 and 7. The browser integration suite demonstrates the same SDK/transport with a browser-issued member key, permitted WooCommerce read, calculator and time calls, independent write-tool rejection, ownership rejection, and same-client 401 after browser revocation. Its upstreams are controlled MCP servers; it does not prove real WooCommerce connectivity or Kubernetes routing.
+
+Run the [browser integration commands](dashboard-sessions.md#browser-integration-tests) for authentication and key workflows. Target only this feature with `pnpm --filter @urumi/dashboard test:browser keys.spec.ts`. Controlled HTTP/clipboard failures supplement the real gateway and MongoDB fixture for loading, retry, pagination and clipboard branches. Gateway production code and public contracts are unchanged.

@@ -1,5 +1,6 @@
 import { useEffect, useState, useSyncExternalStore, type FormEvent } from 'react';
 import { api, type DashboardUser } from './api.js';
+import { PersonalKeys } from './keys.js';
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : 'The request failed. Try again.';
@@ -60,7 +61,7 @@ function ProtectedDashboard({ user, path }: { user: DashboardUser; path: string 
   const restricted = user.requiredPasswordChange;
   const adminPage = path.startsWith('/admin/');
   const allowed = !adminPage || user.role === 'admin';
-  const titles: Record<string, string> = { '/dashboard': 'Dashboard', '/admin/users': 'Users', '/admin/servers': 'Servers' };
+  const titles: Record<string, string> = { '/dashboard': 'Dashboard', '/keys': 'Personal API keys', '/admin/users': 'Users', '/admin/servers': 'Servers' };
   const title = restricted ? 'Replace your password' : !allowed ? 'Access denied' : titles[path] ?? 'Page not found';
   async function logout() {
     if (pending) return;
@@ -75,6 +76,7 @@ function ProtectedDashboard({ user, path }: { user: DashboardUser; path: string 
       <p>Current page: {title}</p>
       {!restricted && <div className="links">
         <a href="/dashboard" aria-current={path === '/dashboard' ? 'page' : undefined}>Dashboard</a>
+        <a href="/keys" aria-current={path === '/keys' ? 'page' : undefined}>API keys</a>
         {user.role === 'admin' && <>
           <a href="/admin/users" aria-current={path === '/admin/users' ? 'page' : undefined}>Users</a>
           <a href="/admin/servers" aria-current={path === '/admin/servers' ? 'page' : undefined}>Servers</a>
@@ -83,7 +85,7 @@ function ProtectedDashboard({ user, path }: { user: DashboardUser; path: string 
       <button onClick={logout} disabled={pending}>{pending ? 'Logging out…' : 'Log out'}</button>
     </nav>
     {error && <p role="alert">{error}</p>}
-    {restricted ? <PasswordReplacement /> : <section><h1>{title}</h1>
+    {restricted ? <PasswordReplacement /> : path === '/keys' ? <PersonalKeys /> : <section><h1>{title}</h1>
       {!allowed ? <p>Administrator access is required for this page.</p>
         : path === '/dashboard' ? <p>You are signed in to Urumi MCP Gateway.</p>
         : titles[path] ? <p>{title} management will be available in a subsequent dashboard update.</p>
