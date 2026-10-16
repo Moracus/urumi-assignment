@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { api, ApiError, type DashboardUser } from './api.js';
+import { UserKeys } from './keys.js';
 
 const pageSize = 10;
 function record(value: unknown): value is Record<string, unknown> {
@@ -89,6 +90,7 @@ function UserDetails({ id, close, changed }: { id: string; close: () => void; ch
       </div>}
       {pending && <p role="status">Updating user access…</p>}
       {actionError && <p role="alert">{actionError}</p>}{notice && <p role="status">{notice}</p>}
+      <fieldset disabled={pending} aria-label="User key management"><UserKeys owner={account} /></fieldset>
     </>}
   </section>;
 }

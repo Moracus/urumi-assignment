@@ -69,7 +69,7 @@ test('metadata loading, safe error/retry, empty pages and pagination', async ({ 
   const key = { id: '000000000000000000000001', name: 'Page one', prefix: 'ugw_prefix', createdAt: '2026-10-16T00:00:00Z', lastUsedAt: null, revokedAt: null };
   await page.route('**/api/keys?**', route => route.fulfill({ json: {
     keys: new URL(route.request().url()).searchParams.get('page') === '1'
-      ? Array.from({ length: 10 }, (_, index) => ({ ...key, id: String(index + 1).padStart(24, '0') })) : [], page: 1, limit: 10,
+      ? Array.from({ length: 10 }, (_, index) => ({ ...key, id: String(index + 1).padStart(24, '0') })) : [], page: Number(new URL(route.request().url()).searchParams.get('page')), limit: 10,
   } }));
   await page.getByRole('button', { name: 'Retry keys' }).click();
   await expect(page.getByRole('table')).toBeVisible();

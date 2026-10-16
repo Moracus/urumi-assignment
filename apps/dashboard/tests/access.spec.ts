@@ -102,8 +102,12 @@ test('promotion grants equal administrator authority and self-demotion clears ad
     await original.getByRole('button', { name: 'Promote to administrator', exact: true }).click();
     await expect(original.locator('dd').nth(2)).toHaveText('admin');
     const inspectSelf = promoted.getByRole('button', { name: `Inspect ${account.email}`, exact: true });
-    while (await inspectSelf.count() === 0) {
-      await promoted.getByRole('button', { name: 'Next page', exact: true }).click();
+    for (;;) {
+      await expect(promoted.getByRole('button', { name: 'Refresh users', exact: true })).toBeEnabled();
+      if (await inspectSelf.count()) break;
+      const next = promoted.getByLabel('User pages', { exact: true }).getByRole('button', { name: 'Next page', exact: true });
+      if (await next.isDisabled()) { await expect(inspectSelf).toBeVisible(); break; }
+      await next.click();
       await expect(promoted.getByText('Loading users…')).toHaveCount(0);
     }
     await inspectSelf.click();

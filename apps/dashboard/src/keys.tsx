@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { flushSync } from 'react-dom';
-import { api, ApiError } from './api.js';
+import { api, ApiError, type DashboardUser } from './api.js';
 
 interface KeyMetadata {
   id: string; name: string | null; prefix: string;
@@ -21,8 +21,8 @@ function metadata(value: unknown): KeyMetadata {
   return { id: value.id, name: value.name, prefix: value.prefix, createdAt: value.createdAt,
     lastUsedAt: value.lastUsedAt, revokedAt: value.revokedAt };
 }
-function keyPage(value: unknown) {
-  if (!record(value) || !Array.isArray(value.keys)) return invalid();
+function keyPage(value: unknown, page: number) {
+  if (!record(value) || !Array.isArray(value.keys) || value.keys.length > 10 || value.page !== page || value.limit !== 10) return invalid();
   return value.keys.map(metadata);
 }
 function creation(value: unknown) {
@@ -58,6 +58,16 @@ try {
 }
 
 export function PersonalKeys() {
+  return <KeyManagement />;
+}
+
+export function UserKeys({ owner }: { owner: DashboardUser }) {
+  return <KeyManagement key={`${owner.id}:${owner.status}:${owner.requiredPasswordChange}`} owner={owner} />;
+}
+
+function KeyManagement({ owner }: { owner?: DashboardUser }) {
+  const path = owner ? `/api/admin/users/${owner.id}/keys` : '/api/keys';
+  const eligible = !owner || (owner.status === 'active' && !owner.requiredPasswordChange);
   const [keys, setKeys] = useState<KeyMetadata[]>([]);
   const [page, setPage] = useState(1);
   const [revision, setRevision] = useState(0);
@@ -82,15 +92,15 @@ export function PersonalKeys() {
   useEffect(() => {
     let active = true;
     setLoading(true); setListError(''); setKeys([]);
-    void api.request(`/api/keys?page=${page}&limit=10`, 'GET', undefined, keyPage)
+    void api.request(`${path}?page=${page}&limit=10`, 'GET', undefined, value => keyPage(value, page))
       .then(result => { if (active) setKeys(result); })
       .catch(error => { if (active) setListError(message(error)); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [page, revision]);
+  }, [path, page, revision]);
   async function create(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (pending || issued) return;
+    if (pending || issued || !eligible) return;
     const form = event.currentTarget;
     const name = String(new FormData(form).get('name') ?? '').trim();
     if (!name || name.length > 100) { setError('Enter a key name of 1–100 characters.'); return; }
@@ -98,7 +108,7 @@ export function PersonalKeys() {
     const secret = ++secretRevision.current;
     setPending(true); setError(''); setNotice(''); setCopyStatus('');
     try {
-      const result = await api.request('/api/keys', 'POST', { name }, creation);
+      const result = await api.request(path, 'POST', { name }, creation);
       if (current !== lifetime.current) return;
       if (secret === secretRevision.current) setIssued(result.rawKey);
       form.reset(); setRevision(value => value + 1);
@@ -122,31 +132,33 @@ export function PersonalKeys() {
     const current = lifetime.current;
     setPending(true); setError(''); setNotice('');
     try {
-      await api.request(`/api/keys/${confirm.id}`, 'DELETE');
+      await api.request(`${path}/${confirm.id}`, 'DELETE');
       if (current !== lifetime.current) return;
       setConfirm(null); setNotice('Key revoked.'); setRevision(value => value + 1);
     } catch (error) { if (current === lifetime.current) setError(message(error)); }
     finally { if (current === lifetime.current) setPending(false); }
   }
-  return <section><h1>Personal API keys</h1>
-    <p>Manage keys belonging to your account. Revoked records remain visible.</p>
+  return <section aria-label={owner ? 'Selected user API keys' : undefined}>
+    {owner ? <><h3>API keys for {owner.email}</h3><p>Owner: {owner.email} ({owner.id}). Revoked records remain visible.</p></>
+      : <><h1>Personal API keys</h1><p>Manage keys belonging to your account. Revoked records remain visible.</p></>}
     {error && <p role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}
     {issued ? <section aria-label="One-time key creation"><h2>Save your new key</h2>
+      {owner && <p>This key belongs to {owner.email} ({owner.id}). Share it privately with this user.</p>}
       <p>Save this key now. It cannot be recovered after dismissal.</p>
       <label>New API key<input readOnly value={issued} autoComplete="off" /></label>
       <button onClick={() => void copy()}>Copy key</button>
       <button onClick={() => { ++secretRevision.current; setIssued(null); setCopyStatus(''); }}>Dismiss key</button>
       {copyStatus && <p role="status">{copyStatus}</p>}
-    </section> : <form onSubmit={create} aria-busy={pending}>
+    </section> : !eligible ? <p>Issuance requires an active user who has completed password replacement. Existing metadata and revocation remain available.</p> : <form onSubmit={create} aria-busy={pending}>
       <label>Key name<input name="name" maxLength={100} required disabled={pending} /></label>
       <button disabled={pending}>{pending ? 'Creating key…' : 'Create key'}</button>
     </form>}
     {confirm && <section role="dialog" aria-modal="false" aria-label="Confirm revocation">
-      <p>Revoke {confirm.name ?? 'Unnamed key'} ({confirm.prefix})? Its MCP access will end on the next request.</p>
+      <p>Revoke {confirm.name ?? 'Unnamed key'} ({confirm.prefix}){owner ? ` belonging to ${owner.email} (${owner.id})` : ''}? Its MCP access will end on the next request.</p>
       <button disabled={pending} onClick={() => void revoke()}>{pending ? 'Revoking…' : 'Confirm revoke'}</button>
       <button disabled={pending} onClick={() => setConfirm(null)}>Cancel</button>
     </section>}
-    <h2>Your key metadata</h2>
+    <h2>{owner ? 'User key metadata' : 'Your key metadata'}</h2>
     <button disabled={loading || pending} onClick={() => setRevision(value => value + 1)}>Refresh metadata</button>
     {loading ? <p role="status">Loading keys…</p> : listError ? <><p role="alert">{listError}</p>
       <button onClick={() => setRevision(value => value + 1)}>Retry keys</button></>
@@ -161,6 +173,6 @@ export function PersonalKeys() {
       <span>Page {page}</span>
       <button disabled={loading || pending || !!confirm || !!listError || keys.length < 10} onClick={() => setPage(value => value + 1)}>Next page</button>
     </div>
-    <ConnectionInstructions />
+    {!owner && <ConnectionInstructions />}
   </section>;
 }
