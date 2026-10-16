@@ -106,12 +106,12 @@ Recovery is periodic reconnection and rediscovery, not automatic replay of the f
 | Probe | Actual guarantee |
 | --- | --- |
 | Gateway `/health/live` | HTTP process responds. |
-| Gateway `/health/ready` | MongoDB responds to a bounded ping and at least one upstream is marked connected; otherwise HTTP 503. |
+| Gateway `/health/ready` | Startup/authentication validation and required migration completed, and MongoDB responds to a bounded ping; otherwise HTTP 503. Zero connected upstreams is permitted. |
 | Upstream `/health/live` and `/health/ready` | Process-level response; no WordPress API dependency check. |
 | WordPress readiness | A static WordPress CSS asset is served, not a commerce transaction. |
 | MariaDB readiness | Container health script checks connectivity and InnoDB initialization. |
 
-Gateway readiness checks database availability and connected upstreams, but not individual keys, complete tool availability, or end-to-end WooCommerce behavior. Cached connection state can lag behind an outage until a request or discovery refresh detects it.
+Gateway readiness checks database availability and reports connected upstreams without requiring any, and does not verify individual keys, complete tool availability, or end-to-end WooCommerce behavior. Cached connection state can lag behind an outage until a request or discovery refresh detects it.
 
 Startup validates MongoDB connectivity, indexes, and an actual transactional write before serving. New MCP requests fail safely with HTTP 503 during database outages; liveness remains healthy, and readiness recovers through driver reconnection. Fastify's close hook closes the MCP handler, registry, and identity database, clearing the refresh timer. Later cleanup runs even if earlier cleanup fails. The process entry point calls application close on SIGINT and SIGTERM; HTTP tests call the same close boundary directly.
 

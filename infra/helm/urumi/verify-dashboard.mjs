@@ -26,7 +26,10 @@ async function request(publicUrl, path, options = {}) {
         for (const [name, value] of Object.entries(response.headers)) {
           if (value !== undefined) headers.set(name, Array.isArray(value) ? value.join(', ') : value);
         }
-        resolve({ status: response.statusCode, headers, text: async () => body, json: async () => JSON.parse(body) });
+        resolve({ status: response.statusCode, headers, text: async () => body, json: async () => {
+          try { return JSON.parse(body); }
+          catch { throw new Error('Invalid deployment JSON response'); }
+        } });
       });
     });
     req.setTimeout(10000, () => req.destroy(new Error('Deployment request timed out')));
@@ -63,9 +66,9 @@ if (process.env.DASHBOARD_PASSWORD_FILE && process.env.DASHBOARD_EMAIL) {
   const login = await request(origin, '/api/auth/login', loginOptions);
   assert.equal(login.status, 200);
   const setCookie = login.headers.get('set-cookie');
-  assert.match(setCookie, /HttpOnly/i);
-  assert.match(setCookie, /SameSite=Lax/i);
-  assert.match(setCookie, /Path=\/api/i);
+  assert.ok(/HttpOnly/i.test(setCookie ?? ''), 'Missing HTTP-only cookie attribute');
+  assert.ok(/SameSite=Lax/i.test(setCookie ?? ''), 'Missing SameSite cookie attribute');
+  assert.ok(/Path=\/api(?:;|$)/i.test(setCookie ?? ''), 'Invalid cookie path');
   assert.equal(/; Secure/i.test(setCookie), origin.protocol === 'https:');
   const cookie = setCookie.split(';')[0];
   const { csrfToken, user } = await login.json();

@@ -72,10 +72,18 @@ the chart rejects a dashboard host equal to the gateway or storefront host.
 helm lint infra/helm/urumi -f infra/helm/urumi/values-local.yaml
 helm template urumi infra/helm/urumi -n urumi \
   -f infra/helm/urumi/values-local.yaml -f /secure/operator-values.yaml
+# Existing installations only: clear the old default RollingUpdate strategy.
+# This changes update policy, not the Pod template; new installs skip this step.
+kubectl patch deployment urumi-gateway -n urumi --type=merge \
+  -p '{"spec":{"strategy":{"type":"Recreate","rollingUpdate":null}}}'
 helm upgrade --install urumi infra/helm/urumi -n urumi --create-namespace \
   -f infra/helm/urumi/values-local.yaml -f /secure/operator-values.yaml
 kubectl get pods,svc,ingress,networkpolicy -n urumi
 ```
+
+Helm 4 server-side apply may retain the default `rollingUpdate` field when changing
+strategy types; the one-time patch above clears it for an existing release. Future
+Recreate upgrades briefly interrupt gateway service.
 
 Configure upstream destination approvals, database/API network destinations, and
 approved Secret references using the existing [egress](gateway-egress.md) and
@@ -123,7 +131,7 @@ ruby infra/helm/urumi/test-dashboard.rb
 ruby infra/helm/urumi/test-mongodb.rb
 ruby infra/helm/urumi/test-secret-rbac.rb
 ruby infra/helm/urumi/test-gateway-egress.rb
-node --test infra/helm/urumi/verify-gateway-egress.test.mjs
+node --test infra/helm/urumi/verify-gateway-egress.test.mjs infra/helm/urumi/verify-dashboard.test.mjs
 ```
 
 For the deployed routes, create an eligible **disposable verification account**
@@ -147,6 +155,20 @@ configuration exact. Host headers are preserved without changing ingress rules.
 The script checks SPA direct links/assets, missing asset and dashboard MCP 404s,
 management 401s, HTTP-only cookie attributes, trusted Origin, CSRF, authenticated
 session restoration, logout invalidation, and cookie/bearer separation.
+
+For an additional real-browser smoke test against the deployed production image
+(use the installed dashboard Playwright dependencies), run:
+
+```sh
+env DASHBOARD_ORIGIN=https://dashboard.example.com \
+  DASHBOARD_EMAIL=verification@example.com \
+  DASHBOARD_PASSWORD_FILE=/secure/verification-password \
+  node infra/helm/urumi/verify-dashboard-browser.mjs
+```
+
+It verifies direct-link login, session restoration, cookie attributes, CSRF denial
+and logout without issuing keys. A disposable self-signed TLS fixture may explicitly
+set `VERIFICATION_ALLOW_SELF_SIGNED=true`; normal runs verify TLS certificates.
 
 A policy-enforcing cluster is required for allowed/blocked connectivity tests.
 Kind's default kindnet does **not** prove isolation. Run the controlled

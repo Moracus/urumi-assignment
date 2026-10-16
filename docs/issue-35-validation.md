@@ -16,7 +16,8 @@ See [operator setup and exact values](dashboard-deployment.md).
   origins and allowed hosts; exact proxy trust remains an operator requirement.
   Gateway uses Recreate and one replica to avoid concurrent runtime registries.
 - Tests: `test-dashboard.rb`, updated `test-gateway-egress.rb`,
-  `verify-dashboard.mjs`, and gateway health assertions.
+  `verify-dashboard.mjs`, its secret-free failure regression,
+  `verify-dashboard-browser.mjs`, and gateway health assertions.
 - Documentation: README, system design, threat model, deployment guide and this
   verification record. Existing execution interfaces, RBAC, gateway egress,
   public tool names, commerce signing and PVCs are preserved.
@@ -36,10 +37,13 @@ See [operator setup and exact values](dashboard-deployment.md).
 | Dashboard chart regression, red then green | Detected missing workload and unsafe rolling updates before corrections; passed afterward |
 | Existing MongoDB, named-Secret RBAC, gateway-egress Ruby regressions | Passed |
 | Egress verifier's Node test suite | 4 passed |
+| Dashboard verifier secret-free failure regression | Passed for missing HttpOnly, SameSite and incorrect Path |
+| Existing Deployment strategy migration | Initial Helm 4 apply rejected retained rollingUpdate; explicit merge patch cleared it, then Helm upgrade passed |
 | Isolated Kind dashboard workload | Ready with read-only root, non-root UID, no API token and `/tmp` emptyDir |
 | Isolated MongoDB and gateway workloads | Ready after repairing the disposable fixture's membership key format |
 | HTTP ingress smoke script with disposable administrator | Passed deep links/assets, API/MCP routing, cookie/session, Origin, CSRF and logout checks |
 | HTTPS ingress smoke script with disposable administrator | Passed same checks including Secure cookie over real Traefik TLS termination |
+| Real browser against the deployed production image over HTTPS | Passed direct-link login, Secure/HTTP-only cookie attributes, session reload, CSRF rejection and logout |
 
 The full gateway command was `pnpm --filter @urumi/gateway test` with
 `MONGODB_TEST_URI=mongodb://127.0.0.1:27417/urumi_test?replicaSet=urumi&directConnection=true`,
@@ -65,9 +69,9 @@ for a real HTTPS deployment.
 - The available cluster uses kindnet. **NetworkPolicy enforcement and live
   allowed/blocked connectivity are not verified.** Render/RBAC/egress regressions
   establish configuration only. Use an enforcing CNI and the documented matrix.
-- The deployed smoke script uses real HTTP/TLS through ingress; the 54 browser
-  tests use the existing Vite-based integrated harness. A full browser journey
-  through the production image is not claimed.
+- The deployed HTTP and browser smoke scripts use real Traefik TLS/ingress. The
+  54 broader browser tests use the existing Vite-based integrated harness; their
+  complete user/key/upstream lifecycle suite was not rerun through production ingress.
 - Publicly trusted certificates, production DNS, proxy-IP lifecycle reconciliation,
   HTTP-to-HTTPS redirects and production deployment remain operator work.
 - No live commerce mutation, database reset, PVC deletion, cluster recreation,
@@ -75,3 +79,18 @@ for a real HTTPS deployment.
   restart is covered by predecessor #34, not newly claimed here.
 - This issue implements the deployment slice of parent #24. It does not certify
   the entire Day 4 milestone or every running-system demonstration in that parent.
+
+## Two-axis review
+
+Standards review initially identified a smoke-check failure path that could print
+Set-Cookie in an assertion error. Boolean checks with fixed diagnostics and a
+process/HTTP regression resolve it; the reviewer confirmed resolution. JSON parse
+failures also suppress response bodies. Final Standards: 0 remaining findings.
+Spec review: 0 findings. Reviews compare task-start commit
+`aae984a23df61e373f64ca754c44dc4ac7e1ca60` with the implementation.
+
+After verification, the isolated dashboard/gateway/MongoDB workloads were scaled
+to zero and disposable Compose test containers were stopped. The verification
+namespace, Secrets and MongoDB PVC are retained; no PVC was removed. The existing
+`urumi` deployment was not upgraded. Roll out the actual release using the
+operator guide, including the one-time update-strategy patch for existing gateways.
