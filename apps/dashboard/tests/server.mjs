@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { createServer } from 'vite';
 import { createGatewayApp } from '../../gateway/dist/app.js';
 import { connectIdentityStorage } from '../../gateway/dist/identity/storage.js';
@@ -16,8 +16,24 @@ await initializeAdministrator(storage, {
 });
 const gateway = await createGatewayApp({ mongodbUri: uri.toString(), upstreams: [] });
 await gateway.listen({ host: '127.0.0.1', port: 3009 });
-const vite = await createServer({ server: { host: 'localhost', port: 5174, strictPort: true,
-  proxy: { '/api': 'http://127.0.0.1:3009', '/mcp': 'http://127.0.0.1:3009' } } });
+const vite = await createServer({
+  // Test arrangement only; this middleware is absent from production Vite config.
+  plugins: [{ name: 'expire-test-session', configureServer(server) {
+    server.middlewares.use(async (request, response, next) => {
+      if (request.url !== '/api/__test/expire-session' || request.method !== 'POST') return next();
+      const cookie = (request.headers.cookie ?? '').split(';').map(value => value.trim())
+        .find(value => value.startsWith('urumi_dashboard='))?.slice('urumi_dashboard='.length);
+      if (!cookie) { response.statusCode = 400; response.end(); return; }
+      try {
+        await storage.sessions.updateOne({ credentialHash: createHash('sha256').update(cookie).digest('hex') },
+          { $set: { expiresAt: new Date(Date.now() - 1) } });
+        response.statusCode = 204; response.end();
+      } catch { response.statusCode = 503; response.end(); }
+    });
+  } }],
+  server: { host: 'localhost', port: 5174, strictPort: true,
+    proxy: { '/api': 'http://127.0.0.1:3009', '/mcp': 'http://127.0.0.1:3009' } },
+});
 await vite.listen();
 let closing = false;
 async function close() {

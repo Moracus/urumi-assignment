@@ -181,3 +181,65 @@ test('malformed service responses display safe errors', async ({ page }) => {
   await page.goto('/'); await login(page);
   await expect(page.getByRole('alert')).toHaveText('Service returned an invalid response. Try again later.');
 });
+
+test('syntactically valid but invalid session JSON produces a safe error', async ({ page }) => {
+  await page.route('**/api/auth/login', route => route.fulfill({ status: 200, json: {} }));
+  await page.goto('/'); await login(page);
+  await expect(page.getByRole('alert')).toHaveText('Service returned an invalid response. Try again later.');
+});
+
+test('focus revalidation during pending login, password replacement and logout preserves successful outcomes', async ({ page }) => {
+  const { email } = await createMember(page);
+  await page.goto('/');
+  async function gateMutation(endpoint: string, action: () => Promise<void>) {
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let received!: () => void;
+    const started = new Promise<void>(resolve => { received = resolve; });
+    await page.route(`**${endpoint}`, async route => { received(); await gate; await route.continue(); });
+    await action(); await started;
+    const checks: string[] = [];
+    const capture = (request: import('@playwright/test').Request) => { if (request.url().endsWith('/api/auth/me')) checks.push(request.url()); };
+    page.on('request', capture);
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    // Complete an independent public health request to allow any refresh request to start.
+    await page.request.get('/api/auth/me');
+    const completed = page.waitForResponse(response => response.url().endsWith(endpoint));
+    release();
+    await completed;
+    await page.unroute(`**${endpoint}`);
+    page.off('request', capture);
+    expect(checks).toEqual([]);
+  }
+  await gateMutation('/api/auth/login', () => login(page, email, 'assigned member password'));
+  await expect(page.getByRole('heading', { name: 'Replace your password' })).toBeVisible();
+  await page.getByLabel('Current password').fill('assigned member password');
+  await page.getByLabel('New password').fill('final member password');
+  await gateMutation('/api/auth/change-password', () => page.getByRole('button', { name: 'Replace password', exact: true }).click());
+  await expect(page.getByText('Password replaced. Log in with your new password.')).toBeVisible();
+  await login(page, email, 'final member password');
+  await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
+  await gateMutation('/api/auth/logout', () => page.getByRole('button', { name: 'Log out' }).click());
+  await expect(page.getByText('Logged out.')).toBeVisible();
+});
+
+test('expired stored session returns to login on focus without retaining account state', async ({ page }) => {
+  await page.goto('/'); await login(page);
+  await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
+  expect((await page.request.post('/api/__test/expire-session')).status()).toBe(204);
+  expect((await page.request.get('/api/auth/me')).status()).toBe(401);
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await expect(page.getByRole('heading', { name: 'Log in', exact: true })).toBeVisible();
+  await expect(page.getByRole('navigation')).toHaveCount(0);
+});
+
+test('unchanged session revalidation preserves an unfinished password replacement form', async ({ page }) => {
+  const { email } = await createMember(page);
+  await page.goto('/'); await login(page, email, 'assigned member password');
+  await expect(page.getByRole('heading', { name: 'Replace your password' })).toBeVisible();
+  await page.getByLabel('New password').fill('unfinished replacement');
+  const checked = page.waitForResponse(response => response.url().endsWith('/api/auth/me'));
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+  await checked;
+  await expect(page.getByLabel('New password')).toHaveValue('unfinished replacement');
+});
