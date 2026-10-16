@@ -149,7 +149,7 @@ gateway:
   # URI Secret for managed or external transaction-capable MongoDB.
   mongodbSecretName: urumi-identity-storage
 
-  allowedHosts: "localhost,127.0.0.1,urumi-gateway,urumi-gateway.urumi.svc.cluster.local,gateway.localhost"
+  allowedHosts: "localhost,127.0.0.1,urumi-gateway,urumi-gateway.urumi.svc.cluster.local,gateway.localhost,dashboard.localhost"
 
   upstreams:
     woocommerce: http://urumi-woocommerce-mcp:3001/mcp
@@ -167,11 +167,17 @@ gateway:
 ingress:
   enabled: true
 
+  dashboard:
+    enabled: true
+    tlsSecretName: ""
+
   gateway:
     enabled: true
+    tlsSecretName: ""
 
   wordpress:
     enabled: true
+    tlsSecretName: ""
 
 networkPolicy:
   enabled: true
@@ -212,3 +218,18 @@ mongodb:
     limits:
       cpu: 1000m
       memory: 1Gi
+
+# Build the image with the public VITE_PUBLIC_MCP_URL for this environment.
+dashboard:
+  enabled: true
+  image:
+    repository: urumi/dashboard
+    tag: dev
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      cpu: 250m
+      memory: 128Mi

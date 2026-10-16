@@ -1,0 +1,34 @@
+{{- if and .Values.ingress.enabled .Values.ingress.dashboard.enabled .Values.dashboard.enabled .Values.gateway.enabled }}
+{{- if or (eq .Values.global.dashboardHost .Values.global.gatewayHost) (eq .Values.global.dashboardHost .Values.global.storeHost) }}
+{{- fail "dashboardHost must differ from gatewayHost and storeHost" }}
+{{- end }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: urumi-dashboard
+spec:
+  ingressClassName: {{ .Values.global.ingressClassName | quote }}
+  {{- if .Values.ingress.dashboard.tlsSecretName }}
+  tls:
+    - hosts: [{{ .Values.global.dashboardHost | quote }}]
+      secretName: {{ .Values.ingress.dashboard.tlsSecretName | quote }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.global.dashboardHost | quote }}
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: urumi-gateway
+                port:
+                  number: {{ .Values.gateway.port }}
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: urumi-dashboard
+                port:
+                  number: 8080
+{{- end }}

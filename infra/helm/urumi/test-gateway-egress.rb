@@ -63,9 +63,9 @@ end
   unaffected = ->(list) { list.reject { |d| d.dig('metadata', 'name') == 'urumi-gateway-egress' } }
   check(unaffected.call(docs) == unaffected.call(configured), 'Egress configuration must not alter other resources')
   services = docs.select { |d| d['kind'] == 'Service' }
-  check(services.size == 6 && services.all? { |d| d.dig('spec', 'type') == 'ClusterIP' }, 'All services must remain internal')
+  check(services.size == 7 && services.all? { |d| d.dig('spec', 'type') == 'ClusterIP' }, 'All services must remain internal')
   {'urumi-gateway' => 3000, 'urumi-woocommerce-mcp' => 3001, 'urumi-calculator-mcp' => 3002,
-   'urumi-time-mcp' => 3003, 'urumi-wordpress' => 80, 'urumi-mariadb' => 3306}.each do |name, port|
+   'urumi-time-mcp' => 3003, 'urumi-dashboard' => 8080, 'urumi-wordpress' => 80, 'urumi-mariadb' => 3306}.each do |name, port|
     service = services.find { |d| d.dig('metadata', 'name') == name }
     check(service && service.dig('spec', 'selector') == {'app' => name}, 'Service selector must remain stable')
     check(service.dig('spec', 'ports').map { |p| p['port'] } == [port], 'Established Service port must remain stable')
@@ -84,7 +84,7 @@ end
     deployment = docs.find { |d| d['kind'] == 'Deployment' && d.dig('metadata', 'name') == name }
     check(deployment.dig('spec', 'template', 'spec', 'volumes').any? { |v| v.dig('persistentVolumeClaim', 'claimName') == pvc.dig('metadata', 'name') }, 'Deployment must retain persistent storage')
   end
-  check(docs.select { |d| d['kind'] == 'Ingress' }.map { |d| d.dig('metadata', 'name') }.sort == ['urumi-gateway', 'urumi-wordpress'], 'Only existing public Ingress resources allowed')
+  check(docs.select { |d| d['kind'] == 'Ingress' }.map { |d| d.dig('metadata', 'name') }.sort == ['urumi-dashboard', 'urumi-gateway', 'urumi-wordpress'], 'Only existing public Ingress resources allowed')
   check(docs.select { |d| d['kind'] == 'PersistentVolumeClaim' }.map { |d| d.dig('metadata', 'name') }.sort == ['urumi-mariadb-pvc', 'urumi-wordpress-pvc'], 'Persistent volumes must remain')
   check(render(environment, {'gateway.enabled' => false}).none? { |d| d.dig('metadata', 'name') == 'urumi-gateway-egress' }, 'Disabled gateway must omit policy')
   check(render(environment, {'networkPolicy.enabled' => false}).none? { |d| d['kind'] == 'NetworkPolicy' }, 'Explicit operator opt-out must still work')

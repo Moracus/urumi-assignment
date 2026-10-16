@@ -8,6 +8,11 @@ metadata:
 spec:
   ingressClassName: {{ .Values.global.ingressClassName | quote }}
 
+  {{- if .Values.ingress.gateway.tlsSecretName }}
+  tls:
+    - hosts: [{{ .Values.global.gatewayHost | quote }}]
+      secretName: {{ .Values.ingress.gateway.tlsSecretName | quote }}
+  {{- end }}
   rules:
     - host: {{ .Values.global.gatewayHost | quote }}
 

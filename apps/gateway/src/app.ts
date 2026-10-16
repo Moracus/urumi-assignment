@@ -162,7 +162,7 @@ export async function createGatewayApp(options: GatewayAppOptions = {}) {
             upstream.status === "connected",
         ).length;
 
-      if (!(await identityStorage.isAvailable()) || connected === 0) {
+      if (!(await identityStorage.isAvailable())) {
         return reply.code(503).send({
           status: "not_ready",
           service: "gateway",

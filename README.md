@@ -123,11 +123,13 @@ Run this prompt block in Bash (`bash` if your default shell is zsh). Set `WC_URL
 | Calculator MCP | `http://localhost:3002/mcp` |
 | Time MCP | `http://localhost:3003/mcp` |
 
-Each backend exposes `/health/live` and `/health/ready`. Gateway readiness requires available MongoDB and at least one connected upstream, so it does not mean all seven tools are available. Upstream health endpoints report process health without validating WooCommerce connectivity.
+Each backend exposes `/health/live` and `/health/ready`. Gateway readiness requires completed safe initialization and available MongoDB, and tolerates zero connected upstreams so operators can repair them through the dashboard. It does not mean all seven tools are available. Upstream health endpoints report process health without validating WooCommerce connectivity.
 
 Use an MCP-capable client with Streamable HTTP and the header `Authorization: Bearer <your-gateway-api-key>` for gateway requests. Calculator example: call `calculator.calculate` with `{"operation":"multiply","a":6,"b":7}`. A successful text result contains `42`. Time example: call `time.current` with `{"timezone":"Asia/Kolkata"}`. Follow [key issuance](docs/api-keys.md) and [read-only MCP requests/revocation](docs/mcp-authentication.md) first; the setup bootstrap secret cannot authenticate MCP.
 
 ## Deploy to local Kubernetes
+
+For the dashboard and same-origin management API, follow [dashboard deployment](docs/dashboard-deployment.md). It includes local/production values, image builds, proxy trust, and deployed session/CSRF checks.
 
 The chart requires a transaction-capable MongoDB replica set and a URI Secret. It can provision an optional authenticated, persistent single-node replica set with `mongodb.enabled=true`, or use an external database. See [MongoDB deployment and restart verification](docs/mongodb-deployment.md). Supply `gateway.mongodbSecretName` (default `urumi-identity-storage`) with key `uri` before enabling the gateway. The existing cluster alone is insufficient for this image. Before rollout, supply a reviewed [gateway egress site overlay](docs/gateway-egress.md) permitting DNS, every MongoDB member and required Kubernetes API addresses; include that overlay in Helm commands below. See [database deployment options](docs/mongodb-deployment.md).
 
@@ -293,10 +295,10 @@ Verify network isolation using ordinary test Pods: unrelated Pods should be deni
 - Audits are console records, with no durable audit database, queue, query API, or dashboard. Authentication failures and SDK-level validation failures do not necessarily reach the execution audit boundary.
 - NetworkPolicies preserve workload ingress isolation and restrict gateway egress. Supply explicit MongoDB/API site approvals and an enforcing CNI; defaults fail closed for those destinations. See [egress configuration and live verification](docs/gateway-egress.md). Controller namespace and workload-label selectors require trusted namespace administration.
 - Upstream bearer/custom-header authentication uses approved Kubernetes Secret references; mutual TLS is not implemented. Cluster networking and destination policy still apply.
-- No TLS block in the Ingress templates, broader request rate limiting beyond dashboard login, or automatic retry of failed tool calls. Failed writes can have uncertain outcomes and need inspection before retrying.
+- TLS requires operator-provided certificates and exact ingress proxy trust; no broader request rate limiting beyond dashboard login or automatic retry of failed tool calls. Failed writes can have uncertain outcomes and need inspection before retrying.
 - Single-replica workloads; database and WordPress persistence use PVCs with `Recreate` Deployments. Backups, high availability, restore automation, and production hardening are not supplied.
 - WooCommerce installation and store configuration are manual. Health probes do not prove that store APIs or checkout work.
-- Dashboard authentication runs locally through Vite; it has no Helm workload or Ingress template. A dashboard hostname/image value alone does not deploy it.
+- The [dashboard deployment](docs/dashboard-deployment.md) includes a production static image, deep-link fallback, same-origin `/api` routing, TLS Secret references, probes, and isolation. Production proxy IPs/certificates remain operator configuration.
 
 These limits describe the current implementation and should be revised as capabilities are added.
 

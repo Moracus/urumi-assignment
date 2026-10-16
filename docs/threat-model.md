@@ -18,7 +18,7 @@ Dashboard authentication is separate from MCP bearer authentication. Random 32-b
 
 Persistent rolling 15-minute throttles limit five failed account attempts and 30 source-IP attempts, coordinated transactionally across replicas. Unknown users incur Argon2 verification, and credential failures remain generic. Forwarded IPs influence throttling only through explicitly trusted socket peers and right-to-left trusted proxy chains; malformed chains use the socket peer. Configured TLS edges must overwrite forwarded scheme headers. Hashing concurrency remains bounded; interrupted login reservations conservatively count until window expiry.
 
-New dashboard requests fail safely during database outages and recover without credential fallback or session renewal. Disable/password-change transactions update the user and invalidate sessions; direct database edits are privileged and are not the account-management workflow. Durable audits, full Kubernetes/API ingress rollout, and broader traffic limits remain later work. See [dashboard configuration and safe examples](dashboard-sessions.md).
+New dashboard requests fail safely during database outages and recover without credential fallback or session renewal. Disable/password-change transactions update the user and invalidate sessions; direct database edits are privileged and are not the account-management workflow. Durable audits and broader traffic limits remain later work. Same-origin dashboard/API ingress is provided by the chart with operator-configured TLS and exact proxy trust. See [dashboard configuration and safe examples](dashboard-sessions.md).
 
 ## Password replacement slice (#5)
 
@@ -107,3 +107,25 @@ Account views unmount when authoritative revalidation detects account changes, i
 ## Authenticated chart-managed MongoDB (#34)
 
 The chart optionally deploys an authenticated MongoDB 8.0 single-node replica set with retained StatefulSet storage, internal DNS, bounded idempotent initialization, authenticated probes, resource bounds and Secret references. External transaction-capable databases remain supported through the existing gateway URI Secret. Managed database ingress and gateway egress are limited to the same-namespace gateway/database pair on TCP 27017. Existing WordPress/MariaDB storage and gateway Secret RBAC are unchanged. This is non-HA, without managed TLS or backups; NetworkPolicy enforcement requires a suitable CNI. See [credentials, storage, external mode and non-destructive verification](mongodb-deployment.md).
+
+## Same-origin dashboard deployment (#35)
+
+The dashboard origin routes only `/api` to session-authenticated management routes;
+the separate gateway origin retains `/mcp` bearer authentication. Cookie credentials
+do not authenticate MCP. Same-origin routing introduces no CORS allowance and
+preserves backend roles, trusted Origin, and session-bound CSRF. SPA fallback
+excludes `/api`, `/mcp`, and missing assets to avoid masking route mistakes.
+Only the public MCP URL enters frontend build configuration. The static container
+has no Secrets, API token, or outbound network requirement and runs unprivileged
+with a read-only root filesystem. The chart preserves existing gateway egress,
+Secret RBAC, and persistent volumes.
+
+Production TLS uses pre-provisioned certificate Secrets. The HTTPS assertion is
+accepted only from exact operator-configured ingress proxy IPs, with no subnet or
+wildcard default. Operators must maintain trust after proxy IP replacement and
+verify controller forwarded-header sanitization. Empty trust fails HTTPS login
+closed over internal HTTP. Local insecure cookies require the explicit development
+HTTP mode. Readiness remains database-aware but does not remove the management
+repair interface when all upstreams fail. NetworkPolicy objects require an enforcing
+CNI; the available kindnet cluster cannot verify isolation. See
+[deployment requirements](dashboard-deployment.md).

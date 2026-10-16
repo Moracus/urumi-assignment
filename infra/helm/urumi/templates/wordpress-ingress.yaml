@@ -8,6 +8,11 @@ metadata:
 spec:
   ingressClassName: {{ .Values.global.ingressClassName | quote }}
 
+  {{- if .Values.ingress.wordpress.tlsSecretName }}
+  tls:
+    - hosts: [{{ .Values.global.storeHost | quote }}]
+      secretName: {{ .Values.ingress.wordpress.tlsSecretName | quote }}
+  {{- end }}
   rules:
     - host: {{ .Values.global.storeHost | quote }}
 

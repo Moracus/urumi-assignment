@@ -373,7 +373,7 @@ test("HTTP authentication and health remain intact across application start/clos
     t.after(() => app.close());
     const address = await app.listen({ host: "127.0.0.1", port: 0 });
     assert.deepEqual(await (await fetch(`${address}/health/live`)).json(), { status: "ok", service: "gateway" });
-    assert.equal((await fetch(`${address}/health/ready`)).status, 503);
+    assert.equal((await fetch(`${address}/health/ready`)).status, 200);
     for (const headers of [new Headers(), new Headers({ Authorization: "Bearer incorrect" })]) {
       const response = await fetch(`${address}/mcp?test=auth`, { headers });
       assert.equal(response.status, 401);
@@ -867,7 +867,7 @@ test("concurrent migration fills only missing defaults and completed migration n
   const restarted = await createGatewayApp(options);
   t.after(() => restarted.close());
   assert.equal(await f.db.collection("upstream_registrations").countDocuments(), 1);
-  assert.equal((await restarted.inject({ url: "/health/ready" })).statusCode, 503);
+  assert.equal((await restarted.inject({ url: "/health/ready" })).statusCode, 200);
 });
 
 test("failed migration rolls back all inserts and completion before a later startup retries", async (t) => {
@@ -923,7 +923,7 @@ test("startup rejects malformed persisted desired configuration and never downgr
   assert.equal(server.status, "unreachable");
   assert.deepEqual(server.authentication, { type: "bearer", referenceConfigured: true });
   assert.equal(connections, 0);
-  assert.equal((await app.inject({ url: "/health/ready" })).statusCode, 503);
+  assert.equal((await app.inject({ url: "/health/ready" })).statusCode, 200);
 });
 
 

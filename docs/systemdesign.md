@@ -180,7 +180,7 @@ These records cover calls that enter the execution boundary. Failed HTTP authent
 
 The repository includes unit tests for execution authorization/audit and aggregation/resolution, plus runnable registry, aggregation, routing, WooCommerce REST, and interactive failure-isolation scripts. Internal routing scripts construct identities directly and do not test public HTTP authentication. The README separates those checks from MCP-client and cluster-policy validation.
 
-The current architecture provides a functional execution and routing boundary, but is not a complete multi-user management platform. [Personal key management](api-keys.md) persists SHA-256 key digests and safe owner-scoped metadata, with one-time disclosure and idempotent revocation. Issuance transactionally checks eligibility and enforces the 20-active-key limit across gateway instances. Its HTTP routes use dashboard sessions and Origin/CSRF protection. Durable audit storage, dashboard features, chat orchestration, TLS deployment, broader request rate limiting, backups and high availability are absent; gateway egress controls require operator configuration and live verification. Additions should update this document when their source and deployment behavior exist.
+The current architecture provides a functional execution and routing boundary, but is not a complete multi-user management platform. [Personal key management](api-keys.md) persists SHA-256 key digests and safe owner-scoped metadata, with one-time disclosure and idempotent revocation. Issuance transactionally checks eligibility and enforces the 20-active-key limit across gateway instances. Its HTTP routes use dashboard sessions and Origin/CSRF protection. Durable audit storage, chat orchestration, broader request rate limiting, backups and high availability are absent; dashboard deployment and operator TLS configuration are documented in [dashboard deployment](dashboard-deployment.md); gateway egress controls require operator configuration and live verification. Additions should update this document when their source and deployment behavior exist.
 
 ## Member account administration (#6)
 
@@ -213,7 +213,7 @@ The existing management service validates exact namespace/name/key approvals bef
 
 ## Browser authentication (#25)
 
-The dashboard uses a single typed Fetch client for same-origin JSON requests with server-issued cookies and in-memory CSRF tokens. Route handling permits only password replacement/logout for restricted users and excludes administrator pages for members. Backend session and role checks remain authoritative. Refresh on reload, focus, visibility and every 30 visible seconds rechecks current identity. Unchanged sessions preserve forms; account changes clear transient views, and session generations reject stale responses. Background refresh defers to pending account actions. Session response shapes are validated before use. Forbidden mutations refresh session state without replay; failed logout never claims server invalidation. Local Vite proxies `/api` to the gateway; production dashboard routing and deployment are separate work. See [development and browser integration tests](dashboard-sessions.md#browser-dashboard-25).
+The dashboard uses a single typed Fetch client for same-origin JSON requests with server-issued cookies and in-memory CSRF tokens. Route handling permits only password replacement/logout for restricted users and excludes administrator pages for members. Backend session and role checks remain authoritative. Refresh on reload, focus, visibility and every 30 visible seconds rechecks current identity. Unchanged sessions preserve forms; account changes clear transient views, and session generations reject stale responses. Background refresh defers to pending account actions. Session response shapes are validated before use. Forbidden mutations refresh session state without replay; failed logout never claims server invalidation. Local Vite proxies `/api` to the gateway. The [production dashboard image and chart](dashboard-deployment.md) serve the SPA and route same-origin `/api` directly from ingress to the gateway, preserving session authentication and CSRF checks. See [development and browser integration tests](dashboard-sessions.md#browser-dashboard-25).
 
 
 ## Role-specific dashboard overviews (#33)
@@ -225,3 +225,18 @@ The overview stores only summary counts in transient component state. Session/ac
 ## Authenticated chart-managed MongoDB (#34)
 
 The chart optionally deploys an authenticated MongoDB 8.0 single-node replica set with retained StatefulSet storage, internal DNS, bounded idempotent initialization, authenticated probes, resource bounds and Secret references. External transaction-capable databases remain supported through the existing gateway URI Secret. Managed database ingress and gateway egress are limited to the same-namespace gateway/database pair on TCP 27017. Existing WordPress/MariaDB storage and gateway Secret RBAC are unchanged. This is non-HA, without managed TLS or backups; NetworkPolicy enforcement requires a suitable CNI. See [credentials, storage, external mode and non-destructive verification](mongodb-deployment.md).
+
+## Dashboard deployment (#35)
+
+The static nginx dashboard runs as a non-root container with read-only root,
+/tmp emptyDir, process probes, and an internal ClusterIP Service. Its policy allows
+only ingress-controller inbound traffic and denies all outbound traffic. Traefik
+routes `/api` on the dashboard origin to the existing gateway Service and `/` to
+the dashboard. The gateway host retains its sole `/mcp` route and the storefront
+retains its own host; no additional public MCP or upstream route is created.
+TLS blocks reference operator-provisioned Secrets. Exact allowed hosts, origins,
+and trusted proxy IPs must match the operator's routing. Local HTTP is explicit;
+production requires Secure cookies and exact TLS proxy trust. Startup validates
+storage/authentication and required migration before listening; readiness checks
+MongoDB while tolerating all upstreams being unreachable. See
+[configuration and checks](dashboard-deployment.md).

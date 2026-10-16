@@ -10,7 +10,7 @@ global:
 gateway:
   nodeEnv: development
   dashboard:
-    trustedOrigins: ["http://gateway.localhost"]
+    trustedOrigins: ["http://dashboard.localhost"]
     allowHttp: true
 woocommerceMcp:
   wordpressUrl: http://store.localhost
