@@ -34,6 +34,15 @@ spec:
           port: {{ $upstream.port }}
     {{- end }}
     {{- end }}
+    {{- if .Values.mongodb.enabled }}
+    - to:
+        - podSelector:
+            matchLabels:
+              app: urumi-mongodb
+      ports:
+        - protocol: TCP
+          port: 27017
+    {{- end }}
     {{- range concat $egress.mongodb $egress.kubernetesApi $egress.additionalDestinations }}
     - to:
         {{- if hasKey . "cidr" }}

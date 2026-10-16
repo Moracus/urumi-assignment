@@ -129,7 +129,7 @@ Read/write WooCommerce credentials are supplied only to the adapter through its 
 
 ## Network boundaries
 
-The chart preserves six ingress NetworkPolicies, enabled by default, and adds a gateway egress policy:
+The chart preserves six ingress NetworkPolicies, enabled by default, and adds a gateway egress policy. Managed MongoDB adds a seventh workload ingress policy:
 
 | Destination | Allowed source | TCP port |
 | --- | --- | --- |
@@ -140,7 +140,7 @@ The chart preserves six ingress NetworkPolicies, enabled by default, and adds a 
 | WordPress | Controller-namespace Pods **or** same-namespace WooCommerce MCP Pods | 80 |
 | MariaDB | Same-namespace WordPress Pods | 3306 |
 
-Ports for the gateway and MCP services are configurable in values. Gateway egress permits narrow DNS and enabled bundled MCP destinations, plus explicit operator MongoDB/API/additional approvals. Other workloads retain unrestricted egress. Empty MongoDB/API approvals fail closed; site overlays are required. API IP approvals also become application upstream hard denials. See [policy, CNI limits and verification](gateway-egress.md). This is not a cluster-wide default-deny configuration for arbitrary Pods.
+Ports for the gateway and MCP services are configurable in values. Gateway egress permits narrow DNS and enabled bundled MCP destinations, plus explicit operator MongoDB/API/additional approvals. Other workloads retain unrestricted egress. External MongoDB/API approvals fail closed when empty; site overlays are required for those destinations. Managed MongoDB receives an explicit same-namespace gateway egress rule. API IP approvals also become application upstream hard denials. See [policy, CNI limits and verification](gateway-egress.md). This is not a cluster-wide default-deny configuration for arbitrary Pods.
 
 Controller access is selected by namespace name rather than controller Pod labels. Workload access is selected by Pod labels rather than authenticated service identity. Anyone able to create suitably labeled Pods in the application namespace may satisfy those selectors; namespace access and Kubernetes RBAC therefore remain separate requirements. Other matching allow policies can also broaden access.
 
@@ -221,3 +221,7 @@ The dashboard uses a single typed Fetch client for same-origin JSON requests wit
 The protected `/dashboard` view reads existing authorized management APIs through the shared session client. Administrators obtain the complete server list and sum its available `toolCount` values, then count all pages of safe user metadata. Members count only their unrevoked keys across all pages of `/api/keys` and reuse the public MCP connection instructions. Pagination is bounded to ten records per request; a short or empty page establishes completion. Only complete successful reads publish counts. Page failures produce safe errors and a deliberate retry. These independent reads are refreshed on demand and do not claim a transactional snapshot across concurrent management changes.
 
 The overview stores only summary counts in transient component state. Session/account/role changes unmount it, session generations reject old responses, and effect cancellation stops further pagination after navigation or invalidation. No raw API key, internal upstream endpoint, or Secret reference enters the member overview. Backend administrator and key-ownership checks remain authoritative; this feature adds no endpoints or execution path. See [semantics and verification](dashboard-sessions.md#dashboard-overviews-33).
+
+## Authenticated chart-managed MongoDB (#34)
+
+The chart optionally deploys an authenticated MongoDB 8.0 single-node replica set with retained StatefulSet storage, internal DNS, bounded idempotent initialization, authenticated probes, resource bounds and Secret references. External transaction-capable databases remain supported through the existing gateway URI Secret. Managed database ingress and gateway egress are limited to the same-namespace gateway/database pair on TCP 27017. Existing WordPress/MariaDB storage and gateway Secret RBAC are unchanged. This is non-HA, without managed TLS or backups; NetworkPolicy enforcement requires a suitable CNI. See [credentials, storage, external mode and non-destructive verification](mongodb-deployment.md).

@@ -129,7 +129,7 @@ Use an MCP-capable client with Streamable HTTP and the header `Authorization: Be
 
 ## Deploy to local Kubernetes
 
-The chart now also requires a transaction-capable MongoDB replica set and a URI Secret; it does not provision them. Supply `gateway.mongodbSecretName` (default `urumi-identity-storage`) with key `uri` before enabling the gateway. The existing cluster alone is insufficient for this image. Before rollout, supply a reviewed [gateway egress site overlay](docs/gateway-egress.md) permitting DNS, every MongoDB member and required Kubernetes API addresses; include that overlay in Helm commands below. See [deployment limitations](docs/identity-setup.md#kubernetes-limitation).
+The chart requires a transaction-capable MongoDB replica set and a URI Secret. It can provision an optional authenticated, persistent single-node replica set with `mongodb.enabled=true`, or use an external database. See [MongoDB deployment and restart verification](docs/mongodb-deployment.md). Supply `gateway.mongodbSecretName` (default `urumi-identity-storage`) with key `uri` before enabling the gateway. The existing cluster alone is insufficient for this image. Before rollout, supply a reviewed [gateway egress site overlay](docs/gateway-egress.md) permitting DNS, every MongoDB member and required Kubernetes API addresses; include that overlay in Helm commands below. See [database deployment options](docs/mongodb-deployment.md).
 
 Commands below use namespace `urumi` and release name `urumi`. Resource names and default DNS/allowed-host settings are fixed around those names; alternate namespaces or multiple releases need additional configuration or template changes.
 

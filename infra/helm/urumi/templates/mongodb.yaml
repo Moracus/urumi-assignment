@@ -1,0 +1,149 @@
+{{- if .Values.mongodb.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: urumi-mongodb
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app: urumi-mongodb
+  ports:
+    - name: mongodb
+      port: 27017
+      targetPort: mongodb
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: urumi-mongodb-scripts
+data:
+  auth.js: |
+    const admin = db.getSiblingDB('admin');
+    if (!admin.auth(process.env.MONGO_INITDB_ROOT_USERNAME, process.env.MONGO_INITDB_ROOT_PASSWORD)) quit(1);
+  init.js: |
+    load('/scripts/auth.js');
+    try {
+      const config = rs.conf();
+      if (config._id !== 'urumi' || config.members.length !== 1 || config.members[0].host !== process.env.MONGODB_MEMBER) quit(1);
+    } catch (error) {
+      if (error.code !== 94) quit(1);
+      const result = rs.initiate({_id: 'urumi', members: [{_id: 0, host: process.env.MONGODB_MEMBER}]});
+      if (!result.ok) quit(1);
+    }
+  live.js: |
+    load('/scripts/auth.js');
+    if (!admin.runCommand({ping: 1}).ok) quit(1);
+  ready.js: |
+    load('/scripts/auth.js');
+    const hello = admin.runCommand({hello: 1});
+    if (hello.setName !== 'urumi' || !hello.isWritablePrimary) quit(1);
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: urumi-mongodb
+spec:
+  serviceName: urumi-mongodb
+  replicas: 1
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
+  selector:
+    matchLabels:
+      app: urumi-mongodb
+  template:
+    metadata:
+      labels:
+        app: urumi-mongodb
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      initContainers:
+        - name: prepare-keyfile
+          image: "{{ .Values.mongodb.image.repository }}:{{ .Values.mongodb.image.tag }}"
+          imagePullPolicy: {{ .Values.mongodb.image.pullPolicy }}
+          command: ["bash", "-ec"]
+          args:
+            - cp /auth/keyfile /keyfile/keyfile; chown mongodb:mongodb /keyfile/keyfile; chmod 400 /keyfile/keyfile
+          securityContext:
+            runAsUser: 0
+          volumeMounts:
+            - {name: auth, mountPath: /auth, readOnly: true}
+            - {name: keyfile, mountPath: /keyfile}
+      containers:
+        - name: mongodb
+          image: "{{ .Values.mongodb.image.repository }}:{{ .Values.mongodb.image.tag }}"
+          imagePullPolicy: {{ .Values.mongodb.image.pullPolicy }}
+          args: ["mongod", "--replSet", "urumi", "--bind_ip_all", "--keyFile", "/keyfile/keyfile", "--auth"]
+          ports:
+            - {name: mongodb, containerPort: 27017}
+          env:
+            - name: MONGO_INITDB_ROOT_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.mongodb.authSecretName | quote }}
+                  key: username
+            - name: MONGO_INITDB_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.mongodb.authSecretName | quote }}
+                  key: password
+            - name: MONGODB_MEMBER
+              value: "urumi-mongodb-0.urumi-mongodb.{{ .Release.Namespace }}.svc:27017"
+          lifecycle:
+            postStart:
+              exec:
+                command:
+                  - bash
+                  - -ec
+                  - |
+                    for attempt in {1..120}; do
+                      if mongosh --quiet --host 127.0.0.1 --file /scripts/init.js >/dev/null 2>&1; then exit 0; fi
+                      sleep 2
+                    done
+                    exit 1
+          startupProbe:
+            exec:
+              command: [bash, -ec, 'mongosh --quiet --host 127.0.0.1 --file /scripts/ready.js >/dev/null 2>&1']
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            exec:
+              command: [bash, -ec, 'mongosh --quiet --host 127.0.0.1 --file /scripts/ready.js >/dev/null 2>&1']
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            exec:
+              command: [bash, -ec, 'mongosh --quiet --host 127.0.0.1 --file /scripts/live.js >/dev/null 2>&1']
+            periodSeconds: 20
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.mongodb.resources | nindent 12 }}
+          volumeMounts:
+            - {name: data, mountPath: /data/db}
+            - {name: keyfile, mountPath: /keyfile, readOnly: true}
+            - {name: scripts, mountPath: /scripts, readOnly: true}
+      volumes:
+        - name: auth
+          secret:
+            secretName: {{ .Values.mongodb.authSecretName | quote }}
+            items:
+              - {key: keyfile, path: keyfile}
+        - name: keyfile
+          emptyDir:
+            medium: Memory
+        - name: scripts
+          configMap:
+            name: urumi-mongodb-scripts
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: {{ .Values.global.storageClassName | quote }}
+        resources:
+          requests:
+            storage: {{ .Values.mongodb.storage.size | quote }}
+{{- end }}

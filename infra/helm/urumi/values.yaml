@@ -146,7 +146,7 @@ gateway:
 
   secretName: urumi-gateway-auth
 
-  # External transaction-capable MongoDB; chart does not provision MongoDB.
+  # URI Secret for managed or external transaction-capable MongoDB.
   mongodbSecretName: urumi-identity-storage
 
   allowedHosts: "localhost,127.0.0.1,urumi-gateway,urumi-gateway.urumi.svc.cluster.local,gateway.localhost"
@@ -194,3 +194,21 @@ networkPolicy:
     additionalDestinations: []
   
 # Never put raw credentials in values files.
+
+# Optional single-node replica set. Credentials are pre-provisioned Secrets.
+mongodb:
+  enabled: false
+  image:
+    repository: mongo
+    tag: "8.0"
+    pullPolicy: IfNotPresent
+  authSecretName: urumi-mongodb-auth
+  storage:
+    size: 5Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
