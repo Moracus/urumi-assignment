@@ -42,6 +42,19 @@ const replacementHandler = createMcpHandler(() => {
   return server;
 });
 const replacementNodeHandler = toNodeHandler(replacementHandler);
+// Test-only public boundary for changing a controlled upstream without touching registry internals.
+const upstreamModes = new Map();
+upstream.post('/control/:namespace', async (request, reply) => {
+  const mode = request.body?.mode;
+  if (!['valid', 'changed', 'offline'].includes(mode)) return reply.code(400).send();
+  upstreamModes.set(request.params.namespace, mode);
+  return reply.code(204).send();
+});
+upstream.all('/controlled/:namespace', (request, reply) => {
+  const mode = upstreamModes.get(request.params.namespace) ?? 'valid';
+  if (mode === 'offline') return reply.code(503).send({ error: 'private upstream diagnostic with synthetic-browser-one' });
+  return (mode === 'changed' ? replacementNodeHandler : nodeHandler)(request.raw, reply.raw, request.body);
+});
 upstream.all('/offline', async (_request, reply) => reply.code(503).send({ error: 'private upstream diagnostic' }));
 upstream.all('/offline/:namespace', async (_request, reply) => reply.code(503).send({ error: 'private upstream diagnostic' }));
 upstream.all('/mcp/:namespace', (request, reply) => nodeHandler(request.raw, reply.raw, request.body));

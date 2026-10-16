@@ -71,13 +71,15 @@ function ServerState({ server }: { server: ServerSummary }) {
     <dt>Last failure</dt><dd>{server.lastError ?? 'None'}</dd>
   </dl>;
 }
-function ServerDetails({ id, close, changed, edit }: { id: string; close: () => void; changed: () => void; edit: (server: ServerDetail) => void }) {
+function ServerDetails({ id, close, changed, edit, busy }: { id: string; close: () => void;
+  changed: (notice: string, removed?: boolean) => void; edit: (server: ServerDetail) => void; busy: (value: boolean) => void }) {
   const [data, setData] = useState<{ server: ServerDetail; catalog: Tool[] } | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [revision, setRevision] = useState(0);
   const [pending, setPending] = useState(false);
   const [actionError, setActionError] = useState('');
+  const [confirmation, setConfirmation] = useState<'disable' | 'remove' | null>(null);
   useEffect(() => {
     let active = true;
     setLoading(true); setData(null); setError('');
@@ -89,17 +91,25 @@ function ServerDetails({ id, close, changed, edit }: { id: string; close: () => 
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [id, revision]);
-  async function refreshDiscovery() {
+  async function act(action: 'enable' | 'disable' | 'refresh' | 'remove') {
     if (pending) return;
-    setPending(true); setActionError('');
+    setPending(true); busy(true); setActionError('');
     try {
-      await api.request(`/api/admin/servers/${id}/refresh`, 'POST', undefined, value => detail(value, id));
-      setRevision(value => value + 1); changed();
+      if (action === 'remove') {
+        await api.request(`/api/admin/servers/${id}`, 'DELETE');
+        changed('Server removed. Its tools are unavailable; Kubernetes Secrets were preserved.', true);
+      } else {
+        const server = await api.request(`/api/admin/servers/${id}/${action}`, 'POST', undefined, value => detail(value, id));
+        const label = action === 'enable' ? 'Server enabled.' : action === 'disable' ? 'Server disabled.' : 'Discovery refreshed.';
+        changed(`${label} Runtime status: ${server.status}.${server.status === 'unreachable'
+          ? ' Discovery failed; tools are unavailable. Inspect configuration and refresh discovery to retry.' : ''}`);
+      }
+      setConfirmation(null);
     } catch (error) { setActionError(message(error)); }
-    finally { setPending(false); }
+    finally { setPending(false); busy(false); }
   }
   return <section aria-label="Server details"><h2>Server details</h2>
-    <button onClick={close}>Close details</button>
+    <button disabled={pending} onClick={close}>Close details</button>
     {loading ? <p role="status">Loading server details…</p> : error ? <><p role="alert">{error}</p>
       <button onClick={() => setRevision(value => value + 1)}>Retry details</button></> : data && <>
       <h3>{data.server.displayName}</h3><p>Identifier: {data.server.serverId}</p>
@@ -107,17 +117,27 @@ function ServerDetails({ id, close, changed, edit }: { id: string; close: () => 
       <ServerState server={data.server} />
       <p>Authentication type: {data.server.authentication.type}</p>
       <p>Reference configured: {data.server.authentication.referenceConfigured ? 'Yes' : 'No'}</p>
-      <button disabled={pending} onClick={() => edit(data.server)}>Edit server</button>
-      <button disabled={pending} onClick={() => { setActionError(''); setRevision(value => value + 1); }}>Refresh details</button>
-      <button disabled={pending || !data.server.enabled} onClick={() => void refreshDiscovery()}>Refresh discovery</button>
+      <button disabled={pending || !!confirmation} onClick={() => edit(data.server)}>Edit server</button>
+      <button disabled={pending || !!confirmation} onClick={() => { setActionError(''); setRevision(value => value + 1); }}>Refresh details</button>
+      <button disabled={pending || !!confirmation || !data.server.enabled} onClick={() => void act('refresh')}>Refresh discovery</button>
       {!data.server.enabled && <p>Discovery refresh requires an enabled registration.</p>}
+      {data.server.enabled
+        ? <button disabled={pending || !!confirmation} onClick={() => { setActionError(''); setConfirmation('disable'); }}>Disable server</button>
+        : <button disabled={pending || !!confirmation} onClick={() => void act('enable')}>Enable server</button>}
+      <button disabled={pending || !!confirmation} onClick={() => { setActionError(''); setConfirmation('remove'); }}>Remove server</button>
+      {confirmation && <div role="dialog" aria-modal="true" aria-label={`${confirmation === 'disable' ? 'Disable' : 'Remove'} server confirmation`}>
+        <p>{confirmation === 'disable' ? `Disable ${id}? Its tools will become unavailable to MCP clients until enabled again.`
+          : `Remove ${id}? Its tools will become unavailable to MCP clients. This unregisters the configuration and closes connections. Kubernetes Secrets will not be deleted.`}</p>
+        <button disabled={pending} onClick={() => void act(confirmation)}>Confirm {confirmation}</button>
+        <button disabled={pending} onClick={() => setConfirmation(null)}>Cancel</button>
+      </div>}
       <h3>Available tools</h3>
       {data.catalog.length === 0 ? <p>No available tools.</p> : data.catalog.map(tool => <section key={tool.name} aria-label={tool.name}>
         <h4>{tool.name}</h4><p className="upstream-description">{tool.description ?? 'No description.'}</p>
         <pre className="tool-schema" aria-label={`Input schema for ${tool.name}`} tabIndex={0}>{JSON.stringify(tool.inputSchema, null, 2)}</pre>
       </section>)}
     </>}
-    {pending && <p role="status">Refreshing discovery…</p>}{actionError && <p role="alert">{actionError}</p>}
+    {pending && <p role="status">Updating server…</p>}{actionError && <><p role="alert">{actionError}</p><p>Refresh details to check the current state before retrying.</p></>}
   </section>;
 }
 export function Servers() {
@@ -128,6 +148,7 @@ export function Servers() {
   const [selected, setSelected] = useState<string | null>(null);
   const [editor, setEditor] = useState<{ initial?: ServerDetail } | null>(null);
   const [notice, setNotice] = useState('');
+  const [pending, setPending] = useState(false);
   async function save(id: string, input: ServerInput) {
     const server = await api.request(editor?.initial ? `/api/admin/servers/${id}` : '/api/admin/servers',
       editor?.initial ? 'PATCH' : 'POST', input, value => detail(value, id));
@@ -146,19 +167,21 @@ export function Servers() {
     return () => { active = false; };
   }, [revision]);
   return <section><h1>Servers</h1><p>Configured state and observed runtime status are separate. Only connected servers offer available tools.</p>
-    <button disabled={!!editor} onClick={() => { setNotice(''); setEditor({}); }}>Register server</button>
-    <button disabled={loading} onClick={() => setRevision(value => value + 1)}>Refresh servers</button>
+    <button disabled={pending || !!editor} onClick={() => { setNotice(''); setEditor({}); }}>Register server</button>
+    <button disabled={pending || loading} onClick={() => setRevision(value => value + 1)}>Refresh servers</button>
     {notice && <p role="status">{notice}</p>}
     {editor && <ServerForm initial={editor.initial} save={save} close={() => setEditor(null)} />}
     {loading ? <p role="status">Loading servers…</p> : error ? <><p role="alert">{error}</p>
-      <button onClick={() => setRevision(value => value + 1)}>Retry servers</button></>
+      <button disabled={pending} onClick={() => setRevision(value => value + 1)}>Retry servers</button></>
       : servers.length === 0 ? <p>No registered servers.</p> : <div className="table-scroll"><table>
         <thead><tr><th>Identifier</th><th>Name</th><th>Configured state</th><th>Runtime status</th><th>Available tools</th><th>Details</th></tr></thead>
         <tbody>{servers.map(server => <tr key={server.serverId}><td>{server.serverId}</td><td>{server.displayName}</td>
           <td>{server.enabled ? 'Enabled' : 'Disabled'}</td><td>{server.status}</td><td>{server.toolCount}</td>
-          <td><button onClick={() => setSelected(server.serverId)}>Inspect {server.serverId}</button></td></tr>)}</tbody>
+          <td><button disabled={pending} onClick={() => setSelected(server.serverId)}>Inspect {server.serverId}</button></td></tr>)}</tbody>
       </table></div>}
     {selected && !editor && <ServerDetails key={`${selected}:${revision}`} id={selected} close={() => setSelected(null)}
-      changed={() => setRevision(value => value + 1)} edit={server => { setNotice(''); setEditor({ initial: server }); }} />}
+      busy={setPending} changed={(notice, removed) => {
+        setNotice(notice); if (removed) setSelected(null); setRevision(value => value + 1);
+      }} edit={server => { setNotice(''); setEditor({ initial: server }); }} />}
   </section>;
 }
