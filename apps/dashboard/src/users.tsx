@@ -26,11 +26,15 @@ function userPage(value: unknown, page: number) {
 }
 function message(error: unknown) { return error instanceof Error ? error.message : 'The request failed. Try again.'; }
 
-function UserDetails({ id, close }: { id: string; close: () => void }) {
+function UserDetails({ id, close, changed }: { id: string; close: () => void; changed: (account: DashboardUser) => void }) {
   const [account, setAccount] = useState<DashboardUser | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [revision, setRevision] = useState(0);
+  const [pending, setPending] = useState(false);
+  const [actionError, setActionError] = useState('');
+  const [notice, setNotice] = useState('');
+  const [confirmDisable, setConfirmDisable] = useState(false);
   useEffect(() => {
     let active = true;
     setLoading(true); setAccount(null); setError('');
@@ -40,16 +44,52 @@ function UserDetails({ id, close }: { id: string; close: () => void }) {
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [id, revision]);
+  async function change(changes: { role?: DashboardUser['role']; status?: DashboardUser['status'] }) {
+    if (pending) return;
+    setPending(true); setActionError(''); setNotice('');
+    try {
+      const updated = await api.request(`/api/admin/users/${id}`, 'PATCH', changes, value => {
+        const result = userResponse(value);
+        return result.id === id ? result : invalid();
+      });
+      setAccount(updated); setConfirmDisable(false); changed(updated);
+      setNotice('User access updated.');
+      if (api.getSnapshot().session?.user.id === id) await api.refresh();
+    } catch (error) {
+      setActionError(error instanceof ApiError && error.status === 409
+        ? 'At least one active administrator must remain. Promote or re-enable another administrator first.'
+        : error instanceof ApiError && error.status === 400
+          ? 'The access change was rejected. Reload details and review the account before trying again.' : message(error));
+    } finally { setPending(false); }
+  }
   return <section aria-label="User details"><h2>User details</h2>
-    <button onClick={close}>Close details</button>
+    <button disabled={pending} onClick={close}>Close details</button>
     {loading ? <p role="status">Loading user details…</p> : error ? <><p role="alert">{error}</p>
-      <button onClick={() => setRevision(value => value + 1)}>Retry details</button></> : account && <dl>
+      <button onClick={() => setRevision(value => value + 1)}>Retry details</button></> : account && <><dl>
       <dt>Identifier</dt><dd>{account.id}</dd><dt>Email</dt><dd>{account.email}</dd>
       <dt>Role</dt><dd>{account.role}</dd><dt>Status</dt><dd>{account.status}</dd>
       <dt>Password replacement</dt><dd>{account.requiredPasswordChange ? 'Required' : 'Complete'}</dd>
       <dt>Created</dt><dd>{new Date(account.createdAt).toLocaleString()}</dd>
       <dt>Updated</dt><dd>{new Date(account.updatedAt).toLocaleString()}</dd>
-    </dl>}
+    </dl>
+      <p>All administrators have equal authority. At least one active administrator must remain.</p>
+      <button disabled={pending} onClick={() => {
+        setConfirmDisable(false); setActionError(''); setNotice(''); setRevision(value => value + 1);
+      }}>Refresh details</button>
+      <button disabled={pending || confirmDisable} onClick={() => void change({ role: account.role === 'member' ? 'admin' : 'member' })}>
+        {account.role === 'member' ? 'Promote to administrator' : 'Demote to member'}</button>
+      {account.status === 'disabled'
+        ? <><p>Re-enabling allows fresh login and new keys. Old sessions and keys remain invalid.</p>
+          <button disabled={pending} onClick={() => void change({ status: 'active' })}>Re-enable user</button></>
+        : <button disabled={pending || confirmDisable} onClick={() => { setConfirmDisable(true); setActionError(''); setNotice(''); }}>Disable user</button>}
+      {confirmDisable && <div role="dialog" aria-modal="true" aria-label="Disable user confirmation">
+        <p>Disable {account.email}? Existing dashboard sessions and gateway API keys will be permanently invalidated, even after re-enabling.</p>
+        <button disabled={pending} onClick={() => void change({ status: 'disabled' })}>Confirm disable</button>
+        <button disabled={pending} onClick={() => setConfirmDisable(false)}>Cancel</button>
+      </div>}
+      {pending && <p role="status">Updating user access…</p>}
+      {actionError && <p role="alert">{actionError}</p>}{notice && <p role="status">{notice}</p>}
+    </>}
   </section>;
 }
 
@@ -107,7 +147,11 @@ export function Users() {
       <button disabled={pending}>{pending ? 'Creating member…' : 'Create member'}</button>
     </form>
     {error && <p role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}
-    {selected && <UserDetails key={selected} id={selected} close={() => setSelected(null)} />}
+    {selected && <UserDetails key={selected} id={selected} close={() => setSelected(null)}
+      changed={account => {
+        setUsers(previous => previous.map(value => value.id === account.id ? account : value));
+        setRevision(value => value + 1);
+      }} />}
     <h2>Accounts</h2>
     <button disabled={loading || pending} onClick={() => { setLoading(true); setRevision(value => value + 1); }}>Refresh users</button>
     {loading ? <p role="status">Loading users…</p> : listError ? <><p role="alert">{listError}</p>

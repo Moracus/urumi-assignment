@@ -16,6 +16,20 @@ async function openUsers(page: Page) {
   await expect(page.getByRole('heading', { name: 'Users', exact: true })).toBeVisible();
 }
 
+test('last active administrator cannot demote or disable themselves', async ({ page }) => {
+  await openUsers(page);
+  await page.getByRole('button', { name: 'Inspect admin@example.com', exact: true }).click();
+  const details = page.getByRole('region', { name: 'User details' });
+  await details.getByRole('button', { name: 'Demote to member', exact: true }).click();
+  await expect(details.getByRole('alert')).toHaveText('At least one active administrator must remain. Promote or re-enable another administrator first.');
+  await expect(details.locator('dd').nth(2)).toHaveText('admin');
+  await details.getByRole('button', { name: 'Disable user', exact: true }).click();
+  await page.getByRole('button', { name: 'Confirm disable', exact: true }).click();
+  await expect(details.getByRole('alert')).toContainText('At least one active administrator must remain');
+  await expect(details.locator('dd').nth(3)).toHaveText('active');
+  expect((await page.request.get('/api/auth/me')).status()).toBe(200);
+});
+
 test('administrator creates and inspects a member who replaces the assigned password and logs in afresh', async ({ page }) => {
   await openUsers(page);
   const email = `dashboard-member-${Date.now()}@example.com`;
