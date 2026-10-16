@@ -147,7 +147,9 @@ It additionally verified:
 
 Initial probes against the main namespace's MariaDB timed out from **both** gateway
 and control. They were inconclusive and were not counted as denial evidence.
-Reachable dedicated listeners replaced them. No policy was weakened or CNI replaced.
+Reachable dedicated listeners replaced them. No policy was weakened or CNI replaced. Both temporary control Pods were removed
+after collecting evidence; the isolated application release remains Ready and its
+PVC is retained. The empty control namespace remains available for repeating probes.
 
 ## Corrected attempts and remaining limitations
 
@@ -179,6 +181,34 @@ Reachable dedicated listeners replaced them. No policy was weakened or CNI repla
   registry synchronization remain incomplete/outside scope. Single-node MongoDB is non-HA.
 - No cluster recreation, database reset, PVC deletion, commerce write smoke test,
   broad Secret permission or public upstream exposure occurred.
+
+## Two-axis review
+
+Reviewed commit `4f278b5` with `git diff e15133194b0abcc41dca41446fec2b2af3638d98...HEAD`
+by independent Standards and Spec agents. No expensive suites were rerun by reviewers.
+
+### Standards
+
+No findings. The verifier follows existing infrastructure-script conventions,
+requires explicit disposable context/namespace selection, avoids credential output,
+preserves PVCs and makes no commerce writes. Documentation distinguishes executed
+checks from prerequisites. No CODING_STANDARDS.md or CONTRIBUTING.md was found;
+AGENTS.md and existing repository conventions were applied. No actionable baseline
+smells were identified.
+
+### Spec
+
+Two acknowledged partial validations remain: the member's real-store WooCommerce
+read journey and credential-reference replacement against a credential-enforcing
+deployed upstream. The parent requires permitted WooCommerce read calls and explicit
+credential replacement. Controlled tests and real Kubernetes Secret authorization
+support implementation evidence but do not complete those live seams. Supply the
+operator prerequisites above before marking them verified. No scope creep or wrongly
+implemented requirement was found. Recorded production-image browser/MCP, persistence,
+RBAC and controlled network results support the claimed isolated deployment scope.
+
+Review totals: Standards **0** findings; Spec **2 partial validations**, with real-store
+reads the principal remaining demonstration prerequisite on that axis.
 
 ## Capability-level Day 4 status
 

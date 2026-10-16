@@ -131,7 +131,7 @@ operator authorization, and an explicit existing user ID. Never remove the setup
 
 The opt-in verifier below creates a uniquely named member, issues keys, registers,
 edits and removes upstreams, then restarts gateway and MongoDB separately. Run it
-only against a disposable release with at most 100 users/personal keys. It preserves
+only against a disposable release with fewer than 100 existing users and at most 100 personal keys. It preserves
 PVCs, retains credentials in process memory, and never makes commerce writes. It
 uses actual calculator/time deployments and approved alternate DNS spellings so
 the demonstration URLs do not duplicate the defaults. The failed-discovery path
