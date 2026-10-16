@@ -27,3 +27,5 @@ pre { padding: 16px; background: #edf2fa; }
 section button + button { margin-left: 8px; }
 .tool-schema { max-height: 24rem; overflow: auto; }
 .upstream-description { white-space: pre-wrap; overflow-wrap: anywhere; }
+fieldset { display: grid; gap: 16px; border: 0; margin: 0; padding: 0; min-width: 0; }
+select { font: inherit; padding: 10px; }

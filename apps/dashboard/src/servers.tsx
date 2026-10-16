@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api, ApiError } from './api.js';
+import { ServerForm, type ServerInput } from './server-form.js';
 
 interface ServerSummary {
   serverId: string;
@@ -70,7 +71,7 @@ function ServerState({ server }: { server: ServerSummary }) {
     <dt>Last failure</dt><dd>{server.lastError ?? 'None'}</dd>
   </dl>;
 }
-function ServerDetails({ id, close, changed }: { id: string; close: () => void; changed: () => void }) {
+function ServerDetails({ id, close, changed, edit }: { id: string; close: () => void; changed: () => void; edit: (server: ServerDetail) => void }) {
   const [data, setData] = useState<{ server: ServerDetail; catalog: Tool[] } | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
@@ -106,6 +107,7 @@ function ServerDetails({ id, close, changed }: { id: string; close: () => void; 
       <ServerState server={data.server} />
       <p>Authentication type: {data.server.authentication.type}</p>
       <p>Reference configured: {data.server.authentication.referenceConfigured ? 'Yes' : 'No'}</p>
+      <button disabled={pending} onClick={() => edit(data.server)}>Edit server</button>
       <button disabled={pending} onClick={() => { setActionError(''); setRevision(value => value + 1); }}>Refresh details</button>
       <button disabled={pending || !data.server.enabled} onClick={() => void refreshDiscovery()}>Refresh discovery</button>
       {!data.server.enabled && <p>Discovery refresh requires an enabled registration.</p>}
@@ -124,6 +126,16 @@ export function Servers() {
   const [error, setError] = useState('');
   const [revision, setRevision] = useState(0);
   const [selected, setSelected] = useState<string | null>(null);
+  const [editor, setEditor] = useState<{ initial?: ServerDetail } | null>(null);
+  const [notice, setNotice] = useState('');
+  async function save(id: string, input: ServerInput) {
+    const server = await api.request(editor?.initial ? `/api/admin/servers/${id}` : '/api/admin/servers',
+      editor?.initial ? 'PATCH' : 'POST', input, value => detail(value, id));
+    setEditor(null); setSelected(id); setRevision(value => value + 1);
+    setNotice(server.status === 'unreachable'
+      ? 'Server saved. Discovery failed; the registration remains saved. Inspect the endpoint and authentication, then edit or refresh discovery to recover.'
+      : `Server saved. Runtime status: ${server.status}.`);
+  }
   useEffect(() => {
     let active = true;
     setLoading(true); setServers([]); setError('');
@@ -134,7 +146,10 @@ export function Servers() {
     return () => { active = false; };
   }, [revision]);
   return <section><h1>Servers</h1><p>Configured state and observed runtime status are separate. Only connected servers offer available tools.</p>
+    <button disabled={!!editor} onClick={() => { setNotice(''); setEditor({}); }}>Register server</button>
     <button disabled={loading} onClick={() => setRevision(value => value + 1)}>Refresh servers</button>
+    {notice && <p role="status">{notice}</p>}
+    {editor && <ServerForm initial={editor.initial} save={save} close={() => setEditor(null)} />}
     {loading ? <p role="status">Loading servers…</p> : error ? <><p role="alert">{error}</p>
       <button onClick={() => setRevision(value => value + 1)}>Retry servers</button></>
       : servers.length === 0 ? <p>No registered servers.</p> : <div className="table-scroll"><table>
@@ -143,6 +158,7 @@ export function Servers() {
           <td>{server.enabled ? 'Enabled' : 'Disabled'}</td><td>{server.status}</td><td>{server.toolCount}</td>
           <td><button onClick={() => setSelected(server.serverId)}>Inspect {server.serverId}</button></td></tr>)}</tbody>
       </table></div>}
-    {selected && <ServerDetails key={selected} id={selected} close={() => setSelected(null)} changed={() => setRevision(value => value + 1)} />}
+    {selected && !editor && <ServerDetails key={`${selected}:${revision}`} id={selected} close={() => setSelected(null)}
+      changed={() => setRevision(value => value + 1)} edit={server => { setNotice(''); setEditor({ initial: server }); }} />}
   </section>;
 }

@@ -35,12 +35,33 @@ const handler = createMcpHandler(() => {
   return server;
 });
 const nodeHandler = toNodeHandler(handler);
+const replacementHandler = createMcpHandler(() => {
+  const server = new McpServer({ name: 'replacement-controlled', version: '1' });
+  server.registerTool('current', { description: 'Replacement catalog', inputSchema: z.object({ timezone: z.literal('UTC') }) },
+    async () => ({ content: [{ type: 'text', text: 'Replacement clock' }] }));
+  return server;
+});
+const replacementNodeHandler = toNodeHandler(replacementHandler);
 upstream.all('/offline', async (_request, reply) => reply.code(503).send({ error: 'private upstream diagnostic' }));
+upstream.all('/offline/:namespace', async (_request, reply) => reply.code(503).send({ error: 'private upstream diagnostic' }));
 upstream.all('/mcp/:namespace', (request, reply) => nodeHandler(request.raw, reply.raw, request.body));
+upstream.all('/secured/:variant', (request, reply) => {
+  const replacement = request.params.variant === 'replacement';
+  const authorized = replacement ? request.headers['x-upstream-token'] === 'synthetic-browser-two'
+    : request.headers.authorization === 'Bearer synthetic-browser-one';
+  if (!authorized) return reply.code(401).send({ error: 'Unauthorized' });
+  return (replacement ? replacementNodeHandler : nodeHandler)(request.raw, reply.raw, request.body);
+});
 upstream.addHook('onClose', () => handler.close());
+upstream.addHook('onClose', () => replacementHandler.close());
 const upstreamAddress = await upstream.listen({ host: '127.0.0.1', port: 0 });
 const gateway = await createGatewayApp({ mongodbUri: uri.toString(),
-  approvedSecrets: [{ namespace: 'urumi', name: 'browser-private-reference', key: 'token' }],
+  approvedSecrets: ['browser-private-reference', 'browser-replacement-reference'].map(name => ({ namespace: 'urumi', name, key: 'token' })),
+  secretReader: { async read(reference) {
+    if (reference.name === 'browser-private-reference') return 'synthetic-browser-one';
+    if (reference.name === 'browser-replacement-reference') return 'synthetic-browser-two';
+    throw new Error('Secret unavailable');
+  } },
   upstreams: ['calculator', 'time', 'woocommerce'].map(name => ({ name, url: `${upstreamAddress}/mcp/${name}`, enabled: true })),
   destinations: { allowLoopback: true, rules: [{ origin: upstreamAddress, cidrs: ['127.0.0.1/32'] }] },
 });
