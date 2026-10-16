@@ -2,6 +2,16 @@
 
 MongoDB is the source of desired upstream configuration. The existing registry owns observed status, MCP clients, discovered tools, and connection/discovery timestamps in memory. These observations are never written over desired configuration and are rebuilt on every restart. Tool execution still uses `executeTool()`, existing role policies, and per-request gateway API-key authentication.
 
+## Dashboard inspection (#30)
+
+Log in to the dashboard as an eligible administrator and open **Servers** (`/admin/servers`). The list shows every persisted registration, with configured enabled state separate from the backend's observed disconnected, connecting, connected, unreachable, or disabled status. Available tool counts describe the current connected catalog, not cached definitions from a previous connection. **Refresh servers** reloads the list; it does not reconnect upstreams.
+
+Choose **Inspect** to view the endpoint, transport, connection/discovery timestamps (or Never), sanitized failure, and available namespaced tools. Descriptions render as plain text and input schemas as formatted, scrollable JSON. Authentication shows only its type and whether a reference is configured. Stored references and credential values are not returned or displayed.
+
+**Refresh details** reloads observations and tools. **Refresh discovery** explicitly invokes the existing backend refresh action, then reloads authoritative details, catalog and list. It is unavailable for disabled registrations and never enables them. An unreachable result remains an observed failure even if the refresh HTTP request succeeds. Loading, empty, safe error and explicit retry states cover both list and detail reads; failed discovery actions allow deliberate resubmission. Members cannot use these pages or the administrator APIs.
+
+Run `pnpm --filter @urumi/gateway build`, then `MONGODB_TEST_URI='<disposable replica-set URI>' pnpm --filter @urumi/dashboard test:browser servers.spec.ts` for browser coverage against real MongoDB and controlled MCP upstreams. The fixture creates and drops its own uniquely named database. It covers real catalogs and schema preservation, hostile descriptions, unreachable and disabled registrations, safe authentication metadata, member denial, and supplementary controlled failure/loading responses. This validates the local application boundary; it does not verify Kubernetes routing or NetworkPolicy enforcement. No deployment or Helm changes are required for this dashboard-only addition; run the existing gateway and dashboard development servers to inspect it locally.
+
 ## Storage and startup
 
 `upstream_registrations` stores unique stable `serverId`, separate `displayName`, canonical `url`, `transport: "streamable-http"`, `enabled`, `authentication`, `configurationRevision`, `createdAt`, and `updatedAt`. The stable ID uses lowercase letters, digits, underscores and hyphens, beginning with a letter (maximum 100 characters); it remains the public tool namespace. Display names have 1–200 trimmed characters. Revisions are positive safe integers. Timestamps are MongoDB dates. Unknown fields and unsupported authentication configuration fail validation.

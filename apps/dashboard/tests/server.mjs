@@ -24,7 +24,7 @@ const { z } = requireGateway('zod/v4');
 const upstream = createMcpFastifyApp({ host: '127.0.0.1' });
 const handler = createMcpHandler(() => {
   const server = new McpServer({ name: 'browser-controlled', version: '1' });
-  server.registerTool('calculate', { inputSchema: z.object({ operation: z.literal('multiply'), a: z.number(), b: z.number() }) },
+  server.registerTool('calculate', { description: '<img src=x onerror="window.upstreamExecuted=true">', inputSchema: z.object({ operation: z.literal('multiply'), a: z.number(), b: z.number() }) },
     async ({ a, b }) => ({ content: [{ type: 'text', text: String(a * b) }] }));
   server.registerTool('current', { inputSchema: z.object({ timezone: z.string() }) },
     async () => ({ content: [{ type: 'text', text: '2026-10-16T00:00:00Z' }] }));
@@ -35,10 +35,12 @@ const handler = createMcpHandler(() => {
   return server;
 });
 const nodeHandler = toNodeHandler(handler);
+upstream.all('/offline', async (_request, reply) => reply.code(503).send({ error: 'private upstream diagnostic' }));
 upstream.all('/mcp/:namespace', (request, reply) => nodeHandler(request.raw, reply.raw, request.body));
 upstream.addHook('onClose', () => handler.close());
 const upstreamAddress = await upstream.listen({ host: '127.0.0.1', port: 0 });
 const gateway = await createGatewayApp({ mongodbUri: uri.toString(),
+  approvedSecrets: [{ namespace: 'urumi', name: 'browser-private-reference', key: 'token' }],
   upstreams: ['calculator', 'time', 'woocommerce'].map(name => ({ name, url: `${upstreamAddress}/mcp/${name}`, enabled: true })),
   destinations: { allowLoopback: true, rules: [{ origin: upstreamAddress, cidrs: ['127.0.0.1/32'] }] },
 });

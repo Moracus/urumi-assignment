@@ -2,6 +2,7 @@ import { useEffect, useState, useSyncExternalStore, type FormEvent } from 'react
 import { api, type DashboardUser } from './api.js';
 import { PersonalKeys } from './keys.js';
 import { Users } from './users.js';
+import { Servers } from './servers.js';
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : 'The request failed. Try again.';
@@ -87,7 +88,7 @@ function ProtectedDashboard({ user, path }: { user: DashboardUser; path: string 
     </nav>
     {error && <p role="alert">{error}</p>}
     {restricted ? <PasswordReplacement /> : path === '/keys' ? <PersonalKeys />
-      : allowed && path === '/admin/users' ? <Users /> : <section><h1>{title}</h1>
+      : allowed && path === '/admin/users' ? <Users /> : allowed && path === '/admin/servers' ? <Servers /> : <section><h1>{title}</h1>
       {!allowed ? <p>Administrator access is required for this page.</p>
         : path === '/dashboard' ? <p>You are signed in to Urumi MCP Gateway.</p>
         : titles[path] ? <p>{title} management will be available in a subsequent dashboard update.</p>

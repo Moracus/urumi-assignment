@@ -25,3 +25,5 @@ pre { padding: 16px; background: #edf2fa; }
 [aria-label="One-time key creation"], [role="dialog"] { padding: 16px; border: 1px solid #8795aa; margin: 16px 0; }
 [aria-label="One-time key creation"] input { font-family: monospace; }
 section button + button { margin-left: 8px; }
+.tool-schema { max-height: 24rem; overflow: auto; }
+.upstream-description { white-space: pre-wrap; overflow-wrap: anywhere; }
