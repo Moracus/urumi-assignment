@@ -32,7 +32,7 @@ function creation(value: unknown) {
 function message(error: unknown) { return error instanceof Error ? error.message : 'The request failed. Try again.'; }
 function date(value: string | null) { return value ? new Date(value).toLocaleString() : '—'; }
 
-function ConnectionInstructions() {
+export function ConnectionInstructions() {
   const configured = import.meta.env.VITE_PUBLIC_MCP_URL;
   let url: string | undefined;
   try {

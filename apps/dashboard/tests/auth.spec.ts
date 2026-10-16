@@ -21,7 +21,7 @@ test('login validation, safe failure, session restoration and server logout', as
   expect(cookie?.path).toBe('/api');
   await page.reload();
   await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
-  await expect(page.getByRole('link', { name: 'Users' })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Users', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Log out' }).click();
   await expect(page.getByText('Logged out.')).toBeVisible();
   expect((await page.request.get('/api/auth/me')).status()).toBe(401);
@@ -58,7 +58,7 @@ test('restricted member replaces password, logs in afresh, and cannot access adm
   expect((await page.request.get('/api/auth/me')).status()).toBe(401);
   await login(page, email, 'final member password');
   await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
-  await expect(page.getByRole('link', { name: 'Users' })).toHaveCount(0);
+  await expect(page.getByRole('link', { name: 'Users', exact: true })).toHaveCount(0);
   await page.goto('/admin/users');
   await expect(page.getByRole('heading', { name: 'Access denied' })).toBeVisible();
   expect((await page.request.get('/api/admin/users')).status()).toBe(403);
@@ -76,7 +76,7 @@ test('invalid CSRF refreshes authoritative state and requires deliberate logout 
   let attempts = 0;
   page.on('request', request => { if (request.url().endsWith('/api/auth/logout')) attempts++; });
   await page.getByRole('button', { name: 'Log out' }).click();
-  await expect(page.getByRole('status')).toContainText('submit again deliberately');
+  await expect(page.getByRole('status').filter({ hasText: 'submit again deliberately' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Log out' })).toBeVisible();
   expect(attempts).toBe(1);
   expect((await page.request.get('/api/auth/me')).status()).toBe(200);
@@ -164,10 +164,10 @@ test('account role changes and disabling are authoritative at revalidation', asy
     const headers = { Origin: 'http://localhost:5174', 'X-CSRF-Token': session.csrfToken };
     expect((await admin.patch(`/api/admin/users/${userId}`, { headers, data: { role: 'admin' } })).status()).toBe(200);
     await page.evaluate(() => window.dispatchEvent(new Event('focus')));
-    await expect(page.getByRole('link', { name: 'Users' })).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Users', exact: true })).toBeVisible();
     expect((await admin.patch(`/api/admin/users/${userId}`, { headers, data: { role: 'member' } })).status()).toBe(200);
     await page.evaluate(() => window.dispatchEvent(new Event('focus')));
-    await expect(page.getByRole('link', { name: 'Users' })).toHaveCount(0);
+    await expect(page.getByRole('link', { name: 'Users', exact: true })).toHaveCount(0);
     expect((await page.request.get('/api/admin/users')).status()).toBe(403);
     expect((await admin.patch(`/api/admin/users/${userId}`, { headers, data: { status: 'disabled' } })).status()).toBe(200);
     await page.evaluate(() => window.dispatchEvent(new Event('focus')));
