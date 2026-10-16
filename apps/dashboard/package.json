@@ -8,7 +8,8 @@
     "build": "tsc -b && vite build",
     "typecheck": "tsc --noEmit",
     "preview": "vite preview",
-    "test:browser": "playwright test"
+    "test:browser": "playwright test",
+    "smoke:readonly": "node scripts/smoke-readonly.mjs"
   },
   "dependencies": {
     "react": "^19.0.0",

@@ -270,7 +270,7 @@ helm template urumi infra/helm/urumi -n urumi \
   -f infra/helm/urumi/values-local.yaml
 ```
 
-For the real-browser authentication suite, see the [browser test commands](docs/dashboard-sessions.md#browser-integration-tests).
+For the complete browser-to-MCP demonstration, run `pnpm test:workflow`; see the [workflow, coverage, live read-only smoke, and Day 5 handoff](docs/browser-to-mcp-workflow.md). For focused browser authentication tests, see the [browser test commands](docs/dashboard-sessions.md#browser-integration-tests).
 
 The automated gateway tests include real MongoDB CLI setup, concurrent/durable consumption, transaction/index validation, outages and reconnection, dashboard login/me/logout/password replacement, administrator password reset with preserved keys and restored SDK access, required-change restrictions, all-device invalidation and concurrent replacement/login, session expiry/restart/device independence, Origin/CSRF, shared throttling, proxy/cookie modes, plus MCP SDK discovery and calls against controlled upstreams. The runner provisions disposable MongoDB containers; no Kubernetes or commerce services are needed. `createGatewayApp()` accepts default-migration upstream configurations, an audit logger, and an optional `mongodbUri`; it validates storage, restores persisted registrations, connects and refreshes the registry, returns an unlistening Fastify app, and releases MCP/registry/database resources on `app.close()`. The process entry point owns listening and signal shutdown. MCP requests use current persisted key/user state, with real user/key attribution in console audits; durable audit storage remains later work.
 

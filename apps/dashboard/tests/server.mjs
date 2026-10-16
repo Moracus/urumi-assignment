@@ -29,6 +29,9 @@ const handler = createMcpHandler(() => {
   server.registerTool('current', { inputSchema: z.object({ timezone: z.string() }) },
     async () => ({ content: [{ type: 'text', text: '2026-10-16T00:00:00Z' }] }));
   server.registerTool('list_products', {}, async () => ({ content: [{ type: 'text', text: 'Controlled product' }] }));
+  server.registerTool('list_orders', {}, async () => ({ content: [{ type: 'text', text: 'Controlled orders' }] }));
+  server.registerTool('get_order', { inputSchema: z.object({ order_id: z.number().int().positive() }) },
+    async ({ order_id }) => ({ content: [{ type: 'text', text: `Controlled order ${order_id}` }] }));
   for (const name of ['create_product', 'update_order_status']) {
     server.registerTool(name, {}, async () => ({ content: [{ type: 'text', text: 'WRITE WAS INVOKED' }] }));
   }

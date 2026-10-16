@@ -45,7 +45,7 @@ test('administrator overview counts all user pages and registered servers but on
   await page.getByRole('button', { name: 'Refresh summary', exact: true }).click();
   const summary = page.getByRole('region', { name: 'Administrator overview' });
   await expect(summary).toContainText(`Registered servers${servers.length + 3}`);
-  await expect(summary).toContainText(`Available tools${beforeTools + 5}`);
+  await expect(summary).toContainText(`Available tools${beforeTools + 7}`);
   await expect(summary).toContainText(`Users${beforeUsers + 11}`);
   await expect(page.getByRole('link', { name: 'Manage servers', exact: true })).toHaveAttribute('href', '/admin/servers');
   await expect(page.getByRole('link', { name: 'Manage users', exact: true })).toHaveAttribute('href', '/admin/users');

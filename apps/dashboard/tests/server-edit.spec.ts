@@ -14,7 +14,7 @@ test.beforeEach(async ({ request }) => {
   expect((await request.post('/api/__test/reset-login-budget')).status()).toBe(204);
 });
 
-test('approved bearer references survive edits and explicit header replacement updates a continuing MCP client', async ({ page }) => {
+test('one continuing administrator client follows dashboard registration, credential edits, disable, enable, refresh and removal', async ({ page }) => {
   const origin = await openServers(page);
   const me = await (await page.request.get('/api/auth/me')).json();
   const { rawKey } = await (await page.request.post('/api/keys', {
@@ -69,6 +69,23 @@ test('approved bearer references survive edits and explicit header replacement u
     expect(JSON.stringify(await (await page.request.get('/api/admin/servers/credential_edit')).json())).not.toContain('browser-replacement-reference');
     expect(await page.content()).not.toContain('synthetic-browser');
     expect(await page.evaluate(() => [Object.keys(localStorage), Object.keys(sessionStorage)])).toEqual([[], []]);
+    await details.getByRole('button', { name: 'Disable server', exact: true }).click();
+    await page.getByRole('button', { name: 'Confirm disable', exact: true }).click();
+    await expect(details).toContainText('Runtime statusdisabled');
+    expect((await client.listTools(undefined, { cacheMode: 'bypass' })).tools.map(tool => tool.name)).not.toContain('credential_edit.current');
+    await expect(client.callTool({ name: 'credential_edit.current', arguments: { timezone: 'UTC' } })).rejects.toBeInstanceOf(ProtocolError);
+    await details.getByRole('button', { name: 'Enable server', exact: true }).click();
+    await expect(details).toContainText('Runtime statusconnected');
+    await details.getByRole('button', { name: 'Refresh discovery', exact: true }).click();
+    await expect(page.getByRole('status').filter({ hasText: 'Discovery refreshed.' })).toContainText('connected');
+    expect((await client.listTools(undefined, { cacheMode: 'bypass' })).tools.map(tool => tool.name)).toContain('credential_edit.current');
+    expect((await client.callTool({ name: 'credential_edit.current', arguments: { timezone: 'UTC' } })).content).toEqual([{ type: 'text', text: 'Replacement clock' }]);
+    await details.getByRole('button', { name: 'Remove server', exact: true }).click();
+    await page.getByRole('button', { name: 'Confirm remove', exact: true }).click();
+    await expect(details).toHaveCount(0);
+    expect((await client.listTools(undefined, { cacheMode: 'bypass' })).tools.map(tool => tool.name)).not.toContain('credential_edit.current');
+    await expect(client.callTool({ name: 'credential_edit.current', arguments: { timezone: 'UTC' } })).rejects.toBeInstanceOf(ProtocolError);
+    expect((await client.callTool({ name: 'calculator.calculate', arguments: { operation: 'multiply', a: 7, b: 8 } })).content).toEqual([{ type: 'text', text: '56' }]);
   } finally { await client.close(); }
 });
 

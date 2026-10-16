@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "pnpm -r --parallel --filter \"./apps/*\" dev",
     "typecheck": "pnpm -r typecheck",
-    "build": "pnpm -r build"
+    "build": "pnpm -r build",
+    "test:workflow": "bash infra/mongodb/test.sh --browser"
   },
   "devDependencies": {
     "typescript": "^5.9.0"
