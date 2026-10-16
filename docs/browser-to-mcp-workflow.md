@@ -125,7 +125,7 @@ NetworkPolicy enforcement, or persistence across Kubernetes restarts. Follow
 and the [gateway egress matrix](gateway-egress.md) separately. Existing deployment
 evidence is recorded in [#34](issue-34-validation.md) and
 [#35](issue-35-validation.md); it is not a new deployment claim for this issue.
-Use an enforcing CNI for allowed/blocked connectivity; kindnet alone is insufficient.
+Use an enforcing CNI and controlled allowed/blocked connectivity tests; modern Kind includes NetworkPolicy support, but its name alone does not prove enforcement.
 
 Day 5 callers must reuse server-resolved `AuthenticatedIdentity` (`userId`, `role`,
 `keyId`) and `executeTool({ identity, toolName, arguments, requestId }, dependencies)`.

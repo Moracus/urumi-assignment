@@ -55,7 +55,7 @@ API CIDRs are also appended to `UPSTREAM_DENIED_CIDRS`, alongside configured app
 
 ## CNI and address requirements
 
-Use an enforcing CNI installed and maintained through its official procedure. The supplied Kind configuration uses its default networking and does not establish enforcement. Do not replace/recreate an existing cluster or install/replace its CNI as an automatic verification step.
+Use an enforcing CNI installed and maintained through its official procedure. Kind v0.24+ includes [NetworkPolicy support](https://github.com/kubernetes-sigs/kind/releases/tag/v0.24.0). Identify the actual installed kindnetd image and execute the controlled matrix; a default networking configuration alone is not evidence of enforcement. Do not replace/recreate an existing cluster or install/replace its CNI as an automatic verification step.
 
 Discover site settings using read-only commands:
 

@@ -1,6 +1,6 @@
 # Threat model
 
-Expand before submission: shared credentials, delegated tool authority, client tokens, malicious upstream tool metadata, SSRF, privilege escalation, member/member interactions and secrets exposure.
+Trust boundaries include browser sessions, delegated MCP tool authority, malicious upstream metadata, destination approval, database operators, Kubernetes RBAC, and the network implementation. Sections below describe implemented controls; the [milestone evidence](issue-37-validation.md) records what was actually verified.
 
 ## Identity storage slice (#3)
 
@@ -127,5 +127,11 @@ verify controller forwarded-header sanitization. Empty trust fails HTTPS login
 closed over internal HTTP. Local insecure cookies require the explicit development
 HTTP mode. Readiness remains database-aware but does not remove the management
 repair interface when all upstreams fail. NetworkPolicy objects require an enforcing
-CNI; the available kindnet cluster cannot verify isolation. See
+CNI; identify its version and execute controlled allowed/blocked probes. Modern Kind includes NetworkPolicy support. See
 [deployment requirements](dashboard-deployment.md).
+
+## Milestone evidence and remaining trust assumptions (#37)
+
+The [deployed verifier](../infra/helm/urumi/verify-milestone.mjs) is intentionally mutating and restricted to an explicitly selected disposable release/context. It creates a member, issues and revokes keys, changes registrations, and restarts gateway/MongoDB workloads without deleting claims. Secrets and sessions remain in process memory, and failures emit fixed stages. A failed run may leave verification accounts or registrations: inspect before retrying and disable/revoke remaining verification credentials. The fixture does not certify production operations.
+
+Successful application destination rejection, RBAC authorization and rendered NetworkPolicies establish different controls. A CNI name alone cannot establish packet isolation; modern Kind includes policy support. A connection that should be blocked but succeeds is failed enforcement evidence. Obtain a policy-enforcing cluster and run the controlled matrix before marking network isolation verified. Live WooCommerce reads, publicly trusted TLS, controller forwarded-header sanitization, backups, and production readiness require separate evidence. See the [remaining operator steps and Day 5 boundaries](milestone-handoff.md).

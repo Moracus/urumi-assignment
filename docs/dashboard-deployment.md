@@ -171,6 +171,9 @@ and logout without issuing keys. A disposable self-signed TLS fixture may explic
 set `VERIFICATION_ALLOW_SELF_SIGNED=true`; normal runs verify TLS certificates.
 
 A policy-enforcing cluster is required for allowed/blocked connectivity tests.
-Kind's default kindnet does **not** prove isolation. Run the controlled
+Kind v0.24+ includes [NetworkPolicy support](https://github.com/kubernetes-sigs/kind/releases/tag/v0.24.0); inspect the installed image and run the controlled
 [egress verification matrix](gateway-egress.md) and check ServiceAccount authorization
 on a suitable cluster. Do not infer enforcement from successfully rendered objects.
+
+The current full deployed browser/MCP/restart walkthrough and capability status are
+in [the operator handoff](milestone-handoff.md) and [issue 37 evidence](issue-37-validation.md).

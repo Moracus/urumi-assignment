@@ -4,7 +4,7 @@ A TypeScript MCP gateway that exposes WooCommerce, calculator, and time tools th
 
 Repository: [Moracus/urumi-assignment](https://github.com/Moracus/urumi-assignment).
 
-This document describes the current repository implementation. Deployment checks below are instructions, not a claim that a particular cluster has passed them.
+This document describes the current repository implementation. Deployment checks below are instructions, not a claim that a particular cluster has passed them. Use the [milestone operator walkthrough and Day 5 handoff](docs/milestone-handoff.md) and [current verification record](docs/issue-37-validation.md) to distinguish executed checks from outstanding prerequisites.
 
 ## Implemented capabilities
 
@@ -38,7 +38,7 @@ Browser ──> Ingress controller ──> WordPress + WooCommerce :80
                                     MariaDB :3306
 ```
 
-Only the gateway and WordPress have Ingress templates. Upstream MCP services and MariaDB use internal ClusterIP Services. See [system design](docs/systemdesign.md) for request flow, trust boundaries, failure behavior, and deployment decisions.
+Dashboard Ingress serves the SPA and routes same-origin `/api` to the gateway. The separate gateway Ingress exposes `/mcp`, and WordPress retains its storefront Ingress. Upstream MCP services, MariaDB, and optional managed MongoDB remain internal. See [system design](docs/systemdesign.md) for request flow, trust boundaries, failure behavior, and deployment decisions.
 
 ## Available tools
 

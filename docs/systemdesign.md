@@ -166,7 +166,7 @@ Application Dockerfiles build the selected package from the monorepo on Node.js 
 
 Resource names and default service URLs are fixed with the `urumi-` prefix; some allowed hosts include namespace `urumi`. Multiple releases in one namespace will collide without template changes. Alternate namespaces require inspecting and overriding namespace-dependent host settings.
 
-`values-local.yaml` selects Traefik and local storefront/gateway hostnames. `values-prod.yaml` provides placeholder production domains and a storage class, but does not provision DNS, certificates, backups, a controller, or a hardened deployment. The dashboard values have no corresponding workload or Ingress implementation.
+`values-local.yaml` selects Traefik and local storefront/gateway hostnames. `values-prod.yaml` provides placeholder production domains and a storage class, but does not provision DNS, certificates, backups, a controller, or a hardened deployment. Dashboard workloads, SPA fallback, same-origin API routing and optional managed MongoDB are implemented; see [deployment guidance](dashboard-deployment.md).
 
 ## Audit and observability
 
@@ -240,3 +240,7 @@ production requires Secure cookies and exact TLS proxy trust. Startup validates
 storage/authentication and required migration before listening; readiness checks
 MongoDB while tolerating all upstreams being unreachable. See
 [configuration and checks](dashboard-deployment.md).
+
+## Milestone verification and integration handoff (#37)
+
+Use the [operator walkthrough](milestone-handoff.md) for ordered deployment, browser/MCP demonstration, separate gateway and MongoDB restarts, and Day 5 interfaces. The [verification record](issue-37-validation.md) separates controlled application tests from deployed-image evidence and unverified network/commerce requirements. One gateway replica remains required; structured console audit hooks are not durable history.
