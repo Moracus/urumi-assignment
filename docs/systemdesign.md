@@ -4,7 +4,7 @@
 
 Urumi is an MCP gateway and a Kubernetes-hosted WooCommerce integration. Clients use one authenticated MCP endpoint to discover and invoke tools from three upstream servers. WordPress owns storefront functionality, WooCommerce owns commerce behavior, and MariaDB stores WordPress/WooCommerce data.
 
-This design describes [Moracus/urumi-assignment at commit `f740f55`](https://github.com/Moracus/urumi-assignment/tree/f740f557e524dd9ccf45e41014038a08a66aad92). It records implemented behavior and configuration requirements. It does not certify a running cluster or imply that the dashboard scaffold provides management features.
+This design describes [Moracus/urumi-assignment at commit `f740f55`](https://github.com/Moracus/urumi-assignment/tree/f740f557e524dd9ccf45e41014038a08a66aad92). It records implemented behavior and configuration requirements. It does not certify a running cluster or imply that the dashboard provides user, key, or server management screens. Dashboard authentication was added in #25.
 
 See [README](../README.md) for setup and validation commands.
 
@@ -36,7 +36,7 @@ The controller is installed separately from the application chart. Internal MCP 
 | Time MCP | Format current time using an IANA timezone. | No persisted application state. |
 | WordPress/WooCommerce | Storefront, products, orders, REST API, store administration. | MariaDB data and WordPress filesystem. |
 | MariaDB | Persist WordPress and WooCommerce relational data. | PVC mounted at `/var/lib/mysql`. |
-| Dashboard | React/Vite landing-page scaffold. | No implemented management backend integration. |
+| Dashboard | React/Vite login, password replacement, protected account navigation and logout. | In-memory session/CSRF state; authoritative cookie session restored through same-origin APIs. Management screens remain later work. |
 
 ## Gateway initialization and discovery
 
@@ -209,3 +209,8 @@ Administrator disable/enable/remove extend the existing registration management 
 ## Approved upstream Secret credentials (#22)
 
 The existing management service validates exact namespace/name/key approvals before persisting bearer or custom-header authentication references. An injected external Kubernetes Secret reader resolves values only when constructing an upstream connection. The shared registry retires callable generations on authentication edits, resolves again on reconnect, and fails only the affected server when reads fail. Transport destination/redirect guards remain in force. Gateway API keys and dashboard sessions remain separate. The chart binds a dedicated gateway ServiceAccount to a namespaced, named-Secret, get-only Role. See [operator configuration and rotation](upstream-credentials.md); single-replica coordination remains required.
+
+
+## Browser authentication (#25)
+
+The dashboard uses a single typed Fetch client for same-origin JSON requests with server-issued cookies and in-memory CSRF tokens. Route handling permits only password replacement/logout for restricted users and excludes administrator pages for members. Backend session and role checks remain authoritative. Refresh on reload, focus, visibility and every 30 visible seconds clears transient account views and rechecks current identity. Session generations reject stale responses. Forbidden mutations refresh session state without replay; failed logout never claims server invalidation. Local Vite proxies `/api` to the gateway; production dashboard routing and deployment are separate work. See [development and browser integration tests](dashboard-sessions.md#browser-dashboard-25).

@@ -1,1 +1,1 @@
-{"root":["./src/main.tsx","./vite.config.ts"],"version":"5.9.3"}
+{"root":["./src/api.ts","./src/app.tsx","./src/main.tsx","./vite.config.ts","./playwright.config.ts","./tests/auth.spec.ts"],"version":"5.9.3"}

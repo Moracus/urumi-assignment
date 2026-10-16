@@ -1,6 +1,6 @@
 # Dashboard sessions and user administration (#4–#12)
 
-Implemented endpoints are `POST /api/auth/login`, `GET /api/auth/me`, `POST /api/auth/logout`, and `POST /api/auth/change-password`. Administrator member creation, listing, and inspection are also implemented under `/api/admin/users` (see below). [Personal API-key management](api-keys.md) provides session-scoped `GET/POST /api/keys` and `DELETE /api/keys/:keyId`. These endpoints use MongoDB users established through [initial administrator setup](identity-setup.md) or administrator member creation. Administrator key management, [role changes](#promote-and-demote-administrators-10), and [disabling/re-enabling](#disable-and-re-enable-users-11) are also implemented. Administrator [password resets](#reset-a-password-12) are implemented. [Operator recovery](identity-setup.md#operator-recovery-13) is implemented through a separate CLI. The React dashboard, dynamic upstream management, and durable audits remain later tickets. Normal MCP bearer authentication uses [persistent gateway API keys](mcp-authentication.md); dashboard sessions cannot authenticate MCP.
+Implemented endpoints are `POST /api/auth/login`, `GET /api/auth/me`, `POST /api/auth/logout`, and `POST /api/auth/change-password`. Administrator member creation, listing, and inspection are also implemented under `/api/admin/users` (see below). [Personal API-key management](api-keys.md) provides session-scoped `GET/POST /api/keys` and `DELETE /api/keys/:keyId`. These endpoints use MongoDB users established through [initial administrator setup](identity-setup.md) or administrator member creation. Administrator key management, [role changes](#promote-and-demote-administrators-10), and [disabling/re-enabling](#disable-and-re-enable-users-11) are also implemented. Administrator [password resets](#reset-a-password-12) are implemented. [Operator recovery](identity-setup.md#operator-recovery-13) is implemented through a separate CLI. The React dashboard authentication journey is implemented (see [browser dashboard](#browser-dashboard-25)); user/key/server management screens and durable audits remain later tickets. Dynamic upstream management is documented in [upstream registrations](upstream-registrations.md). Normal MCP bearer authentication uses [persistent gateway API keys](mcp-authentication.md); dashboard sessions cannot authenticate MCP.
 
 ## Configuration
 
@@ -227,3 +227,45 @@ Deliver the temporary password privately. The target logs in with it and may acc
 Missing/invalid sessions or bearer-only authentication receive `401`; members, pending-password administrators, and Origin/CSRF failures receive `403`. Malformed target IDs or invalid/unknown body fields receive `400`; a valid missing target receives `404 User not found`. Non-JSON input receives `415`; bodies over 4096 bytes receive `413`. Storage/hashing failures return safe `503 Authentication unavailable`. An uncertain transaction commit may have succeeded despite a 503; inspect the target's state and try the assigned password before retrying.
 
 Administrator reset differs from **operator recovery**, available through the [separate CLI](identity-setup.md#operator-recovery-13): recovery requires database operator access, restores an explicitly selected existing user as an active administrator, and invalidates both sessions and API keys. Reset uses existing administrator authority, preserves role/status and keys, and never reopens initial setup or bootstrap MCP authentication. No new configuration, manual migration, or deployment change is required for reset. The React dashboard and public API Ingress remain later work; exercise this endpoint through direct local gateway access.
+
+
+## Browser dashboard (#25)
+
+The React/Vite dashboard uses the existing four authentication endpoints through one typed same-origin JSON client (`apps/dashboard/src/api.ts`). Login provides required-field feedback, safe errors, and disabled pending controls. Navigation shows the backend-provided email and role and the current page. `/dashboard` is protected; `/admin/users` and `/admin/servers` currently provide administrator-only placeholders for later management tickets. Member direct links show access denied; backend APIs independently enforce authorization.
+
+A restricted session is routed to `/change-password` with only password replacement and logout available. Replacement invalidates sessions and requires fresh login. Password fields clear on submission. Cookies remain server-issued and HttpOnly; passwords and CSRF tokens are never written to localStorage or sessionStorage. Management requests never use gateway bearer keys.
+
+Reload, window focus, returning to a visible tab, and a 30-second visible-tab check revalidate `/api/auth/me`. Revalidation unmounts account views and clears their transient state while checking authority. Changed accounts, roles, expired/invalidated sessions, password replacement, and logout cannot retain the prior view. Session generations cause the shared client to reject delayed responses from previous sessions. New feature modules must use this client and keep sensitive state inside the protected account view so unmount clears it.
+
+A mutation returning 403 refreshes authoritative session/CSRF state and asks for deliberate resubmission; it is never automatically replayed. The backend intentionally uses the same safe Forbidden response for Origin, CSRF, and authorization failures, so refresh applies to any 403. Logout reports success only after server confirmation; network/service failures retain a retryable session and explicitly say logout was not confirmed. A 401 clears the local account state. Gateway API keys remain independent of logout and ordinary password replacement.
+
+For local development, first configure transaction-capable MongoDB and perform [initial administrator setup](identity-setup.md), then start gateway and dashboard in separate terminals using the same gateway environment:
+
+```bash
+export NODE_ENV=development
+export DASHBOARD_ALLOW_HTTP=true
+export DASHBOARD_TRUSTED_ORIGINS=http://localhost:5173
+pnpm --filter @urumi/gateway dev
+# In a second terminal:
+pnpm --filter @urumi/dashboard dev
+```
+
+Open `http://localhost:5173`. Vite proxies `/api` to `http://localhost:3000`. Its public origin, including the port, must exactly match the trusted origin. Production same-origin static hosting, SPA fallback, TLS and Helm dashboard deployment remain separate work; this ticket changes no Kubernetes resources.
+
+### Browser integration tests
+
+Install dependencies and Chromium once, build the gateway, then provision only the disposable test replica set:
+
+```bash
+pnpm install --frozen-lockfile
+pnpm --filter @urumi/dashboard exec playwright install chromium
+pnpm --filter @urumi/gateway build
+docker compose -p urumi-identity-integration -f infra/mongodb/compose.integration.yaml up -d --wait --wait-timeout 90
+export MONGODB_TEST_URI='mongodb://127.0.0.1:27417/urumi_test?replicaSet=urumi&directConnection=true'
+pnpm --filter @urumi/dashboard test:browser
+docker compose -p urumi-identity-integration -f infra/mongodb/compose.integration.yaml down
+```
+
+The reusable fixture starts the real Fastify gateway on loopback port 3009 and Vite on port 5174. It creates a randomly named isolated database, establishes an administrator through the setup interface, and drops only that database during shutdown. It requires an explicitly supplied test replica-set URI and does not reuse running web servers. These tests should run sequentially with the gateway integration runner, whose outage tests pause the disposable MongoDB container.
+
+The browser suite covers login validation/failure/pending/success, HttpOnly cookies, empty browser storage, password replacement/fresh login, reload, member navigation and backend denial, role changes, disabling and server invalidation, CSRF refresh without replay, trusted-Origin rejection, accurate logout failure, preserved MCP key authentication, safe malformed-response errors, and stale-response rejection. Controlled HTTP responses supplement the real gateway for otherwise difficult failure branches. Existing backend integration tests additionally cover fixed session expiry and MongoDB outages. Browser tests do not establish Kubernetes deployment or network isolation.

@@ -19,7 +19,7 @@ This document describes the current repository implementation. Deployment checks
 - Dockerfiles for the gateway and upstream services; Helm Deployments, ClusterIP Services, health probes, resource settings, and persistent volumes for WordPress and MariaDB.
 - Gateway `/mcp` and storefront `/` Ingress routes, plus ingress restrictions between platform components.
 
-The React dashboard is a scaffold. Administrator member creation, listing, and inspection are available through the [backend API](docs/dashboard-sessions.md#create-and-inspect-members-6). Eligible users can [manage their personal gateway API keys](docs/api-keys.md), with one-time disclosure, safe metadata, and revocation. Administrators can also [manage another user’s keys](docs/api-keys.md#administrator-assistance-9). Administrators can [promote and demote users](docs/dashboard-sessions.md#promote-and-demote-administrators-10), with atomic last-active-administrator protection. Administrators can also [disable and re-enable users](docs/dashboard-sessions.md#disable-and-re-enable-users-11), permanently invalidating existing sessions and keys. Audit browsing, remaining server lifecycle operations, and chat remain later work.
+The React dashboard supports [login, session restoration, required password replacement, and logout](docs/dashboard-sessions.md#browser-dashboard-25). User, key, and server management screens remain later work. Administrator member creation, listing, and inspection are available through the [backend API](docs/dashboard-sessions.md#create-and-inspect-members-6). Eligible users can [manage their personal gateway API keys](docs/api-keys.md), with one-time disclosure, safe metadata, and revocation. Administrators can also [manage another user’s keys](docs/api-keys.md#administrator-assistance-9). Administrators can [promote and demote users](docs/dashboard-sessions.md#promote-and-demote-administrators-10), with atomic last-active-administrator protection. Administrators can also [disable and re-enable users](docs/dashboard-sessions.md#disable-and-re-enable-users-11), permanently invalidating existing sessions and keys. Audit browsing, remaining server lifecycle operations, and chat remain later work.
 
 ## Architecture
 
@@ -64,7 +64,7 @@ apps/
   woocommerce-mcp/     WooCommerce REST API adapter and MCP tools
   calculator-mcp/      Arithmetic MCP server
   time-mcp/            Timezone MCP server
-  dashboard/           React/Vite scaffold
+  dashboard/           React/Vite session dashboard
 packages/shared/       Shared types
 infra/
   helm/urumi/          Chart, values, workloads, ingress, network policies
@@ -108,6 +108,8 @@ export WC_URL=http://localhost:8080
 export WOOCOMMERCE_MCP_URL=http://localhost:3001/mcp
 export CALCULATOR_MCP_URL=http://localhost:3002/mcp
 export TIME_MCP_URL=http://localhost:3003/mcp
+export DASHBOARD_ALLOW_HTTP=true
+export DASHBOARD_TRUSTED_ORIGINS=http://localhost:5173
 pnpm dev
 ```
 
@@ -115,7 +117,7 @@ Run this prompt block in Bash (`bash` if your default shell is zsh). Set `WC_URL
 
 | Service | Local address |
 | --- | --- |
-| Dashboard scaffold | `http://localhost:5173` |
+| Dashboard | `http://localhost:5173` |
 | Gateway MCP | `http://localhost:3000/mcp` |
 | WooCommerce MCP | `http://localhost:3001/mcp` |
 | Calculator MCP | `http://localhost:3002/mcp` |
@@ -265,6 +267,8 @@ helm template urumi infra/helm/urumi -n urumi \
   -f infra/helm/urumi/values-local.yaml
 ```
 
+For the real-browser authentication suite, see the [browser test commands](docs/dashboard-sessions.md#browser-integration-tests).
+
 The automated gateway tests include real MongoDB CLI setup, concurrent/durable consumption, transaction/index validation, outages and reconnection, dashboard login/me/logout/password replacement, administrator password reset with preserved keys and restored SDK access, required-change restrictions, all-device invalidation and concurrent replacement/login, session expiry/restart/device independence, Origin/CSRF, shared throttling, proxy/cookie modes, plus MCP SDK discovery and calls against controlled upstreams. The runner provisions disposable MongoDB containers; no Kubernetes or commerce services are needed. `createGatewayApp()` accepts default-migration upstream configurations, an audit logger, and an optional `mongodbUri`; it validates storage, restores persisted registrations, connects and refreshes the registry, returns an unlistening Fastify app, and releases MCP/registry/database resources on `app.close()`. The process entry point owns listening and signal shutdown. MCP requests use current persisted key/user state, with real user/key attribution in console audits; durable audit storage remains later work.
 
 With all three upstream endpoints reachable and the gateway URL variables set as in the local setup:
@@ -291,7 +295,7 @@ Verify network isolation using ordinary test Pods: unrelated Pods should be deni
 - No TLS block in the Ingress templates, broader request rate limiting beyond dashboard login, or automatic retry of failed tool calls. Failed writes can have uncertain outcomes and need inspection before retrying.
 - Single-replica workloads; database and WordPress persistence use PVCs with `Recreate` Deployments. Backups, high availability, restore automation, and production hardening are not supplied.
 - WooCommerce installation and store configuration are manual. Health probes do not prove that store APIs or checkout work.
-- Dashboard remains a local scaffold with no Helm workload or Ingress template. A dashboard hostname/image value alone does not deploy it.
+- Dashboard authentication runs locally through Vite; it has no Helm workload or Ingress template. A dashboard hostname/image value alone does not deploy it.
 
 These limits describe the current implementation and should be revised as capabilities are added.
 

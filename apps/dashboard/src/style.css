@@ -1,1 +1,19 @@
-:root{font-family:system-ui, sans-serif;color:#17253e;background:#f6f8fc}main{max-width:850px;margin:10vh auto;padding:36px;background:white;border-radius:16px;box-shadow:0 8px 28px #0000000b}h1{font-size:30px}
+:root { font-family: system-ui, sans-serif; color: #17253e; background: #f6f8fc; }
+body { margin: 0; }
+main { max-width: 850px; margin: 5vh auto; padding: 32px; background: white; border-radius: 12px; }
+header { font-weight: 700; border-bottom: 1px solid #d7dce5; padding-bottom: 16px; }
+h1 { font-size: 28px; }
+form { max-width: 400px; display: grid; gap: 16px; }
+label { display: grid; gap: 6px; }
+input, button { font: inherit; padding: 10px; border: 1px solid #8795aa; border-radius: 5px; }
+button { cursor: pointer; background: #214f9b; color: white; }
+button:disabled { cursor: wait; opacity: .65; }
+.secondary { background: white; color: #214f9b; margin-top: 16px; }
+nav { padding: 16px 0; border-bottom: 1px solid #d7dce5; }
+nav button { margin-top: 16px; }
+.links { display: flex; flex-wrap: wrap; gap: 20px; }
+a { color: #214f9b; }
+a[aria-current] { font-weight: bold; }
+[role=alert] { color: #9d2020; }
+[role=status] { padding: 12px; background: #edf2fa; }
+@media (max-width: 600px) { main { margin: 0; padding: 20px; } }
