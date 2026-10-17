@@ -3,7 +3,7 @@ import { api, ApiError } from './api.js';
 
 interface AuditRow {
   id: string;
-  userId: string;
+  userId: string | null;
   userEmail: string | null;
   upstreamName: string | null;
   upstreamDisplayName: string | null;
@@ -13,7 +13,7 @@ interface AuditRow {
   outcome: string;
 }
 const pageSize = 10;
-const outcomes = ['success', 'tool_error', 'unauthorized', 'not_found', 'upstream_error', 'upstream_unavailable', 'upstream_timeout'];
+const outcomes = ['unauthenticated', 'rejected', 'success', 'tool_error', 'unauthorized', 'not_found', 'upstream_error', 'upstream_unavailable', 'upstream_timeout'];
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -21,7 +21,7 @@ function invalid(): never { throw new ApiError(0, 'Service returned an invalid r
 function nullableString(value: unknown): value is string | null { return value === null || typeof value === 'string'; }
 function row(value: unknown): AuditRow {
   if (!record(value) || typeof value.id !== 'string' || !/^[a-f0-9]{24}$/.test(value.id)
-    || typeof value.userId !== 'string' || !nullableString(value.userEmail)
+    || !nullableString(value.userId) || !nullableString(value.userEmail)
     || !nullableString(value.upstreamName) || !nullableString(value.upstreamDisplayName)
     || typeof value.toolName !== 'string' || typeof value.timestamp !== 'string' || !Number.isFinite(Date.parse(value.timestamp))
     || typeof value.durationMs !== 'number' || !Number.isFinite(value.durationMs) || value.durationMs < 0
@@ -53,14 +53,14 @@ export function ToolHistory() {
     return () => { active = false; };
   }, [page, revision]);
   return <section><h1>Tool history</h1>
-    <p>Attempts reaching tool execution, newest first. History may be incomplete during storage outages.</p>
+    <p>Tool attempts, including identified MCP rejections, newest first. History may be incomplete during storage outages.</p>
     <button disabled={loading} onClick={() => setRevision(value => value + 1)}>Refresh history</button>
     {loading ? <p role="status">Loading tool history…</p> : error ? <><p role="alert">{error}</p>
       <button onClick={() => setRevision(value => value + 1)}>Retry history</button></>
       : rows.length === 0 ? <p>No tool calls on this page.</p> : <div className="table-scroll"><table>
         <thead><tr>{['User', 'Server', 'Tool', 'Time', 'Duration', 'Outcome'].map(title => <th key={title}>{title}</th>)}</tr></thead>
         <tbody>{rows.map(row => <tr key={row.id}>
-          <td title={row.userId}>{row.userEmail ?? row.userId}</td>
+          <td title={row.userId ?? undefined}>{row.userEmail ?? row.userId ?? 'Unauthenticated'}</td>
           <td title={row.upstreamName ?? undefined}>{row.upstreamDisplayName ?? row.upstreamName ?? 'Unresolved'}</td>
           <td>{row.toolName}</td><td><time dateTime={row.timestamp}>{new Date(row.timestamp).toLocaleString()}</time></td>
           <td>{row.durationMs} ms</td><td>{row.outcome}</td>

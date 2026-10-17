@@ -1,4 +1,6 @@
 export type AuditOutcome =
+  | "unauthenticated"
+  | "rejected"
   | "success"
   | "tool_error"
   | "unauthorized"
@@ -9,12 +11,12 @@ export type AuditOutcome =
 export interface AuditRecord {
   requestId: string;
   attemptId: string;
-  authenticationOrigin: "gateway_api_key" | "dashboard_session";
+  authenticationOrigin: "gateway_api_key" | "dashboard_session" | null;
   userEmail: string | null;
   upstreamId: string | null;
   upstreamDisplayName: string | null;
 
-  userId: string;
+  userId: string | null;
 
   keyId: string | null;
 

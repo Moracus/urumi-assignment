@@ -9,7 +9,7 @@ const time = z.iso.datetime({ offset: true }).transform(value => new Date(value)
 const queryInput = paginationInput.extend({
   userId: z.string().regex(/^[a-f0-9]{24}$/).optional(),
   toolName: z.string().min(1).max(512).optional(),
-  outcome: z.enum(["success", "tool_error", "unauthorized", "not_found", "upstream_error", "upstream_unavailable", "upstream_timeout"]).optional(),
+  outcome: z.enum(["unauthenticated", "rejected", "success", "tool_error", "unauthorized", "not_found", "upstream_error", "upstream_unavailable", "upstream_timeout"]).optional(),
   from: time.optional(), to: time.optional(),
 }).refine(value => !value.from || !value.to || value.from < value.to);
 

@@ -22,7 +22,10 @@ import type {
   ToolAggregator,
 } from "./tools/aggregator.js";
 
+import type { McpAttempt } from "./audit/mcp-attempt.js";
+
 export interface GatewayMcpDependencies {
+  attempt?: McpAttempt;
   aggregator: ToolAggregator;
   execution: ExecutionDependencies;
 }
@@ -66,7 +69,8 @@ export function createGatewayMcpServer(
               identity,
               toolName: tool.name,
               arguments: args,
-              requestId: randomUUID(),
+              requestId: dependencies.attempt?.id ?? randomUUID(),
+              attemptId: dependencies.attempt?.startExecution(),
             },
             dependencies.execution,
           );

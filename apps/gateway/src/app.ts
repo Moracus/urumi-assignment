@@ -35,6 +35,7 @@ import {
   createGatewayMcpServer,
 } from "./mcp-server.js";
 
+import { identifyMcpAttempt, type McpAttempt } from "./audit/mcp-attempt.js";
 import type { AuditLogger } from "./audit/logger.js";
 import type { UpstreamConfig } from "./upstream/types.js";
 import { connectIdentityStorage } from "./identity/storage.js";
@@ -98,6 +99,7 @@ export async function createGatewayApp(options: GatewayAppOptions = {}) {
     const invoker = new McpUpstreamInvoker(registry);
 
     const auditLogger = options.auditLogger ?? identityStorage.audit;
+    const pendingAudits = new Set<Promise<void>>();
 
     const execution = {
       resolver,
@@ -112,15 +114,16 @@ export async function createGatewayApp(options: GatewayAppOptions = {}) {
 
     // Adapt the Node HTTP handler to the SDK factory without a second lookup.
     // Each incoming request gets a separate scope, including legacy stateless serving.
-    const verifiedIdentity = new AsyncLocalStorage<AuthenticatedIdentity>();
+    const verifiedIdentity = new AsyncLocalStorage<{ identity: AuthenticatedIdentity; attempt?: McpAttempt }>();
     const mcpHandler = createMcpHandler(
       () => {
-        const identity = verifiedIdentity.getStore();
-        if (!identity) throw new AuthenticationError();
+        const scope = verifiedIdentity.getStore();
+        if (!scope) throw new AuthenticationError();
 
         return createGatewayMcpServer(
-          identity,
+          scope.identity,
           {
+            attempt: scope.attempt,
             aggregator,
             execution,
           },
@@ -181,6 +184,7 @@ export async function createGatewayApp(options: GatewayAppOptions = {}) {
     // ------------------------------------------
 
     app.all("/mcp", async (request, reply) => {
+      const attempt = identifyMcpAttempt(request.method, request.body);
       try {
         if (!(await identityStorage.isAvailable())) {
           return reply.code(503).send({ error: "Authentication unavailable" });
@@ -189,7 +193,8 @@ export async function createGatewayApp(options: GatewayAppOptions = {}) {
           request.headers.authorization,
           identityStorage,
         );
-        return await verifiedIdentity.run(identity, () => nodeHandler(request.raw, reply.raw, request.body));
+        attempt?.authenticate(identity, aggregator.listTools().some(tool => tool.name === attempt.toolName));
+        return await verifiedIdentity.run({ identity, attempt }, () => nodeHandler(request.raw, reply.raw, request.body));
       } catch (error) {
         if (error instanceof AuthenticationError) {
           return reply
@@ -210,6 +215,13 @@ export async function createGatewayApp(options: GatewayAppOptions = {}) {
         return reply.code(503).send({
           error: "Authentication unavailable",
         });
+      } finally {
+        if (attempt) {
+          const writing = attempt.finish(auditLogger);
+          pendingAudits.add(writing);
+          try { await writing; }
+          finally { pendingAudits.delete(writing); }
+        }
       }
     });
 
@@ -222,7 +234,10 @@ export async function createGatewayApp(options: GatewayAppOptions = {}) {
         await mcpHandler.close();
       } finally {
         try { await registry.close(); }
-        finally { await identityStorage.close(); }
+        finally {
+          await Promise.all(pendingAudits);
+          await identityStorage.close();
+        }
       }
     });
     try {

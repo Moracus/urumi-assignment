@@ -476,7 +476,7 @@ test("fresh roles filter discovery and calls, last-use advances on denied tools,
   }
   for (const name of ["woocommerce.create_product", "woocommerce.update_order_status", "woocommerce.invented"]) await denied(name);
   assert.equal(writes, 0);
-  assert.equal(records.length, 0);
+  assert.deepEqual(records.map(record => record.outcome), ["unauthorized", "unauthorized", "not_found"]);
   const usedBefore = (await f.app.inject({ url: "/api/keys", headers: f.headers })).json().keys[0].lastUsedAt;
   await denied("woocommerce.create_product");
   const usedAfter = (await f.app.inject({ url: "/api/keys", headers: f.headers })).json().keys[0].lastUsedAt;
@@ -1503,9 +1503,8 @@ test("disable drains an already-started call while blocking new invocations and 
   call.release();
   assert.deepEqual((await started).content, [{ type: "text", text: "finished" }]);
   assert.equal((await disabling).statusCode, 200);
-  assert.equal(records[0].outcome, "success");
-  assert.equal(records[0].userId, f.userId);
-  assert.equal(records[0].keyId, f.key.id);
+  assert.deepEqual(records.map(record => record.outcome), ["not_found", "success"]);
+  assert.ok(records.every(record => record.userId === f.userId && record.keyId === f.key.id));
 });
 
 test("failed removal deletion leaves a durable disabled registration that can be retried", async t => {
@@ -2231,4 +2230,164 @@ test("durable audit classifies upstream protocol failure and timeout while healt
   assert.deepEqual(rows.map(row => row.outcome).sort(), ["success", "upstream_error", "upstream_timeout"]);
   assert.ok(rows.every(row => row.userId === f.userId && row.keyId === f.key.id));
   assert.ok(!response.body.includes("malformed-private-result"));
+});
+
+
+test("SDK rejected tool attempts and normal execution each have one durable row", async t => {
+  const calculator = await calculatorUpstream(t);
+  const woocommerce = await controlledUpstream(t, "woocommerce", server => {
+    server.registerTool("create_product", {}, async () => { assert.fail("Forbidden write executed"); });
+  });
+  const f = await fixture(t, { upstreams: [calculator.config, woocommerce.config] });
+  const client = await f.connect();
+  async function rejected(name: string, args?: Record<string, unknown>) {
+    await client.callTool({ name, arguments: args }).then(
+      result => assert.equal(result.isError, true),
+      error => assert.ok(error instanceof ProtocolError),
+    );
+  }
+  await rejected("calculator.missing");
+  await rejected("woocommerce.create_product");
+  await rejected("calculator.calculate", { a: "private-invalid-argument", b: 7 });
+  await client.callTool({ name: "calculator.calculate", arguments: { a: 6, b: 7 } });
+  await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
+  const response = await f.app.inject({ url: "/api/admin/audit", headers: f.headers });
+  assert.equal(response.statusCode, 200);
+  const rows: AuditRecord[] = response.json().records;
+  assert.equal(rows.length, 4);
+  assert.deepEqual(rows.map(row => row.outcome).sort(), ["not_found", "rejected", "success", "unauthorized"]);
+  assert.equal(new Set(rows.map(row => row.attemptId)).size, 4);
+  for (const row of rows) {
+    assert.equal(row.userId, f.userId); assert.equal(row.keyId, f.key.id);
+    assert.equal(row.authenticationOrigin, "gateway_api_key");
+    assert.match(row.attemptId, /^[a-f0-9-]{36}$/);
+    if (row.outcome !== "success") {
+      assert.equal(row.upstreamId, null); assert.equal(row.upstreamName, null);
+      assert.equal(row.upstreamDisplayName, null);
+    }
+  }
+  assert.ok(!response.body.includes("private-invalid-argument"));
+  assert.ok(!response.body.includes(f.rawKey));
+});
+
+test("identifiable unauthenticated calls have null attribution and malformed traffic fabricates no executions", async t => {
+  const calculator = await calculatorUpstream(t);
+  const f = await fixture(t, { upstreams: [calculator.config] });
+  const client = await f.connect();
+  await f.app.inject({ method: "DELETE", url: `/api/keys/${f.key.id}`, headers: f.headers });
+  await assert.rejects(client.callTool({ name: "calculator.calculate", arguments: { a: 6, b: 7 } }), httpFailure(401));
+  const body = { jsonrpc: "2.0", id: "same-client-id", method: "tools/call", params: {
+    name: "calculator.calculate", arguments: { a: "private-argument", userId: f.userId, role: "admin", keyId: f.key.id },
+    _meta: { attemptId: "forged-attempt", userId: f.userId },
+  } };
+  // A repeated client ID still describes independent server-owned attempts.
+  await Promise.all([undefined, "Bearer invalid-credential", `Bearer ${f.rawKey}`].map(async authorization => {
+    const response = await fetch(`${f.address}/mcp`, { method: "POST", headers: {
+      "content-type": "application/json", accept: "application/json, text/event-stream",
+      ...(authorization ? { authorization } : {}),
+    }, body: JSON.stringify(body) });
+    assert.equal(response.status, 401);
+    assert.equal(response.headers.get("www-authenticate"), 'Bearer realm="urumi-gateway"');
+    assert.deepEqual(await response.json(), { error: "Unauthorized" });
+  }));
+  for (const payload of [
+    {}, { ...body, jsonrpc: "1.0" }, { ...body, id: null }, { ...body, id: undefined },
+    { ...body, method: "tools/list" }, [body], { ...body, params: {} },
+    { ...body, params: { name: "x".repeat(513) } }, { ...body, params: { name: "unsafe\nname" } },
+  ]) {
+    const response = await fetch(`${f.address}/mcp`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
+    assert.equal(response.status, 401); await response.text();
+  }
+  const badJson = await fetch(`${f.address}/mcp`, { method: "POST", headers: { "content-type": "application/json" }, body: "{" });
+  assert.equal(badJson.status, 400); await badJson.text();
+  await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
+  const response = await f.app.inject({ url: "/api/admin/audit?outcome=unauthenticated", headers: f.headers });
+  assert.equal(response.statusCode, 200);
+  const rows: AuditRecord[] = response.json().records;
+  assert.equal(rows.length, 4);
+  assert.equal(new Set(rows.map(row => row.attemptId)).size, 4);
+  for (const row of rows) {
+    assert.equal(row.userId, null); assert.equal(row.userEmail, null); assert.equal(row.keyId, null);
+    assert.equal(row.authenticationOrigin, null); assert.equal(row.upstreamId, null);
+    assert.equal(row.upstreamName, null); assert.equal(row.upstreamDisplayName, null);
+    assert.equal(row.toolName, "calculator.calculate"); assert.equal(row.outcome, "unauthenticated");
+    assert.match(row.attemptId, /^[a-f0-9-]{36}$/);
+  }
+  assert.equal((await f.app.inject({ url: "/api/admin/audit", headers: f.headers })).json().records.length, 4);
+  for (const secret of [f.userId, f.key.id, f.rawKey, "forged-attempt", "private-argument", "invalid-credential", "same-client-id"]) {
+    assert.ok(!response.body.includes(secret));
+  }
+});
+
+test("legacy HTTP SDK validation and concurrent repeated RPC IDs retain one row per attempt", async t => {
+  const calculator = await calculatorUpstream(t);
+  const f = await fixture(t, { upstreams: [calculator.config] });
+  const post = async (args: unknown) => {
+    const response = await fetch(`${f.address}/mcp`, { method: "POST", headers: {
+      authorization: `Bearer ${f.rawKey}`, "content-type": "application/json",
+      accept: "application/json, text/event-stream", "mcp-protocol-version": "2025-03-26",
+    }, body: JSON.stringify({ jsonrpc: "2.0", id: 42, method: "tools/call", params: {
+      name: "calculator.calculate", arguments: args,
+    } }) });
+    assert.equal(response.status, 200);
+    return response.text();
+  };
+  const responses = await Promise.all([post({ a: 6, b: 7 }), post({ a: "bad", b: 7 }), post([])]);
+  assert.ok(responses[0].includes('"text":"42"'));
+  assert.ok(responses[1].includes('"isError":true'));
+  assert.ok(responses[2].includes('"error"'));
+  await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
+  const response = await f.app.inject({ url: "/api/admin/audit", headers: f.headers });
+  const rows: AuditRecord[] = response.json().records;
+  assert.equal(rows.length, 3);
+  assert.deepEqual(rows.map(row => row.outcome).sort(), ["rejected", "rejected", "success"]);
+  assert.equal(new Set(rows.map(row => row.attemptId)).size, 3);
+  assert.ok(rows.every(row => row.requestId !== "42" && row.userId === f.userId && row.keyId === f.key.id));
+});
+
+test("rejected-attempt audit-write failure preserves authentication and SDK rejection responses", async t => {
+  const calculator = await calculatorUpstream(t);
+  const f = await fixture(t, { upstreams: [calculator.config] });
+  const client = await f.connect();
+  await f.db.db!.command({ collMod: "tool_audit", validator: { $expr: { $eq: [1, 0] } }, validationLevel: "strict" });
+  const signals: unknown[][] = [];
+  t.mock.method(console, "error", (...args: unknown[]) => { signals.push(args); });
+  await assert.rejects(client.callTool({ name: "calculator.missing" }), ProtocolError);
+  const response = await fetch(`${f.address}/mcp`, { method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "calculator.calculate" } }) });
+  assert.equal(response.status, 401); assert.deepEqual(await response.json(), { error: "Unauthorized" });
+  // The HTTP denial can arrive while its bounded audit insert is completing.
+  for (let retry = 0; signals.length < 2 && retry < 100; retry++) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(signals.length, 2);
+  for (const signal of signals) {
+    assert.equal(signal.length, 1);
+    const parsed = JSON.parse(String(signal[0]));
+    assert.deepEqual(Object.keys(parsed).sort(), ["attemptId", "event"]);
+    assert.equal(parsed.event, "audit_write_failed"); assert.match(parsed.attemptId, /^[a-f0-9-]{36}$/);
+  }
+  await f.db.db!.command({ collMod: "tool_audit", validator: {} });
+  await client.callTool({ name: "calculator.calculate", arguments: { a: 6, b: 7 } });
+  await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
+  const rows = (await f.app.inject({ url: "/api/admin/audit", headers: f.headers })).json().records;
+  assert.equal(rows.length, 1); assert.equal(rows[0].outcome, "success");
+});
+
+test("gateway shutdown drains rejected-attempt audit inserts before closing MongoDB", async t => {
+  const signals: unknown[][] = [];
+  t.mock.method(console, "error", (...args: unknown[]) => { signals.push(args); });
+  const calculator = await calculatorUpstream(t);
+  const f = await fixture(t, { upstreams: [calculator.config] });
+  await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
+  const client = await f.connect();
+  await assert.rejects(client.callTool({ name: "calculator.missing" }), ProtocolError);
+  await client.close();
+  await f.app.close();
+  const restarted = await createGatewayApp({ mongodbUri: f.mongodbUri, upstreams: [],
+    destinations: { allowLoopback: true, rules: [{ origin: new URL(calculator.config.url).origin, cidrs: ["127.0.0.1/32"] }] } });
+  t.after(() => restarted.close());
+  const response = await restarted.inject({ url: "/api/admin/audit", headers: f.headers });
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().records.length, 1);
+  assert.equal(response.json().records[0].outcome, "not_found");
+  assert.deepEqual(signals, []);
 });

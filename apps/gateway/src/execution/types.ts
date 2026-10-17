@@ -10,6 +10,9 @@ export interface ToolExecutionRequest {
   arguments: Record<string, unknown>;
 
   requestId: string;
+
+  /** Server-owned correlation supplied by MCP ingress; other callers generate one. */
+  attemptId?: string;
 }
 
 export interface ResolvedTool {

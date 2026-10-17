@@ -82,3 +82,18 @@ test('administrator browses real MCP history pages and member access is denied',
   await expect(page.getByRole('heading', { name: 'Access denied' })).toBeVisible();
   await expect(page.getByRole('table')).toHaveCount(0);
 });
+
+test('administrator sees unauthenticated MCP attempts with honest attribution', async ({ page }) => {
+  const denied = await page.request.post('/mcp', { data: {
+    jsonrpc: '2.0', id: 'browser-unverified', method: 'tools/call',
+    params: { name: 'calculator.calculate', arguments: { a: 'private-browser-argument' } },
+  } });
+  expect(denied.status()).toBe(401);
+  await login(page);
+  await page.getByRole('link', { name: 'Tool history', exact: true }).click();
+  const row = page.getByRole('row').filter({ has: page.getByRole('cell', { name: 'unauthenticated', exact: true }) }).first();
+  await expect(row).toBeVisible();
+  await expect(row).toContainText('Unauthenticated');
+  await expect(row).toContainText('Unresolved');
+  expect(await page.locator('body').textContent()).not.toContain('private-browser-argument');
+});

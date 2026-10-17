@@ -38,7 +38,7 @@ export async function executeTool(
 
   let upstreamName: string | null = null;
   let upstream: { id: string; displayName: string } | null = null;
-  const attemptId = randomUUID();
+  const attemptId = request.attemptId ?? randomUUID();
   let outcome: AuditOutcome = "upstream_error";
   async function captureUpstream(name: string) {
     try { return await dependencies.upstreamAttribution?.(name) ?? null; }

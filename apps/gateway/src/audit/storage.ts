@@ -12,9 +12,9 @@ export interface AuditFilters {
 const auditSchema = new Schema<AuditRecord>({
   attemptId: { type: String, required: true },
   requestId: { type: String, required: true },
-  userId: { type: String, required: true },
+  userId: { type: String, default: null },
   userEmail: { type: String, default: null },
-  authenticationOrigin: { type: String, enum: ["gateway_api_key", "dashboard_session"], required: true },
+  authenticationOrigin: { type: String, enum: ["gateway_api_key", "dashboard_session", null], default: null },
   keyId: { type: String, default: null },
   upstreamId: { type: String, default: null },
   upstreamName: { type: String, default: null },
@@ -22,7 +22,7 @@ const auditSchema = new Schema<AuditRecord>({
   toolName: { type: String, required: true },
   timestamp: { type: String, required: true },
   durationMs: { type: Number, required: true, min: 0 },
-  outcome: { type: String, required: true, enum: ["success", "tool_error", "unauthorized", "not_found",
+  outcome: { type: String, required: true, enum: ["unauthenticated", "rejected", "success", "tool_error", "unauthorized", "not_found",
     "upstream_error", "upstream_unavailable", "upstream_timeout"] },
 }, { strict: "throw", bufferCommands: false, versionKey: false });
 auditSchema.index({ timestamp: -1, _id: -1 });
