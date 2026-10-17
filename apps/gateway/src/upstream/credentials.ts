@@ -49,6 +49,12 @@ export class KubernetesSecretReader implements SecretReader {
 
 export class UpstreamCredentials {
   private readonly approved: SecretReference[];
+  private readonly resolvedValues = new Set<string>();
+
+  redact(text: string): string {
+    for (const value of this.resolvedValues) text = text.replaceAll(value, "[redacted]");
+    return text;
+  }
 
   constructor(approved?: SecretReference[], private readonly reader: SecretReader = new KubernetesSecretReader()) {
     try {
@@ -73,6 +79,7 @@ export class UpstreamCredentials {
       const value = await this.reader.read(authentication.secretRef);
       // Values must be usable as HTTP headers, without control characters or trimming.
       if (!value || value.length > 8192 || !/^[\x20-\x7e]+$/.test(value) || value.trim() !== value) throw new Error();
+      this.resolvedValues.add(value);
       if (authentication.type === "bearer") {
         if (!/^[A-Za-z0-9\-._~+/]+=*$/.test(value)) throw new Error();
         return { Authorization: `Bearer ${value}` };

@@ -30,6 +30,7 @@ import {
 } from "./tools/invoker.js";
 
 import { registerAuditRoutes } from "./audit/routes.js";
+import { registerChatRoutes, chatConfig, type ChatConfig } from "./chat/routes.js";
 
 import {
   createGatewayMcpServer,
@@ -54,6 +55,7 @@ export interface GatewayAppOptions {
   upstreamNetwork?: DestinationNetwork;
   secretReader?: SecretReader;
   approvedSecrets?: SecretReference[];
+  chat?: ChatConfig;
 }
 
 // Construction owns MCP and registry resources; the caller owns listening.
@@ -146,6 +148,12 @@ export async function createGatewayApp(options: GatewayAppOptions = {}) {
     await registerDashboardRoutes(app, identityStorage, dashboard, admin => {
       registerAuditRoutes(admin, identityStorage.audit);
       registerServerInspectionRoutes(admin, identityStorage.upstreamRegistrations, registry, policy, management);
+    }, (routes, authenticate) => {
+      registerChatRoutes(routes, async request => {
+        const { user } = await authenticate(request);
+        return { userId: user.id, userEmail: user.email, role: user.role,
+          authenticationOrigin: "dashboard_session", keyId: null };
+      }, options.chat ?? chatConfig(), { aggregator, execution, redact: text => credentials.redact(text) });
     });
 
     // ------------------------------------------

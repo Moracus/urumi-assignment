@@ -5,6 +5,7 @@ import { Users } from './users.js';
 import { Servers } from './servers.js';
 import { ToolHistory } from './audit.js';
 import { Overview } from './overview.js';
+import { Chat } from './chat.js';
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : 'The request failed. Try again.';
@@ -65,7 +66,7 @@ function ProtectedDashboard({ user, path }: { user: DashboardUser; path: string 
   const restricted = user.requiredPasswordChange;
   const adminPage = path.startsWith('/admin/');
   const allowed = !adminPage || user.role === 'admin';
-  const titles: Record<string, string> = { '/dashboard': 'Dashboard', '/keys': 'Personal API keys', '/admin/users': 'Users', '/admin/servers': 'Servers', '/admin/audit': 'Tool history' };
+  const titles: Record<string, string> = { '/dashboard': 'Dashboard', '/chat': 'Chat', '/keys': 'Personal API keys', '/admin/users': 'Users', '/admin/servers': 'Servers', '/admin/audit': 'Tool history' };
   const title = restricted ? 'Replace your password' : !allowed ? 'Access denied' : titles[path] ?? 'Page not found';
   async function logout() {
     if (pending) return;
@@ -80,6 +81,7 @@ function ProtectedDashboard({ user, path }: { user: DashboardUser; path: string 
       <p>Current page: {title}</p>
       {!restricted && <div className="links">
         <a href="/dashboard" aria-current={path === '/dashboard' ? 'page' : undefined}>Dashboard</a>
+        <a href="/chat" aria-current={path === '/chat' ? 'page' : undefined}>Chat</a>
         <a href="/keys" aria-current={path === '/keys' ? 'page' : undefined}>API keys</a>
         {user.role === 'admin' && <>
           <a href="/admin/audit" aria-current={path === '/admin/audit' ? 'page' : undefined}>Tool history</a>
@@ -92,6 +94,7 @@ function ProtectedDashboard({ user, path }: { user: DashboardUser; path: string 
     {error && <p role="alert">{error}</p>}
     {restricted ? <PasswordReplacement /> : path === '/keys' ? <PersonalKeys />
       : path === '/dashboard' ? <Overview role={user.role} />
+      : path === '/chat' ? <Chat />
       : allowed && path === '/admin/audit' ? <ToolHistory />
       : allowed && path === '/admin/users' ? <Users /> : allowed && path === '/admin/servers' ? <Servers /> : <section><h1>{title}</h1>
       {!allowed ? <p>Administrator access is required for this page.</p>

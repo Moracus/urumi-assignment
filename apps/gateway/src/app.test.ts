@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test, type TestContext } from "node:test";
 import { randomUUID } from "node:crypto";
 import mongoose from "mongoose";
+import Fastify from "fastify";
 import { Client, StreamableHTTPClientTransport, SdkHttpError, ProtocolError } from "@modelcontextprotocol/client";
 import { createMcpFastifyApp } from "@modelcontextprotocol/fastify";
 import { toNodeHandler } from "@modelcontextprotocol/node";
@@ -15,7 +16,24 @@ import type { AuditRecord } from "./audit/logger.js";
 const origin = "http://localhost:3000";
 const password = "a final MCP test password";
 
-async function fixture(t: TestContext, options: Pick<GatewayAppOptions, "upstreams" | "auditLogger" | "destinations" | "upstreamNetwork" | "secretReader" | "approvedSecrets"> = {}) {
+test("chat requires an eligible dashboard session and reports missing provider configuration", async (t) => {
+  const previous = process.env.OPENAI_API_KEY;
+  delete process.env.OPENAI_API_KEY;
+  t.after(() => { if (previous !== undefined) process.env.OPENAI_API_KEY = previous; });
+  const f = await fixture(t);
+  const status = await fetch(`${f.address}/api/chat`, { headers: f.headers });
+  assert.equal(status.status, 200);
+  assert.deepEqual(await status.json(), { available: false });
+  const send = (headers: Record<string, string>, payload = { prompt: "Calculate 2 times 3" }) =>
+    fetch(`${f.address}/api/chat`, { method: "POST", headers: { ...headers, "content-type": "application/json" }, body: JSON.stringify(payload) });
+  assert.equal((await send({ authorization: `Bearer ${f.rawKey}`, origin })).status, 401);
+  assert.equal((await send({ ...f.headers, origin: "https://untrusted.example" })).status, 403);
+  assert.equal((await send({ ...f.headers, "x-csrf-token": "" })).status, 403);
+  assert.equal((await send(f.headers)).status, 503);
+  assert.equal((await fetch(`${f.address}/health/ready`)).status, 200);
+});
+
+async function fixture(t: TestContext, options: Pick<GatewayAppOptions, "upstreams" | "auditLogger" | "destinations" | "upstreamNetwork" | "secretReader" | "approvedSecrets" | "chat"> = {}) {
   assert.ok(process.env.MONGODB_TEST_URI, "Use the real MongoDB integration runner");
   const uri = new URL(process.env.MONGODB_TEST_URI);
   uri.pathname = `/urumi_test_${randomUUID().replaceAll("-", "")}`;
@@ -90,6 +108,143 @@ function calculatorUpstream(t: TestContext) {
     }));
   });
 }
+
+test("chat encodes real provider calls, validates schemas, pairs results and audits current session roles", async t => {
+  const calculator = await calculatorUpstream(t);
+  const clock = await controlledUpstream(t, "time", server => {
+    server.registerTool("current", { description: "Clock", inputSchema: z.object({ timezone: z.string() }) },
+      async () => ({ content: [{ type: "text", text: "Clock tool error" }], isError: true, structuredContent: { reason: "test" } }));
+  });
+  const commerce = await controlledUpstream(t, "woocommerce", server => {
+    server.registerTool("create_product", { description: "Create product" }, async () => ({ content: [] }));
+  });
+  const aliases = await controlledUpstream(t, "aliases", server => {
+    for (const name of ["a-b", "a_b", "very_long_".repeat(12)]) {
+      server.registerTool(name, { description: `Untrusted description ${name}` }, async () => ({ content: [] }));
+    }
+  });
+  const provider = Fastify();
+  t.after(() => provider.close());
+  let expectedCatalogSize = 2;
+  let rounds = 0;
+  provider.post("/v1/chat/completions", async request => {
+    assert.equal(request.headers.authorization, "Bearer synthetic-provider-secret");
+    const body = z.object({ model: z.literal("gpt-4.1-mini-2025-04-14"), store: z.literal(false),
+      messages: z.array(z.record(z.string(), z.unknown())),
+      tools: z.array(z.object({ type: z.literal("function"), function: z.object({ name: z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/), description: z.string().optional(), parameters: z.record(z.string(), z.unknown()) }) })) }).parse(request.body);
+    assert.equal(body.tools.length, expectedCatalogSize);
+    assert.equal(new Set(body.tools.map(tool => tool.function.name)).size, expectedCatalogSize);
+    const results = body.messages.filter(message => message.role === "tool");
+    rounds++;
+    if (results.length === 0) {
+      const calc = body.tools.find(tool => tool.function.description === "Controlled calculator")!.function;
+      assert.deepEqual(calc.parameters.required, ["a", "b"]);
+      const time = body.tools.find(tool => tool.function.description === "Clock")!.function;
+      return { choices: [{ finish_reason: "tool_calls", message: { role: "assistant", content: null, tool_calls: [
+        { id: "call-product", type: "function", function: { name: calc.name, arguments: '{"a":6,"b":7}' } },
+        { id: "call-invalid", type: "function", function: { name: calc.name, arguments: '{"a":"six","b":7}' } },
+        { id: "call-clock", type: "function", function: { name: time.name, arguments: '{"timezone":"UTC"}' } },
+        { id: "call-forged", type: "function", function: { name: "invented_tool", arguments: '{}' } },
+      ] } }] };
+    }
+    assert.deepEqual(results.map(result => result.tool_call_id), ["call-product", "call-invalid", "call-clock", "call-forged"]);
+    assert.equal(JSON.parse(String(results[0].content)).content[0].text, "42");
+    assert.equal(JSON.parse(String(results[1].content)).isError, true);
+    assert.deepEqual(JSON.parse(String(results[2].content)), { content: [{ type: "text", text: "Clock tool error" }], isError: true, structuredContent: { reason: "test" } });
+    assert.equal(JSON.parse(String(results[3].content)).isError, true);
+    return { choices: [{ finish_reason: "stop", message: { role: "assistant", content: "The answer is 42. <script>untrusted</script>" } }] };
+  });
+  const endpoint = `${await provider.listen({ host: "127.0.0.1", port: 0 })}/v1/chat/completions`;
+  const f = await fixture(t, { upstreams: [calculator.config, clock.config, commerce.config, aliases.config], chat: { apiKey: "synthetic-provider-secret", endpoint } });
+  const send = () => fetch(`${f.address}/api/chat`, { method: "POST", headers: { ...f.headers, "content-type": "application/json" }, body: JSON.stringify({ prompt: "Multiply 6 by 7 and get the time in UTC" }) });
+  const response = await send();
+  assert.equal(response.status, 200);
+  const result = await response.json();
+  assert.equal(result.answer, "The answer is 42. <script>untrusted</script>");
+  assert.deepEqual(result.calls.map((call: { id: string; toolName: string | null; outcome: string }) => [call.id, call.toolName, call.outcome]), [
+    ["call-product", "calculator.calculate", "success"], ["call-invalid", "calculator.calculate", "rejected"],
+    ["call-clock", "time.current", "tool_error"], ["call-forged", null, "rejected"],
+  ]);
+  await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
+  const rows = (await f.app.inject({ url: "/api/admin/audit", headers: f.headers })).json().records;
+  assert.equal(rows.length, 4);
+  for (const row of rows) {
+    assert.equal(row.authenticationOrigin, "dashboard_session"); assert.equal(row.keyId, null);
+    assert.equal(row.userId, f.userId); assert.equal(row.userEmail, "member@example.com");
+  }
+  assert.ok(!JSON.stringify(rows).includes("synthetic-provider-secret"));
+  expectedCatalogSize = 6;
+  assert.equal((await send()).status, 200);
+  assert.equal(rounds, 4);
+});
+
+test("chat reauthenticates between calls and never replays writes after provider failure", async t => {
+  let writes = 0;
+  const commerce = await controlledUpstream(t, "woocommerce", server => {
+    server.registerTool("create_product", { description: "Create product", inputSchema: z.object({ status: z.literal("publish") }) },
+      async () => { writes++; return { content: [{ type: "text", text: "Created synthetic-provider-secret" }] }; });
+  });
+  const provider = Fastify();
+  t.after(() => provider.close());
+  let revoke: (() => Promise<void>) | undefined;
+  let providerRequests = 0;
+  provider.post("/v1/chat/completions", async (request, reply) => {
+    providerRequests++;
+    const body = z.object({ messages: z.array(z.record(z.string(), z.unknown())), tools: z.array(z.object({ function: z.object({ name: z.string() }) })) }).parse(request.body);
+    if (body.messages.some(message => message.role === "tool")) {
+      assert.ok(!JSON.stringify(body).includes("synthetic-provider-secret"));
+      return reply.code(500).send({ error: "private provider diagnostic synthetic-provider-secret" });
+    }
+    if (revoke) await revoke();
+    return { choices: [{ finish_reason: "tool_calls", message: { role: "assistant", content: null, tool_calls: [
+      { id: "write-once", type: "function", function: { name: body.tools[0].function.name, arguments: '{"status":"publish"}' } },
+    ] } }] };
+  });
+  const endpoint = `${await provider.listen({ host: "127.0.0.1", port: 0 })}/v1/chat/completions`;
+  const f = await fixture(t, { upstreams: [commerce.config], chat: { apiKey: "synthetic-provider-secret", endpoint } });
+  await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
+  const send = (extra = {}) => f.app.inject({ method: "POST", url: "/api/chat", headers: f.headers, payload: { prompt: "Create a published product", ...extra } });
+  assert.equal((await send({ userId: "forged", role: "admin", messages: [] })).statusCode, 400);
+  const result = await send();
+  assert.equal(result.statusCode, 200);
+  assert.match(result.json().error, /Chat stopped or provider unavailable/);
+  assert.equal(result.json().calls[0].outcome, "success");
+  assert.equal(writes, 1); assert.equal(providerRequests, 2);
+  assert.ok(!result.body.includes("synthetic-provider-secret"));
+  revoke = async () => { assert.equal((await f.app.inject({ method: "POST", url: "/api/auth/logout", headers: f.headers })).statusCode, 204); };
+  const revoked = await send();
+  assert.equal(revoked.json().calls.length, 0);
+  assert.equal(writes, 1); assert.equal(providerRequests, 3);
+});
+
+test("chat stops at its provider turn budget and rejects duplicate IDs before execution", async t => {
+  let executions = 0;
+  const calculator = await controlledUpstream(t, "calculator", server => {
+    server.registerTool("calculate", { inputSchema: z.object({ a: z.number() }) },
+      async () => { executions++; return { content: [{ type: "text", text: "1" }] }; });
+  });
+  const provider = Fastify();
+  t.after(() => provider.close());
+  let turn = 0;
+  let duplicate = false;
+  provider.post("/completion", async request => {
+    turn++;
+    const body = z.object({ tools: z.array(z.object({ function: z.object({ name: z.string() }) })) }).parse(request.body);
+    const call = { id: `call-${turn}`, type: "function", function: { name: body.tools[0].function.name, arguments: '{"a":1}' } };
+    return { choices: [{ finish_reason: "tool_calls", message: { role: "assistant", content: null, tool_calls: duplicate ? [call, call] : [call] } }] };
+  });
+  const endpoint = `${await provider.listen({ host: "127.0.0.1", port: 0 })}/completion`;
+  const f = await fixture(t, { upstreams: [calculator.config], chat: { apiKey: "synthetic-provider-secret", endpoint } });
+  const send = () => f.app.inject({ method: "POST", url: "/api/chat", headers: f.headers, payload: { prompt: "Keep calculating" } });
+  const exhausted = await send();
+  assert.equal(exhausted.statusCode, 200);
+  assert.equal(exhausted.json().calls.length, 5); assert.ok(exhausted.json().error);
+  assert.equal(turn, 5); assert.equal(executions, 5);
+  duplicate = true;
+  const rejected = await send();
+  assert.equal(rejected.json().calls.length, 0); assert.ok(rejected.json().error);
+  assert.equal(turn, 6); assert.equal(executions, 5);
+});
 
 test("manual refresh replaces the catalog for a continuing MCP client without changing desired state", async t => {
   let changed = false;

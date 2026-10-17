@@ -135,7 +135,7 @@ Authorization precedes resolution against the actual catalog; invocation retains
 timeouts, valid MCP `isError` results, and structured content. The execution
 boundary records attributed outcomes through the audit interface; [durable
 MongoDB history and administrator browsing](tool-history.md) are implemented by #39. Never invoke upstreams directly
-from a future chat controller. Persistent server metadata and live registry
+from the [session-authenticated chat controller](dashboard-chat.md). Persistent server metadata and live registry
 lifecycle remain owned by the upstream modules. Dashboard cookies/CSRF remain
 separate from gateway bearer keys. No raw key or upstream Secret enters persistent
 browser storage or management responses beyond one-time gateway-key issuance.

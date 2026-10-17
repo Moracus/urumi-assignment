@@ -17,3 +17,4 @@ current behavior. Some historical issue validation records are not present in
 this checkout and are not evidence of a newly verified deployment.
 
 - [Durable tool history and administrator browsing](guides/tool-history.md)
+- [Dashboard chat, provider configuration and execution bounds](guides/dashboard-chat.md)

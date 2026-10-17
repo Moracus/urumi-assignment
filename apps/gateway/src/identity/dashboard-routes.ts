@@ -41,6 +41,7 @@ function cookie(value: string, expires: Date, secure: boolean, maxAge = dashboar
 
 export async function registerDashboardRoutes(app: FastifyInstance, storage: IdentityStorage, config: DashboardConfig,
   registerAdminRoutes?: (admin: FastifyInstance) => void,
+  registerSessionRoutes?: (routes: FastifyInstance, authenticate: (request: FastifyRequest) => ReturnType<Awaited<ReturnType<typeof createDashboardSessions>>["authenticate"]>) => void,
 ) {
   const sessions = await createDashboardSessions(storage);
   await app.register(async (routes) => {
@@ -99,14 +100,16 @@ export async function registerDashboardRoutes(app: FastifyInstance, storage: Ide
       reply.header("Set-Cookie", cookie("", new Date(0), !config.allowHttp, 0));
       return reply.code(204).send();
     });
-    await registerApiKeyRoutes(routes, storage, async (request) => {
+    const authenticate = async (request: FastifyRequest) => {
       const authenticated = await sessions.authenticate(credential(request));
       if (request.method !== "GET") {
         requireTrustedOrigin(request, config);
         requireCsrf(request, authenticated.csrfToken);
       }
-      return authenticated.user.id;
-    });
+      return authenticated;
+    };
+    registerSessionRoutes?.(routes, authenticate);
+    await registerApiKeyRoutes(routes, storage, async request => (await authenticate(request)).user.id);
     await routes.register(async (admin) => {
       admin.addHook("preHandler", async (request) => {
         const authenticated = await sessions.authenticate(credential(request));

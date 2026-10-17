@@ -68,10 +68,30 @@ upstream.all('/secured/:variant', (request, reply) => {
   if (!authorized) return reply.code(401).send({ error: 'Unauthorized' });
   return (replacement ? replacementNodeHandler : nodeHandler)(request.raw, reply.raw, request.body);
 });
+// Deterministic external provider boundary; production uses the fixed OpenAI endpoint.
+upstream.post('/provider/chat/completions', async (request, reply) => {
+  const { messages, tools } = request.body;
+  if (messages.some(message => message.role === 'user' && message.content === 'provider failure')) {
+    return reply.code(500).send({ error: 'private synthetic-provider-secret' });
+  }
+  if (messages.some(message => message.role === 'tool')) {
+    return { choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: '42 and the UTC time. <img src=x onerror="window.modelExecuted=true">' } }] };
+  }
+  const calculator = tools.find(tool => tool.function.parameters.properties?.operation).function.name;
+  // This shared upstream fixture advertises the same clock on all three servers.
+  // The sorted catalog's second clock belongs to time (calculator, time, woocommerce).
+  const time = tools.filter(tool => tool.function.parameters.properties?.timezone)[1].function.name;
+  return { choices: [{ finish_reason: 'tool_calls', message: { role: 'assistant', content: null, tool_calls: [
+    { id: 'browser-calc', type: 'function', function: { name: calculator, arguments: JSON.stringify({ operation: 'multiply', a: 6, b: 7 }) } },
+    { id: 'browser-clock', type: 'function', function: { name: time, arguments: JSON.stringify({ timezone: 'UTC' }) } },
+    { id: 'browser-invalid', type: 'function', function: { name: calculator, arguments: JSON.stringify({ operation: 'multiply', a: 'six', b: 7 }) } },
+  ] } }] };
+});
 upstream.addHook('onClose', () => handler.close());
 upstream.addHook('onClose', () => replacementHandler.close());
 const upstreamAddress = await upstream.listen({ host: '127.0.0.1', port: 0 });
 const gateway = await createGatewayApp({ mongodbUri: uri.toString(),
+  chat: { apiKey: 'synthetic-provider-secret', endpoint: `${upstreamAddress}/provider/chat/completions` },
   approvedSecrets: ['browser-private-reference', 'browser-replacement-reference'].map(name => ({ namespace: 'urumi', name, key: 'token' })),
   secretReader: { async read(reference) {
     if (reference.name === 'browser-private-reference') return 'synthetic-browser-one';

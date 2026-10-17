@@ -180,7 +180,7 @@ These records cover calls that enter the execution boundary. Failed HTTP authent
 
 The repository includes unit tests for execution authorization/audit and aggregation/resolution, plus runnable registry, aggregation, routing, WooCommerce REST, and interactive failure-isolation scripts. Internal routing scripts construct identities directly and do not test public HTTP authentication. The README separates those checks from MCP-client and cluster-policy validation.
 
-The current architecture provides a functional execution and routing boundary, but is not a complete multi-user management platform. [Personal key management](../guides/api-keys.md) persists SHA-256 key digests and safe owner-scoped metadata, with one-time disclosure and idempotent revocation. Issuance transactionally checks eligibility and enforces the 20-active-key limit across gateway instances. Its HTTP routes use dashboard sessions and Origin/CSRF protection. Chat orchestration, broader request rate limiting, backups and high availability are absent; dashboard deployment and operator TLS configuration are documented in [dashboard deployment](../operations/dashboard-deployment.md); gateway egress controls require operator configuration and live verification. Additions should update this document when their source and deployment behavior exist.
+The current architecture provides a functional execution and routing boundary, but is not a complete multi-user management platform. [Personal key management](../guides/api-keys.md) persists SHA-256 key digests and safe owner-scoped metadata, with one-time disclosure and idempotent revocation. Issuance transactionally checks eligibility and enforces the 20-active-key limit across gateway instances. Its HTTP routes use dashboard sessions and Origin/CSRF protection. [Session-authenticated chat](../guides/dashboard-chat.md) is implemented; broader request rate limiting, backups and high availability are absent; dashboard deployment and operator TLS configuration are documented in [dashboard deployment](../operations/dashboard-deployment.md); gateway egress controls require operator configuration and live verification. Additions should update this document when their source and deployment behavior exist.
 
 ## Member account administration (#6)
 
@@ -240,6 +240,10 @@ production requires Secure cookies and exact TLS proxy trust. Startup validates
 storage/authentication and required migration before listening; readiness checks
 MongoDB while tolerating all upstreams being unreachable. See
 [configuration and checks](../operations/dashboard-deployment.md).
+
+## Session-authenticated chat (#41)
+
+The dashboard's `/chat` page uses session-protected `GET/POST /api/chat`. A small OpenAI Chat Completions loop derives function definitions from the current authorized discovered catalog, validates proposed arguments and invokes only `executeTool`. Opaque numeric aliases preserve collision-free routing to actual public names. The server owns the transcript and pairs provider call IDs with tool results, including MCP `isError`. Current session eligibility and roles are resolved before each invocation; audit attribution uses the user and dashboard-session origin with no gateway key ID. Provider I/O, context, results and execution are bounded, with no automatic retries. See [configuration, protocol, limits and recovery](../guides/dashboard-chat.md). Provider credentials are server-only; Kubernetes Secret wiring and egress rollout remain a dependent slice.
 
 ## Milestone verification and integration handoff (#37)
 
