@@ -41,6 +41,8 @@ export async function authenticateRequest(
   return {
     userId: user._id.toHexString(),
     role: user.role,
+    userEmail: user.email,
+    authenticationOrigin: "gateway_api_key",
     keyId: key._id.toHexString(),
   };
 }

@@ -15,3 +15,5 @@ Run commands from the repository root unless a guide explicitly says otherwise.
 Historical briefs describe work at a point in time; use implementation guides for
 current behavior. Some historical issue validation records are not present in
 this checkout and are not evidence of a newly verified deployment.
+
+- [Durable tool history and administrator browsing](guides/tool-history.md)

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { AuditLogger, AuditOutcome } from "../audit/logger.js";
 
 import { authorizeTool } from "../security/authorization.js";
@@ -25,6 +26,7 @@ export interface ExecutionDependencies {
   resolver: ToolResolver;
   invoker: UpstreamInvoker;
   auditLogger: AuditLogger;
+  upstreamAttribution?: (name: string) => Promise<{ id: string; displayName: string } | null>;
 }
 
 export async function executeTool(
@@ -35,6 +37,8 @@ export async function executeTool(
   const timestamp = new Date().toISOString();
 
   let upstreamName: string | null = null;
+  let upstream: { id: string; displayName: string } | null = null;
+  const attemptId = randomUUID();
   let outcome: AuditOutcome = "upstream_error";
 
   try {
@@ -49,6 +53,9 @@ export async function executeTool(
     }
 
     upstreamName = tool.upstreamName;
+    // Capture before invocation, including removal while a call is in flight.
+    try { upstream = await dependencies.upstreamAttribution?.(upstreamName) ?? null; }
+    catch { console.error("Audit attribution unavailable"); }
 
     // 3. Upstream execution
     const result = await dependencies.invoker.invoke(tool, request.arguments);
@@ -64,6 +71,10 @@ export async function executeTool(
   } catch (error) {
     if (error instanceof UpstreamUnavailableError) {
       upstreamName = error.upstreamName;
+      if (!upstream) {
+        try { upstream = await dependencies.upstreamAttribution?.(upstreamName) ?? null; }
+        catch { console.error("Audit attribution unavailable"); }
+      }
     }
     if (error instanceof Error && error.name === "AuthorizationError") {
       outcome = "unauthorized";
@@ -85,6 +96,11 @@ export async function executeTool(
     try {
       await dependencies.auditLogger.write({
         requestId: request.requestId,
+        attemptId,
+        authenticationOrigin: request.identity.authenticationOrigin ?? "gateway_api_key",
+        userEmail: request.identity.userEmail ?? null,
+        upstreamId: upstream?.id ?? null,
+        upstreamDisplayName: upstream?.displayName ?? null,
         userId: request.identity.userId,
         keyId: request.identity.keyId,
         upstreamName,
@@ -93,14 +109,9 @@ export async function executeTool(
         durationMs,
         outcome,
       });
-    } catch (auditError) {
-      // For now, surface audit infrastructure failures
-      // in server logs without replacing the tool result.
-      // A durable audit queue/persistence policy comes later.
-      console.error(
-        "Audit logging failed",
-        auditError instanceof Error ? auditError.name : "Unknown error",
-      );
+    } catch {
+      // Never replace a determined result or replay a possibly applied side effect.
+      console.error(JSON.stringify({ event: "audit_write_failed", attemptId }));
     }
   }
 }

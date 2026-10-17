@@ -23,7 +23,7 @@ flowchart TB
     WordPress -->|SQL port 3306| DB[MariaDB]
     WordPress --- WPVolume[WordPress PVC]
     DB --- DBVolume[MariaDB PVC]
-    Gateway --> Audit[JSON audit output]
+    Gateway --> Audit[MongoDB audit history]
 ```
 
 The controller is installed separately from the application chart. Internal MCP endpoints and the database have ClusterIP Services and no Ingress templates. Local values select Traefik; the chart's base ingress class is `nginx`, so deployments should explicitly choose the appropriate values file and controller namespace.
@@ -73,7 +73,7 @@ sequenceDiagram
     participant E as Execution boundary
     participant R as Registry / resolver
     participant U as Upstream MCP
-    participant A as Console audit logger
+    participant A as MongoDB audit logger
     C->>G: Authenticated tools/call
     G->>G: Establish identity and register permitted tools
     G->>E: Identity, public tool name, arguments, request ID
@@ -170,17 +170,17 @@ Resource names and default service URLs are fixed with the `urumi-` prefix; some
 
 ## Audit and observability
 
-The audit logger writes JSON containing `event: tool_execution`, request ID, user ID, key ID, upstream name, tool name, timestamp, duration, and outcome. Outcomes distinguish success, tool error, unauthorized invocation, not found, unavailable upstream, timeout, and other upstream errors.
+The default audit logger persists execution records through the existing MongoDB lifecycle. Records carry server-owned attempt identity, request ID, verified user/email snapshot, actual authentication origin, real gateway API-key ID only for bearer calls, stable registration document ID/name/display snapshot when known, public tool, UTC timestamp, duration and classified outcome. Outcomes distinguish success, valid MCP `isError`, unauthorized execution, not found, unavailable upstream, timeout and other upstream errors. Explicit dashboard-session identities have null key IDs. See [tool history](../guides/tool-history.md) for the contract.
 
-Audit records intentionally omit arguments, raw bearer tokens, WooCommerce credentials, and result bodies. An audit-write failure is reported to the server console and does not replace the tool result. There is no durable queue or fail-closed audit policy.
+Audit records omit arguments, credentials, result bodies, internal URLs and stacks. Audit-write failure emits only a sanitized `audit_write_failed` event with attempt ID, preserves the already determined result/error, and never repeats upstream execution. There is no durable queue or backfill: storage outages can lose rows.
 
-These records cover calls that enter the execution boundary. Failed HTTP authentication, rejected discovery, unknown tools rejected by SDK dispatch, and schema-validation errors occurring before the callback are not guaranteed execution audit records. Audit retention and collection require external log infrastructure; the repository has no persistent audit API, metrics stack, or dashboard viewer.
+These records cover calls that enter the execution boundary. Failed HTTP authentication, rejected discovery, unknown tools rejected by SDK dispatch, and schema-validation errors occurring before the callback are not guaranteed execution audit records. Eligible administrators browse `/admin/audit` through `GET /api/admin/audit`, with strict bounded pagination and descending timestamp/ID order. Safe projections and backend session/role guards protect history. Retention/backup policy and a metrics stack remain operator responsibilities.
 
 ## Verification and remaining gaps
 
 The repository includes unit tests for execution authorization/audit and aggregation/resolution, plus runnable registry, aggregation, routing, WooCommerce REST, and interactive failure-isolation scripts. Internal routing scripts construct identities directly and do not test public HTTP authentication. The README separates those checks from MCP-client and cluster-policy validation.
 
-The current architecture provides a functional execution and routing boundary, but is not a complete multi-user management platform. [Personal key management](../guides/api-keys.md) persists SHA-256 key digests and safe owner-scoped metadata, with one-time disclosure and idempotent revocation. Issuance transactionally checks eligibility and enforces the 20-active-key limit across gateway instances. Its HTTP routes use dashboard sessions and Origin/CSRF protection. Durable audit storage, chat orchestration, broader request rate limiting, backups and high availability are absent; dashboard deployment and operator TLS configuration are documented in [dashboard deployment](../operations/dashboard-deployment.md); gateway egress controls require operator configuration and live verification. Additions should update this document when their source and deployment behavior exist.
+The current architecture provides a functional execution and routing boundary, but is not a complete multi-user management platform. [Personal key management](../guides/api-keys.md) persists SHA-256 key digests and safe owner-scoped metadata, with one-time disclosure and idempotent revocation. Issuance transactionally checks eligibility and enforces the 20-active-key limit across gateway instances. Its HTTP routes use dashboard sessions and Origin/CSRF protection. Chat orchestration, broader request rate limiting, backups and high availability are absent; dashboard deployment and operator TLS configuration are documented in [dashboard deployment](../operations/dashboard-deployment.md); gateway egress controls require operator configuration and live verification. Additions should update this document when their source and deployment behavior exist.
 
 ## Member account administration (#6)
 
@@ -243,4 +243,4 @@ MongoDB while tolerating all upstreams being unreachable. See
 
 ## Milestone verification and integration handoff (#37)
 
-Use the [operator walkthrough](../planning/milestone-handoff.md) for ordered deployment, browser/MCP demonstration, separate gateway and MongoDB restarts, and Day 5 interfaces. The verification record (historical evidence file is not included in this checkout) separates controlled application tests from deployed-image evidence and unverified network/commerce requirements. One gateway replica remains required; structured console audit hooks are not durable history.
+Use the [operator walkthrough](../planning/milestone-handoff.md) for ordered deployment, browser/MCP demonstration, separate gateway and MongoDB restarts, and Day 5 interfaces. The verification record (historical evidence file is not included in this checkout) separates controlled application tests from deployed-image evidence and unverified network/commerce requirements. One gateway replica remains required; [MongoDB audit storage](../guides/tool-history.md) now supplies durable execution history; writes rejected during outages can still be lost.

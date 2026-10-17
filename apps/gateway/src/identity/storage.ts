@@ -1,3 +1,4 @@
+import { createAuditStorage } from "../audit/storage.js";
 import mongoose, { Schema } from "mongoose";
 import { createRegistrationStorage } from "../upstream/registrations.js";
 
@@ -127,6 +128,7 @@ export async function connectIdentityStorage(uri = process.env.MONGODB_URI) {
     await loginThrottles.createIndexes();
     await apiKeys.createIndexes();
     await accountCoordination.createIndexes();
+    const audit = await createAuditStorage(connection);
     const upstreamRegistrations = await createRegistrationStorage(connection);
     const indexes = await users.collection.indexes();
     if (!indexes.some((index) => index.name === "unique_normalized_email"
@@ -148,7 +150,7 @@ export async function connectIdentityStorage(uri = process.env.MONGODB_URI) {
     }, identityTransactionOptions);
 
     return {
-      connection, users, setup, sessions, loginThrottles, apiKeys, accountCoordination, upstreamRegistrations,
+      connection, audit, users, setup, sessions, loginThrottles, apiKeys, accountCoordination, upstreamRegistrations,
       async isAvailable(): Promise<boolean> {
         try {
           if (connection.readyState !== 1 || !connection.db) return false;

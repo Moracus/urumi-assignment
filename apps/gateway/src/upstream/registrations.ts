@@ -77,6 +77,10 @@ export async function createRegistrationStorage(connection: Connection) {
   await migrations.createCollection();
   await registrations.createIndexes();
   return {
+    async auditAttribution(serverId: string) {
+      const row = await registrations.findOne({ serverId }).select({ _id: 1, displayName: 1 }).lean();
+      return row ? { id: row._id.toHexString(), displayName: row.displayName } : null;
+    },
     async create(input: CreateRegistrationInput): Promise<UpstreamRegistration> {
       const now = new Date();
       const desired = registrationInput.parse({ ...input, configurationRevision: 1, createdAt: now, updatedAt: now });

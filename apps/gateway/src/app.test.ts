@@ -507,7 +507,7 @@ test("fresh roles filter discovery and calls, last-use advances on denied tools,
     ["woocommerce.update_order_status", otherUser.insertedId.toHexString(), issued.json().key.id],
   ]);
   for (const record of records) {
-    assert.deepEqual(Object.keys(record).sort(), ["durationMs", "keyId", "outcome", "requestId", "timestamp", "toolName", "upstreamName", "userId"]);
+    assert.deepEqual(Object.keys(record).sort(), ["attemptId", "authenticationOrigin", "durationMs", "keyId", "outcome", "requestId", "timestamp", "toolName", "upstreamName", "userId", "userEmail", "upstreamId", "upstreamDisplayName"].sort());
     assert.ok(!JSON.stringify(record).includes(f.rawKey));
     assert.ok(!JSON.stringify(record).includes(issued.json().rawKey));
   }
@@ -2031,4 +2031,195 @@ test("malformed Secret approval fails startup before database access", async () 
     if (previous === undefined) delete process.env.UPSTREAM_SECRET_REFERENCES;
     else process.env.UPSTREAM_SECRET_REFERENCES = previous;
   }
+});
+
+
+test("administrator reads durable safe tool history across gateway restart", async t => {
+  const calculator = await calculatorUpstream(t);
+  const f = await fixture(t, { upstreams: [calculator.config] });
+  assert.equal((await f.app.inject({ url: "/api/admin/audit", headers: f.headers })).statusCode, 403);
+  assert.equal((await f.app.inject({ url: "/api/admin/audit" })).statusCode, 401);
+  await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
+  const client = await f.connect();
+  const result = await client.callTool({ name: "calculator.calculate", arguments: { a: 6, b: 7 } });
+  assert.deepEqual(result.content, [{ type: "text", text: "42" }]);
+  const response = await f.app.inject({ url: "/api/admin/audit?page=1&limit=1", headers: f.headers });
+  assert.equal(response.statusCode, 200, response.body);
+  assert.equal(response.headers["cache-control"], "no-store");
+  const { records, page, limit, hasMore } = response.json();
+  assert.equal(page, 1); assert.equal(limit, 1); assert.equal(hasMore, false);
+  assert.equal(records.length, 1);
+  const row = records[0];
+  assert.equal(row.userId, f.userId); assert.equal(row.userEmail, "member@example.com");
+  assert.equal(row.keyId, f.key.id); assert.equal(row.authenticationOrigin, "gateway_api_key");
+  assert.equal(row.upstreamName, "calculator"); assert.equal(row.upstreamDisplayName, "calculator");
+  assert.match(row.upstreamId, /^[a-f0-9]{24}$/);
+  assert.equal(row.toolName, "calculator.calculate"); assert.equal(row.outcome, "success");
+  assert.match(row.attemptId, /^[a-f0-9-]{36}$/); assert.ok(row.requestId);
+  assert.ok(Number.isFinite(Date.parse(row.timestamp))); assert.ok(row.durationMs >= 0);
+  assert.deepEqual(Object.keys(row).sort(), ["id", "attemptId", "requestId", "userId", "userEmail", "keyId", "authenticationOrigin",
+    "upstreamId", "upstreamName", "upstreamDisplayName", "toolName", "timestamp", "durationMs", "outcome"].sort());
+  for (const query of ["page=0", "limit=101", "limit=-1", "page=1.5", "unknown=1", "limit=1&limit=2"]) {
+    assert.equal((await f.app.inject({ url: `/api/admin/audit?${query}`, headers: f.headers })).statusCode, 400);
+  }
+  await client.close(); await f.app.close();
+  const restarted = await createGatewayApp({ mongodbUri: f.mongodbUri, upstreams: [],
+    destinations: { allowLoopback: true, rules: [{ origin: new URL(calculator.config.url).origin, cidrs: ["127.0.0.1/32"] }] } });
+  t.after(() => restarted.close());
+  assert.deepEqual((await restarted.inject({ url: "/api/admin/audit?page=1&limit=1", headers: f.headers })).json(), response.json());
+});
+
+test("audit preserves historical attribution and MCP tool errors with bounded deterministic pages", async t => {
+  const calculator = await controlledUpstream(t, "calculator", server => {
+    server.registerTool("calculate", { inputSchema: z.object({ secret: z.string() }) }, async () => ({
+      isError: true, content: [{ type: "text", text: "secret-result http://private-upstream:9999" }],
+      structuredContent: { privateValue: "secret-result" },
+    }));
+  });
+  const f = await fixture(t, { upstreams: [calculator.config] });
+  await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
+  const client = await f.connect();
+  for (let index = 0; index < 3; index++) {
+    const result = await client.callTool({ name: "calculator.calculate", arguments: { secret: "secret-argument" } });
+    assert.equal(result.isError, true);
+    assert.deepEqual(result.structuredContent, { privateValue: "secret-result" });
+  }
+  const before = (await f.app.inject({ url: "/api/admin/audit", headers: f.headers })).json().records;
+  assert.equal(before.length, 3); assert.ok(before.every((row: AuditRecord) => row.outcome === "tool_error"));
+  const renamed = await f.app.inject({ method: "PATCH", url: "/api/admin/servers/calculator", headers: f.headers,
+    payload: { displayName: "Renamed calculator" } });
+  assert.equal(renamed.statusCode, 200, renamed.body);
+  assert.equal((await f.app.inject({ method: "DELETE", url: "/api/admin/servers/calculator", headers: f.headers })).statusCode, 204);
+  await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { email: "changed@example.com" } });
+  assert.deepEqual((await f.app.inject({ url: "/api/admin/audit", headers: f.headers })).json().records, before);
+  // Arrange equal timestamps to exercise the API's tie-breaker independently of wall-clock speed.
+  await f.db.collection("tool_audit").updateMany({}, { $set: { timestamp: "2026-10-17T00:00:00.000Z" } });
+  const seen: string[] = [];
+  for (let page = 1; page <= 3; page++) {
+    const response = await f.app.inject({ url: `/api/admin/audit?page=${page}&limit=1`, headers: f.headers });
+    const body = response.json();
+    assert.equal(body.records.length, 1); assert.equal(body.hasMore, page < 3);
+    assert.equal(body.records[0].userEmail, "member@example.com");
+    assert.equal(body.records[0].upstreamDisplayName, "calculator");
+    seen.push(body.records[0].id);
+    for (const secret of ["secret-result", "secret-argument", "private-upstream", f.rawKey, "passwordHash", "stack", "arguments", "content"]) {
+      assert.ok(!response.body.includes(secret), secret);
+    }
+  }
+  assert.deepEqual(seen, before.map((row: { id: string }) => row.id).sort().reverse());
+  assert.equal(new Set(seen).size, 3);
+  assert.deepEqual((await f.app.inject({ url: "/api/admin/audit?page=4&limit=1", headers: f.headers })).json(),
+    { records: [], page: 4, limit: 1, hasMore: false });
+});
+
+test("MongoDB audit-write rejection signals safely without replacing a tool result or replaying a write", async t => {
+  let writes = 0;
+  const upstream = await controlledUpstream(t, "woocommerce", server => {
+    server.registerTool("create_product", {}, async () => {
+      writes++; return { content: [{ type: "text", text: "Product created" }], structuredContent: { id: 42 } };
+    });
+  });
+  const f = await fixture(t, { upstreams: [upstream.config] });
+  await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
+  const client = await f.connect();
+  // Inject failure at the actual database boundary; authentication remains available.
+  await f.db.db!.command({ collMod: "tool_audit", validator: { $expr: { $eq: [1, 0] } }, validationLevel: "strict" });
+  const signals: unknown[][] = [];
+  t.mock.method(console, "error", (...args: unknown[]) => { signals.push(args); });
+  const result = await client.callTool({ name: "woocommerce.create_product" });
+  assert.deepEqual(result.structuredContent, { id: 42 }); assert.equal(result.isError, undefined); assert.equal(writes, 1);
+  assert.equal(signals.length, 1);
+  assert.equal(signals[0].length, 1);
+  const signal = JSON.parse(String(signals[0][0]));
+  assert.deepEqual(Object.keys(signal).sort(), ["attemptId", "event"]);
+  assert.equal(signal.event, "audit_write_failed"); assert.match(signal.attemptId, /^[a-f0-9-]{36}$/);
+  assert.deepEqual((await f.app.inject({ url: "/api/admin/audit", headers: f.headers })).json().records, []);
+  await f.db.db!.command({ collMod: "tool_audit", validator: {} });
+  await client.callTool({ name: "woocommerce.create_product" });
+  assert.equal(writes, 2);
+  assert.equal((await f.app.inject({ url: "/api/admin/audit", headers: f.headers })).json().records.length, 1);
+});
+
+test("shared execution records real dashboard-session origin, rejections and unavailable catalog entries", async t => {
+  // These outcomes cannot currently reach an MCP callback: SDK filtering rejects them first.
+  // Exercise the shared execution contract directly, reading durable rows through the admin API.
+  const { connectIdentityStorage } = await import("./identity/storage.js");
+  const { createDashboardSessions } = await import("./identity/dashboard-sessions.js");
+  const { UpstreamRegistry } = await import("./upstream/registry.js");
+  const { DestinationPolicy } = await import("./upstream/destination-policy.js");
+  const { ToolAggregator } = await import("./tools/aggregator.js");
+  const { AggregatedToolResolver } = await import("./tools/resolver.js");
+  const { McpUpstreamInvoker } = await import("./tools/invoker.js");
+  const { executeTool } = await import("./execution/execute-tool.js");
+  const calculator = await calculatorUpstream(t);
+  const f = await fixture(t, { upstreams: [calculator.config] });
+  await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
+  const storage = await connectIdentityStorage(f.mongodbUri);
+  t.after(() => storage.close());
+  const sessions = await createDashboardSessions(storage);
+  const session = await sessions.authenticate(f.headers.cookie.split("=")[1]);
+  const identity = { userId: session.user.id, userEmail: session.user.email, role: session.user.role,
+    authenticationOrigin: "dashboard_session" as const, keyId: null };
+  const registry = new UpstreamRegistry(new DestinationPolicy({ allowLoopback: true,
+    rules: [{ origin: new URL(calculator.config.url).origin, cidrs: ["127.0.0.1/32"] }] }));
+  t.after(() => registry.close());
+  registry.register(calculator.config); await registry.connectAll();
+  const dependencies = { resolver: new AggregatedToolResolver(new ToolAggregator(registry), registry),
+    invoker: new McpUpstreamInvoker(registry), auditLogger: storage.audit,
+    upstreamAttribution: storage.upstreamRegistrations.auditAttribution };
+  const request = { identity, toolName: "calculator.calculate", arguments: { a: 6, b: 7 }, requestId: "session-request" };
+  assert.deepEqual((await executeTool(request, dependencies)).result.content, [{ type: "text", text: "42" }]);
+  await assert.rejects(executeTool({ ...request, toolName: "calculator.unknown" }, dependencies), { name: "ToolNotFoundError" });
+  await assert.rejects(executeTool({ ...request, identity: { ...identity, role: "member" }, toolName: "woocommerce.create_product" }, dependencies), { name: "AuthorizationError" });
+  await registry.markUnreachable("calculator", "Test outage");
+  await assert.rejects(executeTool(request, dependencies), { name: "UpstreamUnavailableError" });
+  const response = await f.app.inject({ url: "/api/admin/audit", headers: f.headers });
+  assert.equal(response.statusCode, 200);
+  const rows: AuditRecord[] = response.json().records;
+  assert.equal(rows.length, 4);
+  assert.deepEqual(rows.map(row => row.outcome).sort(), ["not_found", "success", "unauthorized", "upstream_unavailable"]);
+  assert.equal(new Set(rows.map(row => row.attemptId)).size, 4);
+  for (const row of rows) {
+    assert.equal(row.authenticationOrigin, "dashboard_session"); assert.equal(row.keyId, null);
+    assert.equal(row.userId, f.userId); assert.equal(row.userEmail, "member@example.com");
+    assert.equal(row.requestId, "session-request");
+    if (["not_found", "unauthorized"].includes(row.outcome)) {
+      assert.equal(row.upstreamName, null); assert.equal(row.upstreamId, null); assert.equal(row.upstreamDisplayName, null);
+    } else { assert.equal(row.upstreamName, "calculator"); assert.match(row.upstreamId!, /^[a-f0-9]{24}$/); }
+  }
+});
+
+test("durable audit classifies upstream protocol failure and timeout while healthy calls continue", async t => {
+  let mode: "timeout" | "invalid" = "timeout";
+  let writes = 0;
+  const upstream = await controlledUpstream(t, "woocommerce", server => {
+    server.registerTool("create_product", {}, async () => {
+      writes++;
+      await new Promise(resolve => setTimeout(resolve, 11000));
+      return { content: [{ type: "text", text: "Late side effect" }] };
+    });
+    if (mode === "invalid") server.server.setRequestHandler("tools/call", async () => { throw new Error("malformed-private-result"); });
+  });
+  const calculator = await calculatorUpstream(t);
+  const f = await fixture(t, { upstreams: [upstream.config, calculator.config] });
+  await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
+  const client = await f.connect();
+  const timedOut = await client.callTool({ name: "woocommerce.create_product" }, { timeout: 15000 });
+  assert.equal(timedOut.isError, true);
+  assert.deepEqual(timedOut.content, [{ type: "text", text: "Upstream request timed out" }]);
+  assert.equal(writes, 1);
+  await client.callTool({ name: "calculator.calculate", arguments: { a: 6, b: 7 } });
+  mode = "invalid";
+  const refresh = await f.app.inject({ method: "POST", url: "/api/admin/servers/woocommerce/refresh", headers: f.headers });
+  assert.equal(refresh.statusCode, 200);
+  const invalid = await client.callTool({ name: "woocommerce.create_product" });
+  assert.equal(invalid.isError, true);
+  assert.deepEqual(invalid.content, [{ type: "text", text: "Tool execution failed" }]);
+  assert.equal(writes, 1);
+  const response = await f.app.inject({ url: "/api/admin/audit", headers: f.headers });
+  const rows: AuditRecord[] = response.json().records;
+  assert.equal(rows.length, 3);
+  assert.deepEqual(rows.map(row => row.outcome).sort(), ["success", "upstream_error", "upstream_timeout"]);
+  assert.ok(rows.every(row => row.userId === f.userId && row.keyId === f.key.id));
+  assert.ok(!response.body.includes("malformed-private-result"));
 });

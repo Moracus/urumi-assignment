@@ -29,9 +29,7 @@ import {
   McpUpstreamInvoker,
 } from "./tools/invoker.js";
 
-import {
-  ConsoleAuditLogger,
-} from "./audit/logger.js";
+import { registerAuditRoutes } from "./audit/routes.js";
 
 import {
   createGatewayMcpServer,
@@ -99,12 +97,13 @@ export async function createGatewayApp(options: GatewayAppOptions = {}) {
 
     const invoker = new McpUpstreamInvoker(registry);
 
-    const auditLogger = options.auditLogger ?? new ConsoleAuditLogger();
+    const auditLogger = options.auditLogger ?? identityStorage.audit;
 
     const execution = {
       resolver,
       invoker,
       auditLogger,
+      upstreamAttribution: identityStorage.upstreamRegistrations.auditAttribution,
     };
 
     // ------------------------------------------
@@ -142,6 +141,7 @@ export async function createGatewayApp(options: GatewayAppOptions = {}) {
 
     const management = new UpstreamManagement(identityStorage.upstreamRegistrations, registry, policy, credentials);
     await registerDashboardRoutes(app, identityStorage, dashboard, admin => {
+      registerAuditRoutes(admin, identityStorage.audit);
       registerServerInspectionRoutes(admin, identityStorage.upstreamRegistrations, registry, policy, management);
     });
 

@@ -128,11 +128,13 @@ evidence is recorded in #34 (historical evidence file is not included in this ch
 Use an enforcing CNI and controlled allowed/blocked connectivity tests; modern Kind includes NetworkPolicy support, but its name alone does not prove enforcement.
 
 Day 5 callers must reuse server-resolved `AuthenticatedIdentity` (`userId`, `role`,
-`keyId`) and `executeTool({ identity, toolName, arguments, requestId }, dependencies)`.
+actual authentication origin, and a real `keyId` only for bearer execution) and
+`executeTool({ identity, toolName, arguments, requestId }, dependencies)`. Dashboard
+sessions explicitly use `authenticationOrigin: "dashboard_session"` and `keyId: null`.
 Authorization precedes resolution against the actual catalog; invocation retains
 timeouts, valid MCP `isError` results, and structured content. The execution
-boundary records attributed outcomes through the audit interface; audits remain
-console records, not durable MongoDB history. Never invoke upstreams directly
+boundary records attributed outcomes through the audit interface; [durable
+MongoDB history and administrator browsing](tool-history.md) are implemented by #39. Never invoke upstreams directly
 from a future chat controller. Persistent server metadata and live registry
 lifecycle remain owned by the upstream modules. Dashboard cookies/CSRF remain
 separate from gateway bearer keys. No raw key or upstream Secret enters persistent

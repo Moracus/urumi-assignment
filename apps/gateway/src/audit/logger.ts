@@ -8,10 +8,15 @@ export type AuditOutcome =
   | "upstream_timeout";
 export interface AuditRecord {
   requestId: string;
+  attemptId: string;
+  authenticationOrigin: "gateway_api_key" | "dashboard_session";
+  userEmail: string | null;
+  upstreamId: string | null;
+  upstreamDisplayName: string | null;
 
   userId: string;
 
-  keyId: string;
+  keyId: string | null;
 
   upstreamName: string | null;
 
