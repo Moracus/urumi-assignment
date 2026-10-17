@@ -16,6 +16,9 @@ const maxTurns = 5;
 const maxContextBytes = 131_072;
 const maxResultBytes = 16_384;
 const maxProviderBytes = 262_144;
+const providerTimeoutMs = 20_000;
+const requestDurationMs = 90_000;
+const toolStartReserveMs = 12_000;
 class ChatStop extends Error {
   constructor(readonly reason: string) { super("Chat stopped"); }
 }
@@ -23,7 +26,7 @@ const messageSchema = z.object({
   role: z.literal("assistant"), content: z.string().max(32_768).nullable().optional(),
   tool_calls: z.array(z.object({ id: z.string().min(1).max(200), type: z.literal("function"),
     function: z.object({ name: z.string().max(64), arguments: z.string().max(16_384) }),
-  })).max(maxCalls).optional(),
+  })).optional(),
 });
 const completionSchema = z.object({ choices: z.array(z.object({
   finish_reason: z.enum(["stop", "tool_calls"]), message: messageSchema,
@@ -58,11 +61,12 @@ export async function runChat(prompt: string, config: ChatConfig, dependencies: 
     "For today's orders obtain an explicit IANA timezone and use local midnight to next midnight boundaries. " +
     "Explain tool errors and distinguish them from success. Never claim a tool ran without a tool result." },
   { role: "user", content: prompt }];
-  const deadline = Date.now() + 90_000;
+  const deadline = Date.now() + requestDurationMs;
   const ids = new Set<string>();
   const writes = new Set<string>();
   let writesBlocked = false;
   let stage = "catalog";
+  let providerSignal: AbortSignal | undefined;
   const requestId = randomUUID();
   const clean = (text: string) => dependencies.redact(text).replaceAll(config.apiKey, "[redacted]");
   function sanitize(value: unknown): unknown {
@@ -76,11 +80,14 @@ export async function runChat(prompt: string, config: ChatConfig, dependencies: 
     return value;
   }
   const encode = (value: unknown) => JSON.stringify(sanitize(value));
-  const stopped = () => disconnected.aborted || Date.now() >= deadline;
+  function checkActive(reserveMs = 0) {
+    if (disconnected.aborted) throw new ChatStop("disconnected");
+    if (Date.now() + reserveMs >= deadline) throw new ChatStop("duration_limit");
+  }
   try {
     for (let turn = 0; turn < maxTurns; turn++) {
       stage = "catalog";
-      if (stopped()) throw new ChatStop("deadline_or_disconnect");
+      checkActive();
       const identity = await authenticate();
       const catalog = dependencies.aggregator.listTools().filter(tool => {
         try { authorizeTool(identity, tool.name); return true; } catch { return false; }
@@ -97,7 +104,8 @@ export async function runChat(prompt: string, config: ChatConfig, dependencies: 
       });
       if (Buffer.byteLength(body) > maxContextBytes) throw new ChatStop("context_limit");
       stage = "provider_request";
-      const signal = AbortSignal.any([disconnected, AbortSignal.timeout(Math.min(20_000, Math.max(1, deadline - Date.now())))]);
+      const signal = AbortSignal.any([disconnected, AbortSignal.timeout(Math.min(providerTimeoutMs, Math.max(1, deadline - Date.now())))]);
+      providerSignal = signal;
       const response = await fetch(config.endpoint ?? "https://api.openai.com/v1/chat/completions", {
         method: "POST", redirect: "error", signal,
         headers: { Authorization: `Bearer ${config.apiKey}`, "Content-Type": "application/json" }, body,
@@ -123,14 +131,15 @@ export async function runChat(prompt: string, config: ChatConfig, dependencies: 
       const proposed = message.tool_calls ?? [];
       if (!proposed.length) {
         await authenticate();
-        if (stopped() || !message.content) throw new ChatStop("empty_answer_or_deadline");
+        checkActive();
+        if (!message.content) throw new ChatStop("empty_answer");
         return { answer: clean(message.content), calls };
       }
       if (calls.length + proposed.length > maxCalls || proposed.some(call => ids.has(call.id))
         || new Set(proposed.map(call => call.id)).size !== proposed.length) throw new ChatStop("call_limit_or_duplicate_id");
       messages.push({ role: "assistant", content: message.content ?? null, tool_calls: proposed });
       for (const call of proposed) {
-        if (stopped() || deadline - Date.now() < 12_000) throw new ChatStop("deadline_or_disconnect");
+        checkActive(toolStartReserveMs);
         stage = "tool_execution";
         const currentIdentity = await authenticate();
         ids.add(call.id);
@@ -155,6 +164,7 @@ export async function runChat(prompt: string, config: ChatConfig, dependencies: 
           if (isWrite && (writesBlocked || writes.has(fingerprint))) throw new Error("Repeated or uncertain write");
           if (isWrite) writes.add(fingerprint);
           const executionIdentity = await authenticate();
+          checkActive(toolStartReserveMs);
           executed = true;
           const response = await executeTool({ identity: executionIdentity, toolName: current.name,
             arguments: record, requestId }, dependencies.execution);
@@ -162,7 +172,7 @@ export async function runChat(prompt: string, config: ChatConfig, dependencies: 
           outcome = result.isError ? "tool_error" : "success";
           if (isWrite && result.isError) writesBlocked = true;
         } catch (error) {
-          if (error instanceof DashboardAuthError) throw error;
+          if (error instanceof DashboardAuthError || error instanceof ChatStop) throw error;
           if (executed) {
             if (isWrite) writesBlocked = true;
             ({ result, outcome } = safeExecutionError(error));
@@ -181,8 +191,8 @@ export async function runChat(prompt: string, config: ChatConfig, dependencies: 
           }
         }
         calls.push({ id: clean(call.id), toolName: toolName === null ? null : clean(toolName), outcome });
-        let content = encode(result);
-        if (Buffer.byteLength(content) > maxResultBytes) content = encode(toolError("Tool result exceeded the chat size limit. The tool ran; do not repeat writes."));
+        const content = encode(result);
+        if (Buffer.byteLength(content) > maxResultBytes) throw new ChatStop("tool_result_limit");
         messages.push({ role: "tool", tool_call_id: call.id, content });
       }
     }
@@ -192,7 +202,23 @@ export async function runChat(prompt: string, config: ChatConfig, dependencies: 
     if (error instanceof DashboardAuthError) {
       return { answer: "", calls, error: "Your session or access changed. Log in again if needed. Review completed calls before repeating any writes." };
     }
-    console.error(JSON.stringify({ event: "chat_failed", requestId, reason: error instanceof ChatStop ? error.reason : stage }));
+    const reason = error instanceof ChatStop ? error.reason
+      : disconnected.aborted ? "disconnected"
+      : Date.now() >= deadline ? "duration_limit"
+      : providerSignal?.aborted && providerSignal.reason?.name === "TimeoutError" ? "provider_timeout" : stage;
+    console.error(JSON.stringify({ event: "chat_failed", requestId, reason }));
+    const explanations: Record<string, string> = {
+      context_limit: "Context size limit reached.",
+      tool_result_limit: "Tool result size limit reached; the tool ran.",
+      provider_response_limit: "Provider response size limit reached.",
+      catalog_limit: "Tool catalog limit reached.",
+      call_limit_or_duplicate_id: "Tool call limit reached or duplicate call ID received.",
+      turn_limit: "Model turn limit reached.",
+      duration_limit: "Overall request duration limit reached.",
+      provider_timeout: "Provider request timed out.",
+      disconnected: "Client disconnected.",
+    };
+    return { answer: "", calls, error: "Chat stopped or provider unavailable. " + (explanations[reason] ? explanations[reason] + " " : "") +
+      "Review completed calls before submitting again; writes may already have completed." };
   }
-  return { answer: "", calls, error: "Chat stopped or provider unavailable. Review completed calls before submitting again; writes may already have completed." };
 }

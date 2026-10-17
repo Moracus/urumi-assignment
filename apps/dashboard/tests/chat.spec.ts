@@ -39,3 +39,28 @@ test('unconfigured chat has a clear unavailable state', async ({ page }) => {
   await expect(page.getByText('Chat unavailable. Ask an operator to configure the provider.')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Send prompt' })).toBeDisabled();
 });
+
+test('chat retains completed call outcomes when a later provider request fails', async ({ page }) => {
+  let submissions = 0;
+  page.on('request', request => { if (request.url().endsWith('/api/chat') && request.method() === 'POST') submissions++; });
+  await page.getByRole('link', { name: 'Chat', exact: true }).click();
+  await page.getByLabel('Prompt', { exact: true }).fill('fail after calls');
+  await page.getByRole('button', { name: 'Send prompt' }).click();
+  await expect(page.getByRole('alert')).toContainText('Review completed calls');
+  await expect(page.getByRole('table')).toContainText('success');
+  await expect(page.getByRole('table')).toContainText('rejected');
+  await expect(page.getByRole('button', { name: 'Send prompt' })).toBeEnabled();
+  expect(submissions).toBe(1);
+  expect(await page.locator('body').textContent()).not.toContain('synthetic-provider-secret');
+});
+
+test('session expiry inside the model loop shows a recoverable outcome with completed calls', async ({ page }) => {
+  await page.getByRole('link', { name: 'Chat', exact: true }).click();
+  await page.getByLabel('Prompt', { exact: true }).fill('expire during chat');
+  await page.getByRole('button', { name: 'Send prompt' }).click();
+  await expect(page.getByRole('alert')).toContainText('Your session or access changed');
+  await expect(page.getByRole('table')).toContainText('calculator.calculate');
+  await expect(page.getByRole('alert')).toContainText('Review completed calls');
+  await page.reload();
+  await expect(page.getByRole('heading', { name: 'Log in', exact: true })).toBeVisible();
+});

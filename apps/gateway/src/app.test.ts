@@ -2597,3 +2597,291 @@ test("gateway shutdown drains rejected-attempt audit inserts before closing Mong
   assert.equal(response.json().records[0].outcome, "not_found");
   assert.deepEqual(signals, []);
 });
+
+test("chat stops after an oversized UTF-8 tool result and preserves the completed side effect", async t => {
+  let executions = 0;
+  let requests = 0;
+  const calculator = await controlledUpstream(t, "calculator", server => {
+    server.registerTool("calculate", {}, async () => {
+      executions++;
+      return { content: [{ type: "text", text: "界".repeat(6000) }] };
+    });
+  });
+  const provider = Fastify();
+  t.after(() => provider.close());
+  provider.post("/completion", async () => {
+    requests++;
+    return { choices: [{ finish_reason: "tool_calls", message: { role: "assistant", tool_calls: [
+      { id: `large-${requests}`, type: "function", function: { name: "tool_0", arguments: '{}' } },
+      { id: `later-${requests}`, type: "function", function: { name: "tool_0", arguments: '{}' } },
+    ] } }] };
+  });
+  const endpoint = `${await provider.listen({ host: "127.0.0.1", port: 0 })}/completion`;
+  const f = await fixture(t, { upstreams: [calculator.config], chat: { apiKey: "synthetic-provider-secret", endpoint } });
+  const response = await f.app.inject({ method: "POST", url: "/api/chat", headers: f.headers, payload: { prompt: "Get a large result" } });
+  assert.equal(response.json().calls.length, 1);
+  assert.equal(response.json().calls[0].outcome, "success");
+  assert.match(response.json().error, /tool result size limit/i);
+  assert.equal(executions, 1);
+  assert.equal(requests, 1);
+});
+
+test("running chat observes account, session and server changes before subsequent executions", async t => {
+  for (const change of ["role", "disabled", "password", "expiry", "logout", "server-disable", "server-remove"] as const) {
+    for (const timing of ["same response", "next turn"] as const) {
+      if (change.startsWith("server-") && timing === "same response") continue;
+      await t.test(`${change} during ${timing}`, async t => {
+        let executions = 0;
+        let withdraw: () => Promise<void>;
+        const commerce = await controlledUpstream(t, "woocommerce", server => {
+          server.registerTool("create_product", { inputSchema: z.object({ name: z.string() }) }, async () => {
+            executions++;
+            if (timing === "same response") await withdraw();
+            return { content: [{ type: "text", text: "Created" }] };
+          });
+        });
+        const provider = Fastify();
+        t.after(() => provider.close());
+        let turn = 0;
+        provider.post("/completion", async request => {
+          turn++;
+          if (turn === (timing === "same response" ? 2 : 3)) {
+            const body = z.object({ messages: z.array(z.record(z.string(), z.unknown())) }).parse(request.body);
+            const results = body.messages.filter(message => message.role === "tool");
+            assert.deepEqual(results.map(result => result.tool_call_id), timing === "same response" ? ["first", "second"] : ["turn-1", "turn-2"]);
+            assert.equal(JSON.parse(String(results[1].content)).isError, true);
+            return { choices: [{ finish_reason: "stop", message: { role: "assistant", content: "Access changed" } }] };
+          }
+          if (timing === "next turn" && turn === 2) await withdraw();
+          const call = (id: string) => ({ id, type: "function", function: { name: "tool_0", arguments: JSON.stringify({ name: id }) } });
+          return { choices: [{ finish_reason: "tool_calls", message: { role: "assistant", tool_calls:
+            timing === "same response" ? [call("first"), call("second")] : [call(`turn-${turn}`)] } }] };
+        });
+        const endpoint = `${await provider.listen({ host: "127.0.0.1", port: 0 })}/completion`;
+        const f = await fixture(t, { upstreams: [commerce.config], chat: { apiKey: "synthetic-provider-secret", endpoint } });
+        const userFilter = { _id: new mongoose.Types.ObjectId(f.userId) };
+        await f.db.collection("users").updateOne(userFilter, { $set: { role: "admin" } });
+        withdraw = async () => {
+          if (change === "role") await f.db.collection("users").updateOne(userFilter, { $set: { role: "member" } });
+          else if (change === "disabled") await f.db.collection("users").updateOne(userFilter, { $set: { status: "disabled" } });
+          else if (change === "password") await f.db.collection("users").updateOne(userFilter, { $set: { requiredPasswordChange: true } });
+          else if (change === "expiry") await f.db.collection("dashboard_sessions").updateMany({}, { $set: { expiresAt: new Date(0) } });
+          else if (change === "logout") assert.equal((await f.app.inject({ method: "POST", url: "/api/auth/logout", headers: f.headers })).statusCode, 204);
+          else {
+            const servers = (await f.app.inject({ url: "/api/admin/servers", headers: f.headers })).json().servers;
+            const id = servers.find((server: { serverId: string }) => server.serverId === "woocommerce").serverId;
+            const response = await f.app.inject({ method: change === "server-disable" ? "POST" : "DELETE",
+              url: `/api/admin/servers/${id}${change === "server-disable" ? "/disable" : ""}`, headers: f.headers });
+            assert.equal(response.statusCode, change === "server-disable" ? 200 : 204);
+          }
+        };
+        const response = await f.app.inject({ method: "POST", url: "/api/chat", headers: f.headers, payload: { prompt: "Create two distinct products" } });
+        if (change === "role" || change.startsWith("server-")) {
+          assert.equal(response.json().answer, "Access changed");
+          assert.equal(response.json().calls[1].outcome, change === "role" ? "unauthorized" : "rejected");
+        } else assert.match(response.json().error, /session or access changed/);
+        assert.equal(response.json().calls[0].outcome, "success");
+        assert.equal(executions, 1, "withdrawn access cannot be retained by an old provider catalog");
+      });
+    }
+  }
+});
+
+test("chat enforces request, provider, context and call byte/count budgets at HTTP boundaries", async t => {
+  let executions = 0;
+  let mode = "large-provider";
+  let requests = 0;
+  const calculator = await controlledUpstream(t, "calculator", server => {
+    server.registerTool("calculate", {}, async () => { executions++; return { content: [] }; });
+  });
+  const provider = Fastify();
+  t.after(() => provider.close());
+  provider.post("/completion", async (_request, reply) => {
+    requests++;
+    if (mode === "large-provider") return reply.type("application/json").send('{"padding":"' + "界".repeat(90_000) + '"}');
+    if (mode === "malformed") return { choices: [] };
+    if (mode === "authentication") return reply.code(401).send({ error: "synthetic-provider-secret" });
+    if (mode === "context") return { choices: [{ finish_reason: "tool_calls", message: { role: "assistant", content: "界".repeat(32_000), tool_calls: [
+      { id: `context-${requests}`, type: "function", function: { name: "tool_0", arguments: '{}' } },
+    ] } }] };
+    return { choices: [{ finish_reason: "tool_calls", message: { role: "assistant", tool_calls:
+      Array.from({ length: mode === "too-many" ? 9 : 8 }, (_, i) => ({ id: `call-${requests}-${i}`, type: "function", function: { name: "tool_0", arguments: '{}' } })) } }] };
+  });
+  const endpoint = `${await provider.listen({ host: "127.0.0.1", port: 0 })}/completion`;
+  const f = await fixture(t, { upstreams: [calculator.config], chat: { apiKey: "synthetic-provider-secret", endpoint } });
+  const send = (prompt = "Calculate") => f.app.inject({ method: "POST", url: "/api/chat", headers: f.headers, payload: { prompt } });
+  assert.equal((await send("界".repeat(6000))).statusCode, 413, "body budget measures UTF-8 bytes");
+  assert.equal((await send("a".repeat(8001))).statusCode, 400);
+  assert.equal(requests, 0);
+  for (const failure of ["large-provider", "malformed", "authentication", "too-many"]) {
+    mode = failure;
+    const response = await send();
+    assert.ok(response.json().error);
+    if (failure === "large-provider") assert.match(response.json().error, /provider response size limit/i);
+    if (failure === "too-many") assert.match(response.json().error, /tool call limit/i);
+    assert.equal(response.json().calls.length, 0);
+    assert.ok(!response.body.includes("synthetic-provider-secret"));
+  }
+  assert.equal(executions, 0);
+  mode = "context";
+  const context = await send();
+  assert.match(context.json().error, /context size limit/i);
+  assert.equal(context.json().calls.length, 2);
+  assert.equal(executions, 2);
+  mode = "calls";
+  const calls = await send();
+  assert.match(calls.json().error, /tool call limit/i);
+  assert.equal(calls.json().calls.length, 8);
+  assert.equal(executions, 10);
+});
+
+test("provider timeout and client disconnect never replay a completed write", async t => {
+  let executions = 0;
+  const commerce = await controlledUpstream(t, "woocommerce", server => {
+    server.registerTool("create_product", {}, async () => { executions++; return { content: [] }; });
+  });
+  const provider = Fastify();
+  t.after(() => provider.close());
+  let followup: () => void = () => {};
+  let requests = 0;
+  provider.post("/completion", async (request, reply) => {
+    requests++;
+    const body = z.object({ messages: z.array(z.record(z.string(), z.unknown())) }).parse(request.body);
+    if (body.messages.some(message => message.role === "tool")) {
+      followup();
+      // Leave both headers and body pending until the gateway cancels its request.
+      reply.hijack();
+      request.raw.socket.on("close", () => reply.raw.destroy());
+      return;
+    }
+    return { choices: [{ finish_reason: "tool_calls", message: { role: "assistant", tool_calls: [
+      { id: "write", type: "function", function: { name: "tool_0", arguments: '{}' } },
+    ] } }] };
+  });
+  const endpoint = `${await provider.listen({ host: "127.0.0.1", port: 0 })}/completion`;
+  const f = await fixture(t, { upstreams: [commerce.config], chat: { apiKey: "synthetic-provider-secret", endpoint } });
+  await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
+  const send = (signal?: AbortSignal) => fetch(`${f.address}/api/chat`, { method: "POST", headers: { ...f.headers, "content-type": "application/json" }, body: JSON.stringify({ prompt: "Create once" }), signal });
+  const timedOut = await send();
+  const result = await timedOut.json();
+  assert.match(result.error, /provider request timed out/i);
+  assert.deepEqual(result.calls.map((call: { id: string; outcome: string }) => [call.id, call.outcome]), [["write", "success"]]);
+  assert.equal(executions, 1);
+  assert.equal(requests, 2);
+  const controller = new AbortController();
+  followup = () => controller.abort();
+  await assert.rejects(send(controller.signal), { name: "AbortError" });
+  // A subsequent healthy gateway request proves the server remains usable, without resubmission.
+  assert.equal((await fetch(`${f.address}/health/ready`)).status, 200);
+  assert.equal(executions, 2);
+  assert.equal(requests, 4);
+});
+
+test("overall chat duration prevents dispatch from a delayed provider response", async t => {
+  let executions = 0;
+  const calculator = await controlledUpstream(t, "calculator", server => {
+    server.registerTool("calculate", {}, async () => { executions++; return { content: [] }; });
+  });
+  const provider = Fastify();
+  t.after(() => provider.close());
+  provider.post("/completion", async () => {
+    t.mock.timers.tick(90_000);
+    return { choices: [{ finish_reason: "tool_calls", message: { role: "assistant", tool_calls: [
+      { id: "too-late", type: "function", function: { name: "tool_0", arguments: '{}' } },
+    ] } }] };
+  });
+  const endpoint = `${await provider.listen({ host: "127.0.0.1", port: 0 })}/completion`;
+  const f = await fixture(t, { upstreams: [calculator.config], chat: { apiKey: "synthetic-provider-secret", endpoint } });
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+  const response = await f.app.inject({ method: "POST", url: "/api/chat", headers: f.headers, payload: { prompt: "Calculate" } });
+  assert.match(response.json().error, /overall request duration limit/i);
+  assert.equal(executions, 0);
+  t.mock.timers.reset();
+});
+
+test("uncertain upstream write timeout is paired by ID and blocks a different write", async t => {
+  let executions = 0;
+  const commerce = await controlledUpstream(t, "woocommerce", server => {
+    server.registerTool("create_product", { inputSchema: z.object({ name: z.string() }) }, async () => {
+      executions++;
+      await new Promise(resolve => setTimeout(resolve, 10_100));
+      return { content: [] };
+    });
+  });
+  const provider = Fastify();
+  t.after(() => provider.close());
+  provider.post("/completion", async request => {
+    const body = z.object({ messages: z.array(z.record(z.string(), z.unknown())) }).parse(request.body);
+    const results = body.messages.filter(message => message.role === "tool");
+    if (results.length) {
+      assert.deepEqual(results.map(result => result.tool_call_id), ["uncertain", "different-write"]);
+      assert.ok(results.every(result => JSON.parse(String(result.content)).isError === true));
+      return { choices: [{ finish_reason: "stop", message: { role: "assistant", content: "Inspect the store before trying again" } }] };
+    }
+    return { choices: [{ finish_reason: "tool_calls", message: { role: "assistant", tool_calls:
+      ["uncertain", "different-write"].map(id => ({ id, type: "function", function: { name: "tool_0", arguments: JSON.stringify({ name: id }) } })) } }] };
+  });
+  const endpoint = `${await provider.listen({ host: "127.0.0.1", port: 0 })}/completion`;
+  const f = await fixture(t, { upstreams: [commerce.config], chat: { apiKey: "synthetic-provider-secret", endpoint } });
+  await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
+  const response = await f.app.inject({ method: "POST", url: "/api/chat", headers: f.headers, payload: { prompt: "Create two products" } });
+  assert.deepEqual(response.json().calls.map((call: { outcome: string }) => call.outcome), ["upstream_timeout", "rejected"]);
+  assert.equal(response.json().answer, "Inspect the store before trying again");
+  assert.equal(executions, 1);
+});
+
+test("chat stops before provider I/O when the authorized catalog exceeds its budget", async t => {
+  let requests = 0;
+  const calculator = await controlledUpstream(t, "calculator", server => {
+    for (let i = 0; i < 129; i++) server.registerTool(`tool_${i}`, {}, async () => ({ content: [] }));
+  });
+  const provider = Fastify();
+  t.after(() => provider.close());
+  provider.post("/completion", async () => { requests++; return {}; });
+  const endpoint = `${await provider.listen({ host: "127.0.0.1", port: 0 })}/completion`;
+  const f = await fixture(t, { upstreams: [calculator.config], chat: { apiKey: "synthetic-provider-secret", endpoint } });
+  await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
+  const response = await f.app.inject({ method: "POST", url: "/api/chat", headers: f.headers, payload: { prompt: "List tools" } });
+  assert.match(response.json().error, /tool catalog limit/i);
+  assert.equal(requests, 0);
+});
+
+test("queued calls cannot reach a server withdrawn during the same provider response", async t => {
+  for (const action of ["disable", "remove"] as const) await t.test(action, async t => {
+    let withdraw: () => Promise<void>;
+    let writes = 0;
+    const calculator = await controlledUpstream(t, "calculator", server => {
+      server.registerTool("calculate", {}, async () => { await withdraw(); return { content: [] }; });
+    });
+    const commerce = await controlledUpstream(t, "woocommerce", server => {
+      server.registerTool("create_product", {}, async () => { writes++; return { content: [] }; });
+    });
+    const provider = Fastify();
+    t.after(() => provider.close());
+    provider.post("/completion", async request => {
+      const body = z.object({ messages: z.array(z.record(z.string(), z.unknown())) }).parse(request.body);
+      const results = body.messages.filter(message => message.role === "tool");
+      if (results.length) {
+        assert.deepEqual(results.map(result => result.tool_call_id), ["withdraw", "queued-write"]);
+        assert.equal(JSON.parse(String(results[1].content)).isError, true);
+        return { choices: [{ finish_reason: "stop", message: { role: "assistant", content: "Server withdrawn" } }] };
+      }
+      return { choices: [{ finish_reason: "tool_calls", message: { role: "assistant", tool_calls: [
+        { id: "withdraw", type: "function", function: { name: "tool_0", arguments: '{}' } },
+        { id: "queued-write", type: "function", function: { name: "tool_1", arguments: '{}' } },
+      ] } }] };
+    });
+    const endpoint = `${await provider.listen({ host: "127.0.0.1", port: 0 })}/completion`;
+    const f = await fixture(t, { upstreams: [calculator.config, commerce.config], chat: { apiKey: "synthetic-provider-secret", endpoint } });
+    await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
+    withdraw = async () => {
+      const response = await f.app.inject({ method: action === "disable" ? "POST" : "DELETE",
+        url: `/api/admin/servers/woocommerce${action === "disable" ? "/disable" : ""}`, headers: f.headers });
+      assert.equal(response.statusCode, action === "disable" ? 200 : 204);
+    };
+    const response = await f.app.inject({ method: "POST", url: "/api/chat", headers: f.headers, payload: { prompt: "Calculate then create a product" } });
+    assert.equal(response.json().answer, "Server withdrawn");
+    assert.deepEqual(response.json().calls.map((call: { outcome: string }) => call.outcome), ["success", "rejected"]);
+    assert.equal(writes, 0);
+  });
+});

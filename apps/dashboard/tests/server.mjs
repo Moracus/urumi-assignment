@@ -75,6 +75,12 @@ upstream.post('/provider/chat/completions', async (request, reply) => {
     return reply.code(500).send({ error: 'private synthetic-provider-secret' });
   }
   if (messages.some(message => message.role === 'tool')) {
+    if (messages.some(message => message.role === 'user' && message.content === 'expire during chat')) {
+      await storage.sessions.updateMany({}, { $set: { expiresAt: new Date(0) } });
+    }
+    if (messages.some(message => message.role === 'user' && message.content === 'fail after calls')) {
+      return reply.code(503).send({ error: 'private synthetic-provider-secret' });
+    }
     return { choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: '42 and the UTC time. <img src=x onerror="window.modelExecuted=true">' } }] };
   }
   const calculator = tools.find(tool => tool.function.parameters.properties?.operation).function.name;
