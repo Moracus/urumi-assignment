@@ -2,13 +2,19 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod/v4";
 import { DashboardAuthError } from "../identity/dashboard-sessions.js";
 import type { AuthenticatedIdentity } from "../security/identity.js";
-import { runChat, type ChatDependencies } from "./run.js";
+import { runChat, defaultChatModel, type ChatDependencies } from "./run.js";
 
-export interface ChatConfig { apiKey: string; endpoint?: string }
+export interface ChatConfig { apiKey: string; endpoint?: string; model?: string }
 
 export function chatConfig(): ChatConfig | undefined {
+  const enabled = process.env.CHAT_ENABLED;
+  const provider = process.env.CHAT_PROVIDER ?? "openai";
+  const model = process.env.CHAT_MODEL ?? defaultChatModel;
   const apiKey = process.env.OPENAI_API_KEY;
-  return apiKey && /^[\x21-\x7e]{8,8192}$/.test(apiKey) ? { apiKey } : undefined;
+  if ((enabled !== undefined && enabled !== "true") || provider !== "openai" ||
+      !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(model) ||
+      !apiKey || !/^[\x21-\x7e]{8,8192}$/.test(apiKey)) return undefined;
+  return { apiKey, model };
 }
 
 export function registerChatRoutes(routes: FastifyInstance,

@@ -55,6 +55,23 @@ spec:
             - name: DASHBOARD_TRUSTED_PROXIES
               value: {{ join "," .Values.gateway.dashboard.trustedProxies | quote }}
 
+            - name: CHAT_ENABLED
+              value: {{ .Values.gateway.chat.enabled | quote }}
+
+            {{- if .Values.gateway.chat.enabled }}
+            - name: CHAT_PROVIDER
+              value: {{ .Values.gateway.chat.provider | quote }}
+
+            - name: CHAT_MODEL
+              value: {{ .Values.gateway.chat.model | quote }}
+
+            - name: OPENAI_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.gateway.chat.secretName | quote }}
+                  key: {{ .Values.gateway.chat.secretKey | quote }}
+            {{- end }}
+
             - name: GATEWAY_BOOTSTRAP_KEY
               valueFrom:
                 secretKeyRef:

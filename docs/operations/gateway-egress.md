@@ -137,3 +137,7 @@ node infra/helm/urumi/verify-gateway-egress.mjs /protected/nonsecret-probes.json
 ```
 
 Add allowed TCP targets for extra peers or individual MongoDB/API backends when diagnosing Service translation. DNS UDP tests a real A lookup; DNS TCP tests port reachability. MongoDB driver ping also exercises URI-driven member discovery and TLS. Secret GET exercises the actual gateway Pod network, fixed API hostname, TLS and ServiceAccount RBAC. Keep RBAC checks separate if using impersonated `kubectl auth can-i`: those do not exercise the gateway network. Capture the command, date, CNI/version, overlay revision and PASS/FAIL output. Report prerequisites or checks not executed as skipped. No cluster recreation, database reset, PVC deletion, Secret-value dump or commerce write is part of verification.
+
+## Chat provider connectivity
+
+The optional [chat deployment configuration](chat-deployment.md) adds only site-approved provider host routes on TCP 443 when chat is enabled. These rules are independent of MCP destination approvals and upstream Secret RBAC. Existing DNS, MongoDB and API prerequisites still apply.

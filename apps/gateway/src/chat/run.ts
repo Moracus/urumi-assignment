@@ -10,7 +10,7 @@ import type { AuditOutcome } from "../audit/logger.js";
 import type { ChatConfig } from "./routes.js";
 import { DashboardAuthError } from "../identity/dashboard-sessions.js";
 
-const model = "gpt-4.1-mini-2025-04-14";
+export const defaultChatModel = "gpt-4.1-mini-2025-04-14";
 const maxCalls = 8;
 const maxTurns = 5;
 const maxContextBytes = 131_072;
@@ -101,7 +101,7 @@ export async function runChat(prompt: string, config: ChatConfig, dependencies: 
       const tools = [...aliases].map(([name, tool]) => ({ type: "function", function: {
         name, description: tool.description, parameters: tool.inputSchema, strict: false,
       } }));
-      const body = encode({ model, messages, store: false, max_completion_tokens: 2048,
+      const body = encode({ model: config.model ?? defaultChatModel, messages, store: false, max_completion_tokens: 2048,
         ...(tools.length ? { tools, tool_choice: "auto", parallel_tool_calls: false } : {}),
       });
       if (Buffer.byteLength(body) > maxContextBytes) throw new ChatStop("context_limit");

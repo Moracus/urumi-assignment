@@ -43,7 +43,11 @@ spec:
         - protocol: TCP
           port: 27017
     {{- end }}
-    {{- range concat $egress.mongodb $egress.kubernetesApi $egress.additionalDestinations }}
+    {{- $provider := list }}
+    {{- if .Values.gateway.chat.enabled }}
+    {{- $provider = $egress.chatProvider }}
+    {{- end }}
+    {{- range concat $egress.mongodb $egress.kubernetesApi $egress.additionalDestinations $provider }}
     - to:
         {{- if hasKey . "cidr" }}
         - ipBlock:

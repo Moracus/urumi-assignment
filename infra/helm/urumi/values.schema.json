@@ -15,7 +15,8 @@
             "dns",
             "mongodb",
             "kubernetesApi",
-            "additionalDestinations"
+            "additionalDestinations",
+            "chatProvider"
           ],
           "properties": {
             "dns": {
@@ -52,6 +53,30 @@
             },
             "additionalDestinations": {
               "$ref": "#/definitions/peers"
+            },
+            "chatProvider": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "cidr",
+                  "ports"
+                ],
+                "properties": {
+                  "cidr": {
+                    "$ref": "#/definitions/hostCidr"
+                  },
+                  "ports": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 1,
+                    "items": {
+                      "const": 443
+                    }
+                  }
+                }
+              }
             }
           }
         }
@@ -118,6 +143,66 @@
         },
         "resources": {
           "type": "object"
+        }
+      }
+    },
+    "gateway": {
+      "type": "object",
+      "required": [
+        "chat"
+      ],
+      "properties": {
+        "chat": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "enabled",
+            "provider",
+            "model",
+            "secretName",
+            "secretKey"
+          ],
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "provider": {
+              "enum": [
+                "openai"
+              ]
+            },
+            "model": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+            },
+            "secretName": {
+              "type": "string",
+              "maxLength": 253,
+              "pattern": "^$|^[a-z0-9]([a-z0-9-]*[a-z0-9])?([.][a-z0-9]([a-z0-9-]*[a-z0-9])?)*$"
+            },
+            "secretKey": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 253,
+              "pattern": "^[A-Za-z0-9._-]+$"
+            }
+          },
+          "if": {
+            "properties": {
+              "enabled": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "secretName": {
+                "minLength": 1
+              }
+            }
+          }
         }
       }
     }
@@ -200,5 +285,46 @@
         ]
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "gateway": {
+            "properties": {
+              "chat": {
+                "properties": {
+                  "enabled": {
+                    "const": true
+                  }
+                }
+              }
+            }
+          },
+          "networkPolicy": {
+            "properties": {
+              "enabled": {
+                "const": true
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "networkPolicy": {
+            "properties": {
+              "gatewayEgress": {
+                "properties": {
+                  "chatProvider": {
+                    "minItems": 1
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
 }

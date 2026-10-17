@@ -33,6 +33,32 @@ test("chat requires an eligible dashboard session and reports missing provider c
   assert.equal((await fetch(`${f.address}/health/ready`)).status, 200);
 });
 
+test("invalid or disabled runtime chat configuration preserves management, readiness and MCP", async t => {
+  const names = ["OPENAI_API_KEY", "CHAT_ENABLED", "CHAT_PROVIDER", "CHAT_MODEL"] as const;
+  const previous = Object.fromEntries(names.map(name => [name, process.env[name]]));
+  t.after(() => { for (const name of names) {
+    if (previous[name] === undefined) delete process.env[name]; else process.env[name] = previous[name];
+  } });
+  for (const settings of [
+    { CHAT_ENABLED: "false" }, { CHAT_ENABLED: "invalid" },
+    { CHAT_PROVIDER: "unsupported" }, { CHAT_MODEL: "bad model" },
+    { CHAT_MODEL: "" }, { OPENAI_API_KEY: "blank key" },
+  ]) {
+    await t.test(JSON.stringify(settings), async t => {
+      for (const name of names) delete process.env[name];
+      process.env.OPENAI_API_KEY = "synthetic-provider-secret";
+      Object.assign(process.env, settings);
+      const f = await fixture(t);
+      const status = await f.app.inject({ url: "/api/chat", headers: f.headers });
+      assert.deepEqual(status.json(), { available: false });
+      assert.equal((await f.app.inject({ method: "POST", url: "/api/chat", headers: f.headers, payload: { prompt: "Calculate" } })).statusCode, 503);
+      assert.equal((await f.app.inject({ url: "/health/ready" })).statusCode, 200);
+      assert.equal((await f.app.inject({ url: "/api/keys", headers: f.headers })).statusCode, 200);
+      assert.deepEqual((await (await f.connect()).listTools()).tools, []);
+    });
+  }
+});
+
 async function fixture(t: TestContext, options: Pick<GatewayAppOptions, "upstreams" | "auditLogger" | "destinations" | "upstreamNetwork" | "secretReader" | "approvedSecrets" | "chat"> = {}) {
   assert.ok(process.env.MONGODB_TEST_URI, "Use the real MongoDB integration runner");
   const uri = new URL(process.env.MONGODB_TEST_URI);
@@ -129,7 +155,7 @@ test("chat encodes real provider calls, validates schemas, pairs results and aud
   let rounds = 0;
   provider.post("/v1/chat/completions", async request => {
     assert.equal(request.headers.authorization, "Bearer synthetic-provider-secret");
-    const body = z.object({ model: z.literal("gpt-4.1-mini-2025-04-14"), store: z.literal(false),
+    const body = z.object({ model: z.literal("gpt-4.1-2025-04-14"), store: z.literal(false),
       messages: z.array(z.record(z.string(), z.unknown())),
       tools: z.array(z.object({ type: z.literal("function"), function: z.object({ name: z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/), description: z.string().optional(), parameters: z.record(z.string(), z.unknown()) }) })) }).parse(request.body);
     assert.equal(body.tools.length, expectedCatalogSize);
@@ -155,7 +181,7 @@ test("chat encodes real provider calls, validates schemas, pairs results and aud
     return { choices: [{ finish_reason: "stop", message: { role: "assistant", content: "The answer is 42. <script>untrusted</script>" } }] };
   });
   const endpoint = `${await provider.listen({ host: "127.0.0.1", port: 0 })}/v1/chat/completions`;
-  const f = await fixture(t, { upstreams: [calculator.config, clock.config, commerce.config, aliases.config], chat: { apiKey: "synthetic-provider-secret", endpoint } });
+  const f = await fixture(t, { upstreams: [calculator.config, clock.config, commerce.config, aliases.config], chat: { apiKey: "synthetic-provider-secret", endpoint, model: "gpt-4.1-2025-04-14" } });
   const send = () => fetch(`${f.address}/api/chat`, { method: "POST", headers: { ...f.headers, "content-type": "application/json" }, body: JSON.stringify({ prompt: "Multiply 6 by 7 and get the time in UTC" }) });
   const response = await send();
   assert.equal(response.status, 200);
