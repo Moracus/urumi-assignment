@@ -1,6 +1,6 @@
 # Phase 1 operator demonstration (#14)
 
-For the current deployed dashboard and integration milestone, use the [Day 4 operator handoff](milestone-handoff.md). This earlier walkthrough runs the implemented identity backend locally: permanent initial setup, dashboard sessions, mandatory password replacement, personal keys, authenticated MCP, next-request revocation, role restrictions, and operator recovery. Run commands from the repository root in Bash. Use a fresh local database for first setup; never delete setup state or application data to repeat the demonstration.
+For the current deployed dashboard and integration milestone, use the [Day 4 operator handoff](../planning/milestone-handoff.md). This earlier walkthrough runs the implemented identity backend locally: permanent initial setup, dashboard sessions, mandatory password replacement, personal keys, authenticated MCP, next-request revocation, role restrictions, and operator recovery. Run commands from the repository root in Bash. Use a fresh local database for first setup; never delete setup state or application data to repeat the demonstration.
 
 ## Start storage and services
 
@@ -44,7 +44,7 @@ curl --fail-with-body http://localhost:3000/health/live
 curl --fail-with-body http://localhost:3000/health/ready
 ```
 
-Startup requires `MONGODB_URI`, initialized indexes, and working transactions. Standalone MongoDB and unavailable/misconfigured storage prevent serving. Readiness requires a database ping and permits zero connected upstreams; liveness checks the process. During storage outages newly protected requests return safe `503 {"error":"Authentication unavailable"}`, readiness fails, and liveness remains healthy. No bootstrap fallback occurs. See [storage configuration, deadlines, and privileges](identity-setup.md#startup-runtime-health-and-shutdown).
+Startup requires `MONGODB_URI`, initialized indexes, and working transactions. Standalone MongoDB and unavailable/misconfigured storage prevent serving. Readiness requires a database ping and permits zero connected upstreams; liveness checks the process. During storage outages newly protected requests return safe `503 {"error":"Authentication unavailable"}`, readiness fails, and liveness remains healthy. No bootstrap fallback occurs. See [storage configuration, deadlines, and privileges](../guides/identity-setup.md#startup-runtime-health-and-shutdown).
 
 ## Establish the first administrator
 
@@ -55,7 +55,7 @@ export GATEWAY_BOOTSTRAP_KEY_FILE=/run/secrets/configured-bootstrap
 pnpm --filter @urumi/gateway setup-admin --email admin@example.com
 ```
 
-Replace the file path with your existing local secret file. Noninteractive mounted-file options and safe handling are documented in [initial setup](identity-setup.md#first-administrator). Neither passwords nor secrets belong in command arguments, committed files, or pasted output. `GATEWAY_BOOTSTRAP_KEY` is the alternative configured environment value; the file takes precedence for the CLI. The runtime needs neither value for authentication.
+Replace the file path with your existing local secret file. Noninteractive mounted-file options and safe handling are documented in [initial setup](../guides/identity-setup.md#first-administrator). Neither passwords nor secrets belong in command arguments, committed files, or pasted output. `GATEWAY_BOOTSTRAP_KEY` is the alternative configured environment value; the file takes precedence for the CLI. The runtime needs neither value for authentication.
 
 Success prints safe user JSON with `role: "admin"`, `status: "active"`, and `requiredPasswordChange: false`. Repeating setup fails permanently, including after account changes. The bootstrap secret never authenticates MCP. Setup is not an HTTP endpoint.
 
@@ -98,7 +98,7 @@ member_id=$(jq -er '.user.id' "$demo_dir/member-created.json")
 
 Login/me return `200 {"user":{"id":"<id>","email":"admin@example.com","role":"admin",...},"csrfToken":"<session-bound-token>"}`. Member creation returns `201 {"user":{...,"role":"member","requiredPasswordChange":true}}`. Responses omit hashes and secrets. Login sets the HTTP-only `urumi_dashboard` cookie scoped to `/api`, SameSite=Lax, with a fixed eight-hour expiry; HTTPS mode adds Secure. Sessions do not slide or renew on me requests.
 
-Every mutation uses the trusted Origin and that session's CSRF token. Missing/untrusted Origin or missing/wrong CSRF returns `403`. Unknown fields are rejected. Invalid login is generic `401`; persistent account/IP throttles return generic `429` (five failures per normalized email and 30 source-IP attempts within 15 minutes). [Session configuration](dashboard-sessions.md#configuration) explains exact proxy trust and cookie behavior.
+Every mutation uses the trusted Origin and that session's CSRF token. Missing/untrusted Origin or missing/wrong CSRF returns `403`. Unknown fields are rejected. Invalid login is generic `401`; persistent account/IP throttles return generic `429` (five failures per normalized email and 30 source-IP attempts within 15 minutes). [Session configuration](../guides/dashboard-sessions.md#configuration) explains exact proxy trust and cookie behavior.
 
 ## Replace the assigned password and issue a key
 
@@ -172,7 +172,7 @@ mutate member DELETE "$base/api/keys/$key_id"
 curl --fail-with-body --silent --show-error -b "$demo_dir/member.cookies" "$base/api/keys"
 ```
 
-Members cannot discover or invoke WooCommerce writes; administrators can use all registered tools. The automated suite verifies direct forbidden calls against controlled upstreams without touching a real store. Member self-service routes are owner-scoped, including `404` for another user's key. Administrator assistance uses `/api/admin/users/:userId/keys` and verifies the key belongs to that route's user. User/key lists use `page` and `limit` (maximum 100). Creation always creates a member; promotion is a separate PATCH. [Role/status administration](dashboard-sessions.md#promote-and-demote-administrators-10) preserves at least one active administrator under concurrent changes. Disabling permanently invalidates sessions and keys; re-enabling requires fresh credentials.
+Members cannot discover or invoke WooCommerce writes; administrators can use all registered tools. The automated suite verifies direct forbidden calls against controlled upstreams without touching a real store. Member self-service routes are owner-scoped, including `404` for another user's key. Administrator assistance uses `/api/admin/users/:userId/keys` and verifies the key belongs to that route's user. User/key lists use `page` and `limit` (maximum 100). Creation always creates a member; promotion is a separate PATCH. [Role/status administration](../guides/dashboard-sessions.md#promote-and-demote-administrators-10) preserves at least one active administrator under concurrent changes. Disabling permanently invalidates sessions and keys; re-enabling requires fresh credentials.
 
 To demonstrate operator recovery on this local administrator, select its **existing** canonical ID, then use database operator access and a hidden temporary-password prompt:
 
@@ -185,7 +185,7 @@ python3 -c 'import getpass,json; print(json.dumps({"currentPassword":getpass.get
 login admin
 ```
 
-Recovery restores the selected existing user as active administrator, requires replacement, and permanently invalidates all their sessions/keys. It does not create missing users or reopen setup. After replacement, issue fresh keys. Ordinary [administrator password reset](dashboard-sessions.md#reset-a-password-12) differs: it invalidates sessions and blocks retained keys only until replacement. A connection failure at commit may follow successful mutation; inspect state before retrying recovery. See [recovery operational details](identity-setup.md#operator-recovery-13).
+Recovery restores the selected existing user as active administrator, requires replacement, and permanently invalidates all their sessions/keys. It does not create missing users or reopen setup. After replacement, issue fresh keys. Ordinary [administrator password reset](../guides/dashboard-sessions.md#reset-a-password-12) differs: it invalidates sessions and blocks retained keys only until replacement. A connection failure at commit may follow successful mutation; inspect state before retrying recovery. See [recovery operational details](../guides/identity-setup.md#operator-recovery-13).
 
 Logout with `mutate admin POST "$base/api/auth/logout"` returns `204` and ends only that dashboard session; it does not revoke API keys. Other ordinary device sessions remain independent.
 

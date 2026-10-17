@@ -1,6 +1,6 @@
 # Day 4 operator walkthrough and Day 5 handoff (#37)
 
-Use [the execution record](issue-37-validation.md) for actual results and capability
+Use the execution record (historical evidence file is not included in this checkout) for actual results and capability
 status. This walkthrough is reproducible guidance, not a claim that all its steps
 passed. Kind v0.24+ includes NetworkPolicy support; identify the installed image
 and run actual controls rather than inferring enforcement from the CNI name. See
@@ -15,7 +15,7 @@ and `git status --short` first. Select an existing **policy-enforcing** test clu
 do not recreate it or replace its CNI as a verification shortcut. Keep the gateway
 at one replica. Preserve all WordPress, MariaDB and MongoDB claims.
 
-Follow [MongoDB provisioning](mongodb-deployment.md#credentials-and-initialization)
+Follow [MongoDB provisioning](../operations/mongodb-deployment.md#credentials-and-initialization)
 for protected credential files, authenticated single-node replica-set initialization,
 a separate gateway database user and the `urumi-identity-storage` URI Secret.
 Alternatively supply an external transaction-capable database and approve all its
@@ -48,8 +48,8 @@ Different namespaces need explicit destination rules for their full upstream DNS
 origins and corresponding upstream allowed hosts. Destination approval in the
 application and network permission are independent requirements. Approve narrow
 Service/address ranges, not arbitrary private networks. See
-[destinations](upstream-destinations.md), [egress](gateway-egress.md), and
-[named Secret references](upstream-credentials.md). Secret references must be
+[destinations](../operations/upstream-destinations.md), [egress](../operations/gateway-egress.md), and
+[named Secret references](../operations/upstream-credentials.md). Secret references must be
 pre-provisioned, key-approved and in the release namespace; RBAC grants only named
 `get`, never list/watch/create. Empty approvals grant no Secret reads.
 
@@ -61,7 +61,7 @@ helm template urumi infra/helm/urumi -n urumi \
 helm template urumi infra/helm/urumi -n urumi \
   -f infra/helm/urumi/values-prod.yaml > /tmp/urumi-prod.yaml
 # Existing RollingUpdate releases need the documented one-time strategy patch:
-# docs/dashboard-deployment.md#build-and-configure
+# docs/operations/dashboard-deployment.md#build-and-configure
 helm upgrade --install urumi infra/helm/urumi -n urumi --create-namespace \
   -f infra/helm/urumi/values-local.yaml -f /secure/site-values.yaml
 kubectl get pods,deployments,statefulsets,svc,ingress,pvc,networkpolicy -n urumi
@@ -83,17 +83,17 @@ trusted Origin, and configure controller HTTP-to-HTTPS redirection. Verify forwa
 headers are sanitized. `Secure` cookies require actual TLS or an explicitly trusted
 TLS edge. Neither placeholder values nor a self-signed test certificate prove public
 production TLS. Preserve WooCommerce's public signing URL/internal destination pair.
-See [TLS and proxy configuration](dashboard-deployment.md#production-like-https).
+See [TLS and proxy configuration](../operations/dashboard-deployment.md#production-like-https).
 
 ## Establish access and demonstrate the browser workflow
 
-On a new database, run the [initial administrator CLI](identity-setup.md#first-administrator)
+On a new database, run the [initial administrator CLI](../guides/identity-setup.md#first-administrator)
 with protected bootstrap/password files. On Kubernetes use the gateway container's
 compiled `apps/gateway/dist/identity/setup-cli.js` and operator-mounted files; do not
 pass literal secrets in command arguments. The gateway's configured bootstrap value
 is for setup only and never authenticates MCP. Initial setup is permanently consumed.
 For existing accounts use normal login; lost administrator access requires the
-separate [operator recovery CLI](identity-setup.md#operator-recovery-13), database
+separate [operator recovery CLI](../guides/identity-setup.md#operator-recovery-13), database
 operator authorization, and an explicit existing user ID. Never remove the setup marker.
 
 1. Open `/admin/users` directly; log in as an eligible administrator. Reload and
@@ -110,7 +110,7 @@ operator authorization, and an explicit existing user ID. Never remove the setup
    public `/mcp` URL and the member's bearer key. Fresh discovery uses
    `client.listTools(undefined, { cacheMode: 'bypass' })`.
 4. Call `calculator.calculate` and `time.current`. With operator-provisioned store
-   credentials and an existing readable order, run the [read-only smoke command](browser-to-mcp-workflow.md#live-read-only-smoke-with-operator-credentials):
+   credentials and an existing readable order, run the [read-only smoke command](../guides/browser-to-mcp-workflow.md#live-read-only-smoke-with-operator-credentials):
    `pnpm --filter @urumi/dashboard smoke:readonly`. Supply `URUMI_MCP_URL`,
    `URUMI_API_KEY`, and `URUMI_ORDER_ID` privately. This checks products, orders and
    order detail without writes. No order fixture means order-detail verification
@@ -170,13 +170,13 @@ The verifier checks the continuing administrator session and active key, revoked
 member key, persisted password-replacement state, registration deletion and disabled
 intent after each restart. It separately checks the MongoDB PVC UID and an actual
 majority-committed transaction before and after MongoDB restart. It never deletes
-a PVC, reseeds the database or resets setup. The [storage guide](mongodb-deployment.md#non-destructive-live-verification)
+a PVC, reseeds the database or resets setup. The [storage guide](../operations/mongodb-deployment.md#non-destructive-live-verification)
 contains the manual equivalent. This managed-storage verifier does not certify an
 external database operator's restart procedure.
 
 ## Network and authorization evidence
 
-Run [the controlled egress matrix](gateway-egress.md#read-only-live-checks) from the
+Run [the controlled egress matrix](../operations/gateway-egress.md#read-only-live-checks) from the
 actual gateway Pod and a reachable control Pod. Both same-namespace and cross-namespace
 denied destinations must first be demonstrably reachable from the control. A refused
 connection or missing listener does not prove policy. Also probe upstream/database

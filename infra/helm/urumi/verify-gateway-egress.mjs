@@ -99,7 +99,7 @@ if (process.argv[2] === '--in-pod') {
     console.log(JSON.stringify(await inPod(config, process.argv[4] === 'control')));
   } catch { process.exitCode = 1; }
 } else if (process.argv.length !== 3 || process.argv[2] === '--help') {
-  console.log('Usage: node infra/helm/urumi/verify-gateway-egress.mjs /path/to/nonsecret-probes.json\nSee docs/gateway-egress.md. Requires existing gateway and Node.js control Pods.');
+  console.log('Usage: node infra/helm/urumi/verify-gateway-egress.mjs /path/to/nonsecret-probes.json\nSee docs/operations/gateway-egress.md. Requires existing gateway and Node.js control Pods.');
   if (process.argv[2] !== '--help') process.exitCode = 1;
 } else {
   try {

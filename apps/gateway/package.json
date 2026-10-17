@@ -4,12 +4,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
+    "dev": "node ../../scripts/run-with-env.mjs gateway tsx watch src/index.ts",
     "typecheck": "tsc --noEmit",
     "build": "tsc",
-    "start": "node dist/index.js",
-    "setup-admin": "node dist/identity/setup-cli.js",
-    "recover-admin": "node dist/identity/recovery-cli.js",
+    "start": "node ../../scripts/run-with-env.mjs gateway node dist/index.js",
+    "setup-admin": "node ../../scripts/run-with-env.mjs gateway node dist/identity/setup-cli.js",
+    "recover-admin": "node ../../scripts/run-with-env.mjs gateway node dist/identity/recovery-cli.js",
     "test": "node --test --test-concurrency=1 dist/app.test.js dist/execution/*.test.js dist/tools/*.test.js dist/identity/*.integration.test.js",
     "test:integration": "bash ../../infra/mongodb/test.sh"
   },

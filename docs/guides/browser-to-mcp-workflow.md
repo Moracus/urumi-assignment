@@ -120,11 +120,11 @@ each change. Cancel destructive confirmation dialogs once before confirming them
 
 This application harness does not prove production-image ingress, TLS,
 NetworkPolicy enforcement, or persistence across Kubernetes restarts. Follow
-[dashboard deployment verification](dashboard-deployment.md#verification),
-[MongoDB restart verification](mongodb-deployment.md#non-destructive-live-verification),
-and the [gateway egress matrix](gateway-egress.md) separately. Existing deployment
-evidence is recorded in [#34](issue-34-validation.md) and
-[#35](issue-35-validation.md); it is not a new deployment claim for this issue.
+[dashboard deployment verification](../operations/dashboard-deployment.md#verification),
+[MongoDB restart verification](../operations/mongodb-deployment.md#non-destructive-live-verification),
+and the [gateway egress matrix](../operations/gateway-egress.md) separately. Existing deployment
+evidence is recorded in #34 (historical evidence file is not included in this checkout) and
+#35 (historical evidence file is not included in this checkout); it is not a new deployment claim for this issue.
 Use an enforcing CNI and controlled allowed/blocked connectivity tests; modern Kind includes NetworkPolicy support, but its name alone does not prove enforcement.
 
 Day 5 callers must reuse server-resolved `AuthenticatedIdentity` (`userId`, `role`,
@@ -139,5 +139,5 @@ separate from gateway bearer keys. No raw key or upstream Secret enters persiste
 browser storage or management responses beyond one-time gateway-key issuance.
 
 Capability-level Day 4 status and exact executed results for this issue are in
-[the validation record](issue-36-validation.md). A full milestone verification
+the validation record (historical evidence file is not included in this checkout). A full milestone verification
 still requires the separately identified live deployment and commerce checks.

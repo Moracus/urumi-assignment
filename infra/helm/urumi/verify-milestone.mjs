@@ -1,4 +1,4 @@
-// Opt-in, mutating verification for a disposable release. See docs/milestone-handoff.md.
+// Opt-in, mutating verification for a disposable release. See docs/planning/milestone-handoff.md.
 // Credentials stay in memory; failures print only a fixed stage, never exceptions.
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';

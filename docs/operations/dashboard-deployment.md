@@ -44,7 +44,7 @@ are compiled public assets and nginx configuration, without build tools or sourc
 `images.dashboard` is a legacy unused value; use `dashboard.image` for deployment.
 
 Before deploying, follow [MongoDB setup](mongodb-deployment.md) and
-[identity setup/recovery](identity-setup.md). Pre-provision `urumi-identity-storage`
+[identity setup/recovery](../guides/identity-setup.md). Pre-provision `urumi-identity-storage`
 (`uri`), `urumi-gateway-auth` (`bootstrap-key`, for CLI setup only), and the
 existing commerce Secrets. For managed MongoDB also provision `urumi-mongodb-auth`
 as described in its setup guide. No credential goes in Helm values. The chart
@@ -88,7 +88,7 @@ Recreate upgrades briefly interrupt gateway service.
 Configure upstream destination approvals, database/API network destinations, and
 approved Secret references using the existing [egress](gateway-egress.md) and
 [credential](upstream-credentials.md) guides. Do not disable isolation to make a
-connection work. [Initial setup](identity-setup.md) is a CLI operation, not bearer
+connection work. [Initial setup](../guides/identity-setup.md) is a CLI operation, not bearer
 authentication; after it is consumed, use the separate operator recovery procedure.
 
 ## Production-like HTTPS
@@ -176,4 +176,4 @@ Kind v0.24+ includes [NetworkPolicy support](https://github.com/kubernetes-sigs/
 on a suitable cluster. Do not infer enforcement from successfully rendered objects.
 
 The current full deployed browser/MCP/restart walkthrough and capability status are
-in [the operator handoff](milestone-handoff.md) and [issue 37 evidence](issue-37-validation.md).
+in [the operator handoff](../planning/milestone-handoff.md) and issue 37 evidence (historical evidence file is not included in this checkout).

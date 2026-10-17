@@ -6,7 +6,8 @@
     "dev": "pnpm -r --parallel --filter \"./apps/*\" dev",
     "typecheck": "pnpm -r typecheck",
     "build": "pnpm -r build",
-    "test:workflow": "bash infra/mongodb/test.sh --browser"
+    "test:workflow": "bash infra/mongodb/test.sh --browser",
+    "test:env": "node --test scripts/workspace-env.test.mjs"
   },
   "devDependencies": {
     "typescript": "^5.9.0"

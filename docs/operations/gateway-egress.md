@@ -100,7 +100,7 @@ kubectl get deployment urumi-gateway -n urumi -o jsonpath='{.spec.template.spec.
 kubectl get role,rolebinding -n urumi
 ```
 
-Verify readiness, exact Service ports, existing Ingress routes and bound PVCs against the pre-rollout state. Run the existing [authenticated MCP discovery/calculator/time and read-only WooCommerce checks](mcp-authentication.md) through the real Ingress. Missing/invalid keys must still get 401. A storefront GET must still succeed. Administrative port-forwarding does not test the Ingress or ordinary Pod-network path.
+Verify readiness, exact Service ports, existing Ingress routes and bound PVCs against the pre-rollout state. Run the existing [authenticated MCP discovery/calculator/time and read-only WooCommerce checks](../guides/mcp-authentication.md) through the real Ingress. Missing/invalid keys must still get 401. A storefront GET must still succeed. Administrative port-forwarding does not test the Ingress or ordinary Pod-network path.
 
 The supplied verifier executes only DNS, TCP connections, MongoDB `ping` and TLS Secret GETs in existing Pods. It creates no resources, returns no Secret values and does not invoke WooCommerce mutations. It needs Node.js in both the deployed gateway image and an existing control Pod. The gateway probe uses its existing `MONGODB_URI`, installed Mongoose driver, mounted ServiceAccount token and CA. The control Pod requires no credentials.
 

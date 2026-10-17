@@ -2,7 +2,7 @@ Dashboard: {{ if .Values.ingress.dashboard.tlsSecretName }}https{{ else }}http{{
 Management API: /api on the dashboard origin (session cookies and CSRF).
 MCP: {{ if .Values.ingress.gateway.tlsSecretName }}https{{ else }}http{{ end }}://{{ .Values.global.gatewayHost }}/mcp (gateway API keys).
 
-See docs/dashboard-deployment.md for image build, Secrets, exact ingress proxy
+See docs/operations/dashboard-deployment.md for image build, Secrets, exact ingress proxy
 trust, MongoDB setup, destination approvals, and verification commands.
 Production values contain placeholder hosts/TLS Secret names; configure real
 certificates and exact proxy IPs before login. No credentials are generated.

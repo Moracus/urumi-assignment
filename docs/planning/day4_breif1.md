@@ -3,7 +3,7 @@
 
 ### Design interview decisions
 
-Read [the Day 4 identity decision log](docs/day4-identity-decisions.md), [the glossary](GLOSSARY.md), and the linked ADRs alongside this brief. Accepted interview decisions take precedence where this original brief differs. In particular, preserve the existing stateless/per-request MCP transport, require MongoDB transaction support, and perform fresh administrator setup rather than migrating the test bootstrap key. All 21 interview decisions are accepted and describe planned behavior, not implemented features. The user explicitly deferred implementation.
+Read the Day 4 identity decision log (historical document is not included in this checkout), [the glossary](../../GLOSSARY.md), and the linked ADRs alongside this brief. Accepted interview decisions take precedence where this original brief differs. In particular, preserve the existing stateless/per-request MCP transport, require MongoDB transaction support, and perform fresh administrator setup rather than migrating the test bootstrap key. All 21 interview decisions are accepted and describe planned behavior, not implemented features. The user explicitly deferred implementation.
 
 ### Objective
 
