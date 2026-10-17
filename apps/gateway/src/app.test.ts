@@ -2178,6 +2178,15 @@ test("shared execution records real dashboard-session origin, rejections and una
   const rows: AuditRecord[] = response.json().records;
   assert.equal(rows.length, 4);
   assert.deepEqual(rows.map(row => row.outcome).sort(), ["not_found", "success", "unauthorized", "upstream_unavailable"]);
+  const filtered = await f.app.inject({ url: `/api/admin/audit?userId=${f.userId}&toolName=calculator.calculate&outcome=success&from=2000-01-01T00:00:00Z&to=2100-01-01T00:00:00Z`, headers: f.headers });
+  assert.equal(filtered.statusCode, 200, filtered.body);
+  assert.deepEqual(filtered.json().records, rows.filter(row => row.outcome === "success"));
+  for (const query of ["userId=000000000000000000000000", "toolName=unknown", "outcome=tool_error", "from=2100-01-01T00:00:00Z", "to=2000-01-01T00:00:00Z"]) {
+    assert.deepEqual((await f.app.inject({ url: `/api/admin/audit?${query}`, headers: f.headers })).json().records, []);
+  }
+  for (const query of ["userId=invalid", "toolName=", "outcome=invalid", "from=yesterday", "to=invalid", "from=2100-01-01T00:00:00Z&to=2000-01-01T00:00:00Z"]) {
+    assert.equal((await f.app.inject({ url: `/api/admin/audit?${query}`, headers: f.headers })).statusCode, 400);
+  }
   assert.equal(new Set(rows.map(row => row.attemptId)).size, 4);
   for (const row of rows) {
     assert.equal(row.authenticationOrigin, "dashboard_session"); assert.equal(row.keyId, null);

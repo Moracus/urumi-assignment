@@ -40,6 +40,10 @@ export async function executeTool(
   let upstream: { id: string; displayName: string } | null = null;
   const attemptId = randomUUID();
   let outcome: AuditOutcome = "upstream_error";
+  async function captureUpstream(name: string) {
+    try { return await dependencies.upstreamAttribution?.(name) ?? null; }
+    catch { console.error("Audit attribution unavailable"); return null; }
+  }
 
   try {
     // 1. Authorization
@@ -54,8 +58,7 @@ export async function executeTool(
 
     upstreamName = tool.upstreamName;
     // Capture before invocation, including removal while a call is in flight.
-    try { upstream = await dependencies.upstreamAttribution?.(upstreamName) ?? null; }
-    catch { console.error("Audit attribution unavailable"); }
+    upstream = await captureUpstream(upstreamName);
 
     // 3. Upstream execution
     const result = await dependencies.invoker.invoke(tool, request.arguments);
@@ -71,10 +74,7 @@ export async function executeTool(
   } catch (error) {
     if (error instanceof UpstreamUnavailableError) {
       upstreamName = error.upstreamName;
-      if (!upstream) {
-        try { upstream = await dependencies.upstreamAttribution?.(upstreamName) ?? null; }
-        catch { console.error("Audit attribution unavailable"); }
-      }
+      if (!upstream) upstream = await captureUpstream(upstreamName);
     }
     if (error instanceof Error && error.name === "AuthorizationError") {
       outcome = "unauthorized";

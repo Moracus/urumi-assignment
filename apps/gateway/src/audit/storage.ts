@@ -1,5 +1,13 @@
-import { Schema, type Connection } from "mongoose";
+import { Schema, type Connection, type QueryFilter } from "mongoose";
 import type { AuditLogger, AuditRecord } from "./logger.js";
+
+export interface AuditFilters {
+  userId?: string;
+  toolName?: string;
+  outcome?: AuditRecord["outcome"];
+  from?: string;
+  to?: string;
+}
 
 const auditSchema = new Schema<AuditRecord>({
   attemptId: { type: String, required: true },
@@ -33,8 +41,15 @@ export async function createAuditStorage(connection: Connection) {
         upstreamId: record.upstreamId, upstreamName: record.upstreamName, upstreamDisplayName: record.upstreamDisplayName,
         toolName: record.toolName, timestamp: record.timestamp, durationMs: record.durationMs, outcome: record.outcome });
     },
-    async page(page: number, limit: number) {
-      const rows = await records.find().sort({ timestamp: -1, _id: -1 }).skip((page - 1) * limit).limit(limit + 1).lean();
+    async page(page: number, limit: number, filters: AuditFilters = {}) {
+      const query: QueryFilter<AuditRecord> = {};
+      if (filters.userId) query.userId = filters.userId;
+      if (filters.toolName) query.toolName = filters.toolName;
+      if (filters.outcome) query.outcome = filters.outcome;
+      if (filters.from || filters.to) query.timestamp = {
+        ...(filters.from ? { $gte: filters.from } : {}), ...(filters.to ? { $lt: filters.to } : {}),
+      };
+      const rows = await records.find(query).sort({ timestamp: -1, _id: -1 }).skip((page - 1) * limit).limit(limit + 1).lean();
       return { records: rows.slice(0, limit).map(row => ({
         id: row._id.toHexString(), attemptId: row.attemptId, requestId: row.requestId,
         userId: row.userId, userEmail: row.userEmail, authenticationOrigin: row.authenticationOrigin, keyId: row.keyId,
@@ -42,5 +57,5 @@ export async function createAuditStorage(connection: Connection) {
         toolName: row.toolName, timestamp: row.timestamp, durationMs: row.durationMs, outcome: row.outcome,
       })), page, limit, hasMore: rows.length > limit };
     },
-  } satisfies AuditLogger & { page(page: number, limit: number): Promise<unknown> };
+  } satisfies AuditLogger & { page(page: number, limit: number, filters?: AuditFilters): Promise<unknown> };
 }
