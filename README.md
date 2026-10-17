@@ -93,7 +93,10 @@ administrator as described in the guide before running `pnpm dev`.
 Backend `dev`, `start`, and gateway setup/recovery commands load the workspace
 `.env` from any working directory. Shell variables take precedence. Each service
 uses its own `*_PORT`; explicit `PORT` overrides it for an individual backend.
-The dashboard loads root Vite env files and exposes only `VITE_*` to browser code.
+The dashboard loads root Vite env files. Set `DASHBOARD_PUBLIC_MCP_URL` for host
+development; deployed images use Helm `dashboard.publicMcpUrl` at runtime. See
+[runtime dashboard configuration](docs/operations/dashboard-deployment.md).
+Never prefix credentials with `VITE_`, which exposes values to browser code.
 Kubernetes uses Helm values and Secret references; it does not read the host `.env`.
 
 See [.env.example](.env.example) for known URLs, hosts, ports and local destination

@@ -230,9 +230,10 @@ mongodb:
       cpu: 1000m
       memory: 1Gi
 
-# Build the image with the public VITE_PUBLIC_MCP_URL for this environment.
+# Public connection information only; mounted at runtime, never put credentials here.
 dashboard:
   enabled: true
+  publicMcpUrl: ""
   image:
     repository: urumi/dashboard
     tag: dev

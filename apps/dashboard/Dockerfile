@@ -4,9 +4,6 @@ RUN corepack enable
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/dashboard ./apps/dashboard
 RUN pnpm install --frozen-lockfile --filter @urumi/dashboard...
-# This is public client configuration. Never pass secrets as build arguments.
-ARG VITE_PUBLIC_MCP_URL
-ENV VITE_PUBLIC_MCP_URL=${VITE_PUBLIC_MCP_URL}
 RUN pnpm --filter @urumi/dashboard build
 
 FROM nginx:1.28-alpine AS runtime

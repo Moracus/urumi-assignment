@@ -111,15 +111,20 @@ Revocation opens an explicit confirmation with Cancel. While pending, controls p
 
 ### Public URL and demonstrated client
 
-Set `VITE_PUBLIC_MCP_URL` to the externally reachable gateway `/mcp` URL when starting Vite or building the dashboard, for example:
+Set Helm `dashboard.publicMcpUrl` to the externally reachable gateway `/mcp` URL,
+for example `https://gateway.example.com/mcp`. The chart mounts public JSON at
+`/runtime-config.json`, so the same dashboard image can be promoted across
+environments without rebuilding. For host development:
 
 ```bash
-VITE_PUBLIC_MCP_URL=http://gateway.localhost:8080/mcp pnpm --filter @urumi/dashboard dev
-# Or bake the public URL into a static build:
-VITE_PUBLIC_MCP_URL=https://gateway.example.com/mcp pnpm --filter @urumi/dashboard build
+DASHBOARD_PUBLIC_MCP_URL=http://gateway.localhost:8080/mcp pnpm --filter @urumi/dashboard dev
 ```
 
-This is public, build-time configuration. Never put credentials or internal upstream URLs in it. An absent/invalid URL displays an operator configuration message; the dashboard does not infer the gateway from its own origin because the MCP Ingress may use a separate hostname. No Helm/dashboard deployment is added by #26; configure this variable in the future dashboard image build. Existing local gateway MongoDB, trusted-Origin and HTTP settings are described in [dashboard setup](dashboard-sessions.md#browser-dashboard-25).
+Restart Vite after changing its environment. Never put credentials or internal
+upstream URLs in this public setting. Missing/invalid configuration displays an
+operator message; fetch failures support retry. The dashboard never infers the
+gateway from its own origin. See [runtime deployment, upgrades and rollback](../operations/dashboard-deployment.md)
+and [dashboard authentication setup](dashboard-sessions.md#browser-dashboard-25).
 
 The connection panel shows the configured URL and a runnable Node.js ESM example using `@modelcontextprotocol/client` v2 `Client` and `StreamableHTTPClientTransport`, with `Authorization: Bearer <YOUR_GATEWAY_API_KEY>`. Install the SDK in the external client's project and replace the placeholder privately in memory. Do not commit or log credentials. The example lists permitted tools and calls `calculator.calculate` with multiplication of 6 and 7. The browser integration suite demonstrates the same SDK/transport with a browser-issued member key, permitted WooCommerce read, calculator and time calls, independent write-tool rejection, ownership rejection, and same-client 401 after browser revocation. Its upstreams are controlled MCP servers; it does not prove real WooCommerce connectivity or Kubernetes routing.
 

@@ -80,7 +80,10 @@ service-specific value. Dashboard uses `DASHBOARD_PORT` and
 `DASHBOARD_PROXY_TARGET`. If ports change, also update upstream URLs, destination
 rules, trusted origins and the public MCP URL; no variable interpolation occurs.
 Vite reads root `.env`, `.env.local` and mode-specific files with Vite's usual
-precedence. Only `VITE_*` variables are public; never prefix secrets with `VITE_`.
+precedence. Set `DASHBOARD_PUBLIC_MCP_URL=http://gateway.localhost:8080/mcp`
+for public connection instructions in Vite; restart Vite after changes. Helm
+deployments use `dashboard.publicMcpUrl` without rebuilding the image. Never prefix
+secrets with `VITE_`, which exposes them to browser code.
 
 Default local upstream approvals permit only the three explicit loopback origins.
 `UPSTREAM_ALLOW_LOOPBACK=true` and HTTP session cookies are development settings;
@@ -145,7 +148,6 @@ docker build -f apps/woocommerce-mcp/Dockerfile -t urumi/woocommerce-mcp:dev .
 docker build -f apps/calculator-mcp/Dockerfile -t urumi/calculator-mcp:dev .
 docker build -f apps/time-mcp/Dockerfile -t urumi/time-mcp:dev .
 docker build -f apps/dashboard/Dockerfile \
-  --build-arg VITE_PUBLIC_MCP_URL=http://gateway.localhost:8080/mcp \
   -t urumi/dashboard:dev .
 kind load docker-image --name urumi urumi/gateway:dev urumi/woocommerce-mcp:dev \
   urumi/calculator-mcp:dev urumi/time-mcp:dev urumi/dashboard:dev

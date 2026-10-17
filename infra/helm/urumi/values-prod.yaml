@@ -21,3 +21,6 @@ ingress:
 woocommerceMcp:
   wordpressUrl: https://store.example.com
   wordpressInternalUrl: http://urumi-wordpress
+
+dashboard:
+  publicMcpUrl: https://gateway.example.com/mcp

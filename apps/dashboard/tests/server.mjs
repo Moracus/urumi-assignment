@@ -134,8 +134,8 @@ const gateway = await createGatewayApp({ mongodbUri: uri.toString(),
   destinations: { allowLoopback: true, rules: [upstreamAddress, new URL(commerce.config.url).origin].map(origin => ({ origin, cidrs: ['127.0.0.1/32'] })) },
 });
 await gateway.listen({ host: '127.0.0.1', port: 3009 });
+process.env.DASHBOARD_PUBLIC_MCP_URL = 'http://localhost:5174/mcp';
 const vite = await createServer({
-  define: { 'import.meta.env.VITE_PUBLIC_MCP_URL': JSON.stringify('http://localhost:5174/mcp') },
   // Test arrangement only; this middleware is absent from production Vite config.
   plugins: [{ name: 'expire-test-session', configureServer(server) {
     server.middlewares.use(async (request, response, next) => {

@@ -1,4 +1,11 @@
 {{- if .Values.dashboard.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: urumi-dashboard-config
+data:
+  runtime-config.json: {{ dict "publicMcpUrl" .Values.dashboard.publicMcpUrl | toJson | quote }}
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -9,6 +16,8 @@ spec:
     matchLabels: {app: urumi-dashboard}
   template:
     metadata:
+      annotations:
+        checksum/public-config: {{ dict "publicMcpUrl" .Values.dashboard.publicMcpUrl | toJson | sha256sum | quote }}
       labels: {app: urumi-dashboard}
     spec:
       automountServiceAccountToken: false
@@ -42,7 +51,14 @@ spec:
             periodSeconds: 20
           volumeMounts:
             - {name: tmp, mountPath: /tmp}
+            - name: public-config
+              mountPath: /usr/share/nginx/html/runtime-config.json
+              subPath: runtime-config.json
+              readOnly: true
       volumes:
+        - name: public-config
+          configMap:
+            name: urumi-dashboard-config
         - name: tmp
           emptyDir: {sizeLimit: 32Mi}
 ---

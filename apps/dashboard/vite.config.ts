@@ -7,7 +7,16 @@ const workspaceRoot = fileURLToPath(new URL('../../', import.meta.url));
 export default defineConfig(({ mode }) => {
   const env = { ...loadEnv(mode, workspaceRoot, ''), ...process.env };
   return {
-    plugins: [react()],
+    plugins: [react(), {
+      name: 'public-runtime-config',
+      configureServer(server) {
+        server.middlewares.use('/runtime-config.json', (_request, response) => {
+          response.setHeader('Content-Type', 'application/json');
+          response.setHeader('Cache-Control', 'no-store');
+          response.end(JSON.stringify({ publicMcpUrl: env.DASHBOARD_PUBLIC_MCP_URL ?? '' }));
+        });
+      },
+    }],
     envDir: workspaceRoot,
     server: {
       port: Number(env.DASHBOARD_PORT ?? 5173),

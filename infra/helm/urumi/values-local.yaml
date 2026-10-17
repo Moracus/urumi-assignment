@@ -15,3 +15,6 @@ gateway:
 woocommerceMcp:
   wordpressUrl: http://store.localhost
   wordpressInternalUrl: http://urumi-wordpress
+
+dashboard:
+  publicMcpUrl: http://gateway.localhost/mcp

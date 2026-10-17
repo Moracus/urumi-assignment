@@ -1,6 +1,7 @@
 # Run from repository root: ruby infra/helm/urumi/test-dashboard.rb
 require 'yaml'
 require 'open3'
+require 'json'
 
 def check(value, message)
   raise message unless value
@@ -12,12 +13,18 @@ end
   raise err unless status.success?
   docs = YAML.load_stream(out).compact
   find = ->(kind, name) { docs.find { |d| d['kind'] == kind && d.dig('metadata', 'name') == name } }
+  config = find.call('ConfigMap', 'urumi-dashboard-config')
+  expected_url = environment == 'local' ? 'http://gateway.localhost/mcp' : 'https://gateway.example.com/mcp'
+  check(JSON.parse(config.dig('data', 'runtime-config.json')) == {'publicMcpUrl' => expected_url}, 'Expose only public runtime connection information')
   workload = find.call('Deployment', 'urumi-dashboard')
   check(workload, 'Dashboard workload missing')
   pod = workload.dig('spec', 'template', 'spec')
   check(pod['automountServiceAccountToken'] == false, 'Static server must not get an API token')
   check(pod.dig('securityContext', 'runAsNonRoot') == true, 'Static server must be unprivileged')
+  check(workload.dig('spec', 'template', 'metadata', 'annotations', 'checksum/public-config').to_s.size == 64, 'Config change must roll dashboard Pods')
+  check(pod['volumes'].any? { |v| v.dig('configMap', 'name') == 'urumi-dashboard-config' }, 'Runtime ConfigMap must be mounted')
   container = pod['containers'][0]
+  check(container['volumeMounts'].any? { |v| v['mountPath'] == '/usr/share/nginx/html/runtime-config.json' && v['readOnly'] }, 'Config must be a read-only file')
   %w[startupProbe readinessProbe livenessProbe resources].each { |key| check(container[key], "Missing #{key}") }
   check(container.dig('securityContext', 'readOnlyRootFilesystem') == true, 'Root filesystem must be read-only')
   check(container.dig('securityContext', 'capabilities', 'drop') == ['ALL'], 'Drop capabilities')
@@ -55,7 +62,7 @@ end
   docs = YAML.load_stream(out).compact
   check(docs.none? { |d| d['kind'] == 'Ingress' && d.dig('metadata', 'name') == name }, 'Disabled dashboard ingress must be omitted')
   if override == 'dashboard.enabled=false'
-    check(docs.none? { |d| d.dig('metadata', 'name') == name }, 'Disabled dashboard must omit its resources')
+    check(docs.none? { |d| [name, 'urumi-dashboard-config'].include?(d.dig('metadata', 'name')) }, 'Disabled dashboard must omit its resources')
   end
 end
 %w[gateway.localhost store.localhost].each do |host|
@@ -63,3 +70,23 @@ end
   check(!status.success?, 'Colliding public hosts must be rejected')
 end
 puts 'Dashboard chart regression checks passed (local and prod)'
+
+['https://user:secret@gateway.test/mcp', 'https://gateway.test/mcp?token=secret',
+ 'https://gateway.test/mcp#secret', 'ftp://gateway.test/mcp', '/mcp',
+ 'http://999.999.999.999/mcp', 'http://gateway.123/mcp',
+ 'https://[1234]/mcp', 'https://[:::]/mcp', 'https://gateway..test/mcp',
+ 'http://gateway.test:99999/mcp', 'https://gateway.test/other', ' https://gateway.test/mcp'].each do |url|
+  _, _, status = Open3.capture3('helm', 'template', 'urumi', 'infra/helm/urumi', '--set-string', "dashboard.publicMcpUrl=#{url}")
+  check(!status.success?, 'Invalid public URL must fail chart validation')
+end
+out, err, status = Open3.capture3('helm', 'template', 'urumi', 'infra/helm/urumi', '--set-string', 'dashboard.publicMcpUrl=')
+raise err unless status.success?
+config = YAML.load_stream(out).compact.find { |d| d['kind'] == 'ConfigMap' && d.dig('metadata', 'name') == 'urumi-dashboard-config' }
+check(JSON.parse(config.dig('data', 'runtime-config.json')) == {'publicMcpUrl' => ''}, 'Missing URL must never infer a destination')
+puts 'Runtime public URL chart checks passed'
+
+['http://127.0.0.1:3000/mcp', 'http://localhost:8080/mcp', 'https://[::1]/mcp', 'https://[2001:db8::1]:443/mcp',
+ 'https://[2001:db8:0:0:0:0:0:1]/mcp'].each do |url|
+  _, err, status = Open3.capture3('helm', 'template', 'urumi', 'infra/helm/urumi', '--set-string', "dashboard.publicMcpUrl=#{url}")
+  check(status.success?, "Valid public URL rejected: #{err}")
+end

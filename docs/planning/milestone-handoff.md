@@ -32,7 +32,6 @@ pnpm typecheck
 pnpm build
 docker build -f apps/gateway/Dockerfile -t urumi/gateway:day4 .
 docker build -f apps/dashboard/Dockerfile \
-  --build-arg VITE_PUBLIC_MCP_URL=http://gateway.localhost/mcp \
   -t urumi/dashboard:day4 .
 docker build -f apps/calculator-mcp/Dockerfile -t urumi/calculator-mcp:day4 .
 docker build -f apps/time-mcp/Dockerfile -t urumi/time-mcp:day4 .
@@ -77,7 +76,7 @@ have public routing; upstreams/databases must remain ClusterIP/headless internal
 Readiness requires initialized identity/registration storage and usable MongoDB,
 and permits zero healthy upstreams. Liveness checks process health.
 
-For HTTPS, rebuild the dashboard with the actual HTTPS MCP URL. Override production
+For HTTPS, set Helm `dashboard.publicMcpUrl` to the actual HTTPS MCP URL; reuse the same dashboard image. Override production
 placeholder domains, supply certificate Secrets, exact trusted proxy socket IPs and
 trusted Origin, and configure controller HTTP-to-HTTPS redirection. Verify forwarded
 headers are sanitized. `Secure` cookies require actual TLS or an explicitly trusted

@@ -33,14 +33,43 @@ function message(error: unknown) { return error instanceof Error ? error.message
 function date(value: string | null) { return value ? new Date(value).toLocaleString() : '—'; }
 
 export function ConnectionInstructions() {
-  const configured = import.meta.env.VITE_PUBLIC_MCP_URL;
-  let url: string | undefined;
-  try {
-    const parsed = new URL(configured);
-    if (['http:', 'https:'].includes(parsed.protocol) && !parsed.username && !parsed.password && !parsed.search && !parsed.hash) url = parsed.href;
-  } catch { /* An operator must configure the public URL; do not infer an internal destination. */ }
+  const [url, setUrl] = useState<string>();
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [revision, setRevision] = useState(0);
+  useEffect(() => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10_000);
+    let active = true;
+    setLoading(true); setError(''); setUrl(undefined);
+    void fetch('/runtime-config.json', {
+      credentials: 'omit', cache: 'no-store', redirect: 'error', signal: controller.signal,
+    }).catch(() => { throw new Error('Unable to load connection configuration. Try again.'); }).then(async response => {
+      if (!response.ok) throw new Error('Unable to load connection configuration. Try again.');
+      let config: unknown;
+      try { config = await response.json(); }
+      catch { throw new Error('Connection configuration is invalid. Ask the operator to set dashboard.publicMcpUrl.'); }
+      if (!record(config) || Object.keys(config).some(key => key !== 'publicMcpUrl')) {
+        throw new Error('Connection configuration is invalid. Ask the operator to set dashboard.publicMcpUrl.');
+      }
+      if (config.publicMcpUrl === '' || config.publicMcpUrl === undefined) {
+        throw new Error('The public MCP URL has not been configured. Ask the operator to set dashboard.publicMcpUrl.');
+      }
+      const value = config.publicMcpUrl;
+      try {
+        if (typeof value !== 'string' || value.length > 2048 || value !== value.trim() || !/^https?:\/\/[^\s/@?#\\]+\/mcp$/.test(value)) throw new Error();
+        const parsed = new URL(value);
+        if (!parsed.hostname || parsed.username || parsed.password || parsed.search || parsed.hash || parsed.pathname !== '/mcp') throw new Error();
+        if (active) setUrl(parsed.href);
+      } catch { throw new Error('Connection configuration is invalid. Ask the operator to set dashboard.publicMcpUrl.'); }
+    }).catch(error => {
+      if (active) setError(error instanceof Error && error.name !== 'AbortError'
+        ? error.message : 'Unable to load connection configuration. Try again.');
+    }).finally(() => { clearTimeout(timeout); if (active) setLoading(false); });
+    return () => { active = false; clearTimeout(timeout); controller.abort(); };
+  }, [revision]);
   return <section><h2>Connect an MCP client</h2>
-    {url ? <><p>Public MCP URL: <code>{url}</code></p>
+    {loading ? <p role="status">Loading connection configuration…</p> : url ? <><p>Public MCP URL: <code>{url}</code></p>
       <p>Use the MCP TypeScript SDK v2 with Streamable HTTP. Install <code>@modelcontextprotocol/client@^2.0.0</code> in a Node.js project and run:</p>
       <pre>{`import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 const client = new Client({ name: 'urumi-client', version: '1.0.0' });
@@ -53,7 +82,7 @@ try {
     arguments: { operation: 'multiply', a: 6, b: 7 } }));
 } finally { await client.close(); }`}</pre>
       <p>Replace the credential placeholder privately. Keep credentials out of source control and logs. Revocation rejects the next MCP request; your dashboard session remains active.</p></>
-      : <p>The public MCP URL has not been configured. Ask the operator to set VITE_PUBLIC_MCP_URL for the dashboard build.</p>}
+      : <><p role="alert">{error}</p><button onClick={() => setRevision(value => value + 1)}>Retry connection configuration</button></>}
   </section>;
 }
 

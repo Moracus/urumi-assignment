@@ -30,17 +30,36 @@ architecture (for example add `--platform linux/amd64` for an amd64 cluster):
 
 ```sh
 docker build -f apps/dashboard/Dockerfile \
-  --build-arg VITE_PUBLIC_MCP_URL=http://gateway.localhost/mcp \
   -t urumi/dashboard:dev .
 docker build -f apps/gateway/Dockerfile -t urumi/gateway:dev .
 kind load docker-image urumi/dashboard:dev urumi/gateway:dev --name urumi
 ```
 
-Only `VITE_PUBLIC_MCP_URL` is passed to the frontend build. It is public connection
-information, embedded in the bundle; build a new image for a different environment.
-Use `https://gateway.example.com/mcp` with real production hosts. Never pass
-credentials or database URIs as frontend build arguments. Runtime image contents
-are compiled public assets and nginx configuration, without build tools or source.
+Set `dashboard.publicMcpUrl` in Helm values to the externally reachable gateway
+URL, including the exact public port and `/mcp` path. The local overlay supplies
+`http://gateway.localhost/mcp`; the production overlay supplies the placeholder
+`https://gateway.example.com/mcp`. Override it when using different hosts or ports.
+The same built dashboard image works in both environments; no frontend rebuild is
+needed. This setting is public, unauthenticated connection information. Never put
+provider/upstream credentials, gateway keys, or database URIs in it.
+
+The chart mounts only `{ "publicMcpUrl": "..." }` at `/runtime-config.json` using
+`urumi-dashboard-config`. A checksum rolls dashboard Pods on value changes; this
+is required because the read-only file uses a subPath mount. Nginx serves this
+exact JSON path without SPA fallback and with `Cache-Control: no-store`.
+The chart rejects non-HTTP(S) schemes, embedded credentials, queries, fragments,
+wrong paths, whitespace, and invalid ports. Supported hosts are DNS names whose
+final label starts with a letter, canonical dotted-decimal IPv4, or hexadecimal
+IPv6 (including compression). An empty string deliberately leaves
+connection instructions unconfigured. The browser also validates fetched JSON,
+shows loading/missing/invalid/unavailable states, and supports retry. It never
+infers a URL from an internal upstream or from the browser origin. Configuration
+errors do not disable login, key management, or other dashboard functions.
+
+For host development, set `DASHBOARD_PUBLIC_MCP_URL` in the workspace `.env` or
+Vite process environment and restart Vite; its development middleware serves the
+same JSON shape. Do not use the removed `VITE_PUBLIC_MCP_URL` setting.
+Runtime image contents are compiled public assets and nginx configuration.
 `images.dashboard` is a legacy unused value; use `dashboard.image` for deployment.
 
 Before deploying, follow [MongoDB setup](mongodb-deployment.md) and
@@ -65,6 +84,7 @@ The checked-in local overlay explicitly uses HTTP and `NODE_ENV=development`:
 | `gateway.allowedHosts` | includes dashboard, gateway and probe Service hosts |
 
 For a non-default public port, put the exact scheme/host/port in trustedOrigins.
+Also set `dashboard.publicMcpUrl` to the exact public gateway URL.
 For custom hosts also update `gateway.allowedHosts`. Hostnames must be distinct:
 the chart rejects a dashboard host equal to the gateway or storefront host.
 
@@ -177,3 +197,29 @@ on a suitable cluster. Do not infer enforcement from successfully rendered objec
 
 The current full deployed browser/MCP/restart walkthrough and capability status are
 in [the operator handoff](../planning/milestone-handoff.md) and issue 37 evidence (historical evidence file is not included in this checkout).
+
+## Runtime configuration upgrade and rollback
+
+Build/publish the new dashboard image once and update `dashboard.image.tag` (use
+an immutable tag) alongside `dashboard.publicMcpUrl` in operator values. Run Helm
+lint/template before `helm upgrade --install` using the commands above. Future URL
+changes need only the values change and Helm upgrade; reload the browser after the
+dashboard rollout. No gateway identity or store data migration is involved. Keep
+the MCP, dashboard/API, and storefront hosts separate. Roll back the Helm release
+with `helm rollback urumi <revision> -n urumi`; when rolling back to an older image
+that used a build-time URL, restore its matching environment-specific image too.
+Never delete PVCs or recreate the cluster for this change.
+
+To reproduce the same-image runtime check (Docker plus installed Playwright Chromium):
+
+```sh
+docker build -f apps/dashboard/Dockerfile -t urumi/dashboard:runtime-check .
+node apps/dashboard/scripts/verify-runtime-image.mjs urumi/dashboard:runtime-check
+```
+
+This runs one immutable image ID with read-only mounts for local, production-like,
+missing, and invalid settings. It verifies browser instructions, API-key placeholder,
+empty browser storage, deep links, JSON caching, and API/MCP route separation.
+Its session/API responses are fixtures: it does not prove live authentication,
+Ingress, TLS, Secret references, CNI enforcement, workload readiness, or PVC health.
+Executed evidence for #45 is recorded in [runtime configuration validation](../validation/issue-45.md).

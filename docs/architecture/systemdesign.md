@@ -250,3 +250,14 @@ The dashboard's `/chat` page uses session-protected `GET/POST /api/chat`. A smal
 ## Milestone verification and integration handoff (#37)
 
 Use the [operator walkthrough](../planning/milestone-handoff.md) for ordered deployment, browser/MCP demonstration, separate gateway and MongoDB restarts, and Day 5 interfaces. The verification record (historical evidence file is not included in this checkout) separates controlled application tests from deployed-image evidence and unverified network/commerce requirements. One gateway replica remains required; [MongoDB audit storage](../guides/tool-history.md) now supplies durable execution history; writes rejected during outages can still be lost.
+
+### Public dashboard runtime configuration
+
+The static dashboard reads `/runtime-config.json`, a read-only Helm ConfigMap
+containing only `publicMcpUrl` from `dashboard.publicMcpUrl`. The same image serves
+local and production deployments; a configuration checksum triggers Pod rollout.
+Nginx disables JSON caching and SPA fallback for this path. Helm and the browser
+validate the public HTTP(S) `/mcp` URL; missing/invalid configuration has an explicit
+UI state and never falls back to an upstream address. Authentication, `/api`
+routing, the separate MCP ingress, and the storefront ingress are unchanged.
+See [operator configuration](../operations/dashboard-deployment.md).

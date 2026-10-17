@@ -151,3 +151,13 @@ Audit-write rejection emits only a fixed event and server-owned attempt ID, neve
 Each call re-resolves dashboard session eligibility and role from storage, validates the current discovered schema and generation, and enters `executeTool` for independent authorization and live registry enforcement. A provider response holding several calls cannot preserve a removed permission for its later calls. Disablement/removal and expired or invalidated sessions take effect at subsequent admission; already admitted effects may finish. Browser transcripts and model identity claims grant no authority. Malicious descriptions/results cannot bypass these backend controls. Prompt instructions remain advisory, and permitted tools still operate under shared upstream authority: member read permissions can expose shared store data to other eligible members.
 
 Fixed byte/count/time budgets stop resource growth. Tool-result overflow stops further calls while retaining the completed execution outcome; cancellation is checked again immediately before dispatch. Provider errors/timeouts/disconnects never cause automatic retries. Error feedback preserves call IDs, and known uncertain WooCommerce writes block subsequent writes in that request. These controls cannot undo a completed write or provide cross-request idempotency. An already admitted invocation or database/audit operation can outlast the admission deadline. See [limits, recovery and deterministic evidence](../guides/dashboard-chat.md).
+
+### Public runtime connection information
+
+`/runtime-config.json` is unauthenticated public data. The chart constructs it from
+only `dashboard.publicMcpUrl`; provider credentials, upstream credentials, gateway
+keys, and other environment values must never be added. Helm rejects credential
+userinfo, queries/fragments, non-HTTP(S) schemes, invalid ports, and wrong paths.
+The browser validates the fetched shape again and renders URL/code as React text.
+Missing/invalid data never causes inference of an internal upstream endpoint.
+Operators remain responsible for choosing a trusted public gateway host and TLS.
