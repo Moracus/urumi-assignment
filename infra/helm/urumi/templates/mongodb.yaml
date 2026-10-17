@@ -91,18 +91,6 @@ spec:
                   key: password
             - name: MONGODB_MEMBER
               value: "urumi-mongodb-0.urumi-mongodb.{{ .Release.Namespace }}.svc:27017"
-          lifecycle:
-            postStart:
-              exec:
-                command:
-                  - bash
-                  - -ec
-                  - |
-                    for attempt in {1..120}; do
-                      if mongosh --quiet --host 127.0.0.1 --file /scripts/init.js >/dev/null 2>&1; then exit 0; fi
-                      sleep 2
-                    done
-                    exit 1
           startupProbe:
             exec:
               command: [bash, -ec, 'mongosh --quiet --host 127.0.0.1 --file /scripts/ready.js >/dev/null 2>&1']
