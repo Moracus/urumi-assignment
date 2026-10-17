@@ -121,6 +121,8 @@ The adapter registers two product tools and three order tools with Zod input val
 
 The REST client targets `/wp-json/wc/v3`, signs requests with OAuth-style HMAC-SHA1 parameters, and uses fresh nonces and timestamps. Requests have a ten-second timeout and reject redirects. HTTP status failures and invalid JSON become WooCommerce errors represented as MCP tool results.
 
+The REST client uses Undici's request API to preserve the explicit public Host header on Node 24; native fetch overwrites that header with the internal destination. OAuth signing remains unchanged. Calendar-day order queries accept `date=today` or `YYYY-MM-DD` with an explicit IANA timezone. The adapter computes inclusive/exclusive UTC boundaries, including daylight-saving changes, and sets WooCommerce's UTC-filter flag. Existing explicit range callers retain pass-through behavior. See [date conventions](../guides/dashboard-chat.md#order-date-conventions-43) and the [manual commerce walkthrough](../operations/commerce-chat-walkthrough.md).
+
 `WC_URL` is the canonical storefront URL used to calculate the signature. When `WC_INTERNAL_URL` is set, the client rewrites only the network destination's scheme, hostname, and port after signing, and supplies the canonical `Host` header. This lets the adapter reach `urumi-wordpress` directly while preserving the expected storefront host.
 
 The site's configured canonical URL, scheme, and port must agree with the signing URL. Redirects, port mismatches, or a site forcing HTTPS while the internal hop uses HTTP can prevent successful requests; HTTPS/proxy configuration needs explicit verification when changed.

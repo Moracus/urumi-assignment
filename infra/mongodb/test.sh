@@ -20,7 +20,9 @@ if "$browser"; then
   pnpm build
 else
   pnpm --filter @urumi/gateway build
+  pnpm --filter @urumi/woocommerce-mcp build
 fi
+pnpm --filter @urumi/woocommerce-mcp test
 pnpm --filter @urumi/gateway test
 # Run after the outage tests have restored MongoDB, while this runner still owns
 # the disposable containers. The EXIT trap also handles browser/check failures.

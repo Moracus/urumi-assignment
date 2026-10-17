@@ -15,6 +15,7 @@ This document describes the current repository implementation. Deployment checks
 - Independent upstream connections, request timeouts, periodic discovery, and reconnection attempts.
 - [Durable MongoDB tool-execution history and administrator browsing](docs/guides/tool-history.md).
 - [Session-authenticated dashboard chat](docs/guides/dashboard-chat.md) with OpenAI function calling, current gateway permissions, visible call outcomes and bounded execution.
+- [Commerce chat and manual checkout walkthrough](docs/operations/commerce-chat-walkthrough.md): published products, timezone-aware orders, two-upstream prompts and operator-run COD checkout.
 - MongoDB-backed users, transaction-validated startup, database-aware health, one-time administrator CLI setup, and [secure dashboard login/logout, password replacement, and administrator reset](docs/guides/dashboard-sessions.md). See [identity setup](docs/guides/identity-setup.md) for the required local replica set and operator steps.
 - Five WooCommerce tools backed by the WooCommerce REST API, plus arithmetic and timezone tools.
 - Dockerfiles for the gateway and upstream services; Helm Deployments, ClusterIP Services, health probes, resource settings, and persistent volumes for WordPress and MariaDB.

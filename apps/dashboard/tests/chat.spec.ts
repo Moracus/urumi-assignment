@@ -64,3 +64,23 @@ test('session expiry inside the model loop shows a recoverable outcome with comp
   await page.reload();
   await expect(page.getByRole('heading', { name: 'Log in', exact: true })).toBeVisible();
 });
+
+test('commerce chat publishes explicit product fields and shows timezone orders with a second upstream', async ({ page }) => {
+  await page.getByRole('link', { name: 'Chat', exact: true }).click();
+  await page.getByLabel('Prompt', { exact: true }).fill('Publish Demo Mug at 12.50 with status=publish');
+  await page.getByRole('button', { name: 'Send prompt' }).click();
+  await expect(page.getByRole('row').filter({ hasText: 'commerce-publish' })).toContainText('woocommerce.create_product');
+  await expect(page.getByRole('row').filter({ hasText: 'commerce-publish' })).toContainText('success');
+  await expect(page.getByLabel('Final answer')).toHaveText('Demo Mug: publish, 12.50');
+
+  await page.getByLabel('Prompt', { exact: true }).fill('Orders on 2026-03-08 in America/New_York and multiply 6 by 7');
+  await page.getByRole('button', { name: 'Send prompt' }).click();
+  await expect(page.getByRole('row').filter({ hasText: 'commerce-orders' })).toContainText('woocommerce.list_orders');
+  await expect(page.getByRole('row').filter({ hasText: 'commerce-orders' })).toContainText('success');
+  await expect(page.getByRole('row').filter({ hasText: 'commerce-calc' })).toContainText('calculator.calculate');
+  await expect(page.getByRole('row').filter({ hasText: 'commerce-calc' })).toContainText('success');
+  await expect(page.getByLabel('Final answer')).toHaveText('at-midnight, last-second; America/New_York: [2026-03-08T05:00:00.000Z, 2026-03-09T04:00:00.000Z); calculator: 42');
+  for (const secret of ['fixture-consumer', 'fixture-secret', 'synthetic-provider-secret']) {
+    expect(await page.locator('body').textContent()).not.toContain(secret);
+  }
+});

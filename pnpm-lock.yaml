@@ -308,6 +308,9 @@ importers:
       fastify:
         specifier: ^5.0.0
         version: 5.12.5
+      undici:
+        specifier: ^7.30.0
+        version: 7.30.0
       zod:
         specifier: ^4.0.0
         version: 4.6.5

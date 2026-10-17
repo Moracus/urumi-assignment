@@ -18,3 +18,4 @@ this checkout and are not evidence of a newly verified deployment.
 
 - [Durable tool history and administrator browsing](guides/tool-history.md)
 - [Dashboard chat, provider configuration and execution bounds](guides/dashboard-chat.md)
+- [Commerce chat, timezone conventions and manual COD checkout](operations/commerce-chat-walkthrough.md)

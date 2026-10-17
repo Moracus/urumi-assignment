@@ -1,4 +1,4 @@
-# Dashboard chat (#41, #42)
+# Dashboard chat (#41, #42, #43)
 
 Eligible administrators and members open **Chat** (`/chat`) after dashboard login. Each prompt starts a fresh, server-owned conversation; earlier prompts and results are not submitted as browser transcripts. The dashboard displays actual tool-call IDs, public tool names, classified outcomes and the final answer. Calls appear when the request completes, including completed calls when a later provider request fails. Model text is untrusted plain text, without HTML or Markdown execution.
 
@@ -30,9 +30,23 @@ No provider or tool requests are retried automatically. Duplicate call IDs stop 
 
 - As a member: “Multiply 6 by 7 and tell me the current time in Asia/Kolkata.” This should use calculator and time tools.
 - As an administrator: “Create a product named Demo Mug priced at 12.50 with status=publish.” Inspect the storefront before repeating a failed request.
-- For orders: “Get today's orders for Asia/Kolkata, using local midnight to the next local midnight as the date range.” Supply a timezone explicitly and inspect returned boundaries; date conversion is performed by the model, not a dedicated verified date module.
+- For orders: “Get today's orders in Asia/Kolkata using date=today and timezone=Asia/Kolkata. Show the returned boundaries.” The WooCommerce adapter computes the calendar day at execution time. The model does not need to calculate UTC offsets.
+
+Follow the [operator commerce walkthrough](../operations/commerce-chat-walkthrough.md) for storefront visibility, manual COD checkout and order verification. An administrator must explicitly request publication; omitted product status still defaults to draft. Review actual calls and their outcomes before repeating a write.
+
+## Order date conventions (#43)
+
+The existing `woocommerce.list_orders` tool accepts optional `date` (`today` or `YYYY-MM-DD`) and `timezone` (an explicit IANA name, for example `America/New_York`). Supply both together and omit `after`/`before`. Invalid zones, numeric-offset zones, impossible dates and dates skipped by a timezone transition return an MCP tool error before any REST request. Calendar dates from 1900 through 9998 are supported. `today` uses the adapter's current clock in the requested zone, independently of the gateway, provider or WordPress display timezone; all hosts should have synchronized clocks. Repeated calls spanning midnight can resolve to different days. For stable pagination, reuse the resolved `date_range.date` with the same timezone on subsequent calls.
+
+The response adds `date_range: { date, timezone, start, end }`, with an inclusive UTC start and exclusive UTC end. These represent the first instant of the local date and of the following date, including skipped/repeated midnight. DST days need not have 24 hours. For example, `2026-03-08` in `America/New_York` is `[2026-03-08T05:00:00.000Z, 2026-03-09T04:00:00.000Z)`. Rare historical transitions that move backward across midnight can split a date into separate intervals (for example Casey on March 4–5, 2010). Both affected dates are rejected before REST I/O rather than returning an incorrect single range; disjoint-interval queries are unsupported.
+
+The REST request uses `dates_are_gmt=true`. WooCommerce's second-precision exclusive date query receives `after=start minus one second` and `before=end`, including orders at midnight and excluding the next day. See the [WooCommerce REST parameters](https://woocommerce.github.io/woocommerce-rest-api-docs/) and [controller date-query construction](https://github.com/woocommerce/woocommerce/blob/trunk/plugins/woocommerce/includes/rest-api/Controllers/Version3/class-wc-rest-crud-controller.php). Existing callers using only `after`/`before` retain their previous pass-through behavior, including WooCommerce's default site-timezone interpretation; no UTC flag or `date_range` is added for them. Prefer calendar-date mode for explicit timezone semantics.
+
+Status and pagination remain available with either date mode. `count` describes only the returned page, never a day's total. The default page size is 10, maximum 100; follow subsequent pages to enumerate a day. Chat execution limits still apply. This is a read operation and does not create orders.
 
 Gateway tests in `apps/gateway/src/app.test.ts` run actual provider HTTP encoding against a deterministic HTTP fixture, a running gateway, disposable replica-set MongoDB and controlled MCP upstreams. They cover role-filtered catalogs, punctuation/long-name aliases, schemas, call/result IDs, multiple upstreams, MCP tool errors, safe failures, session revocation, no write replay and session audit attribution via the administrator API. `apps/dashboard/tests/chat.spec.ts` covers calls/outcomes/answers, plain-text rendering, provider failure, expiry and unconfigured chat. Run `pnpm test:workflow` for the full automated gateway/browser workflow. These fixtures do not prove paid-provider access, storefront mutations or a deployed network policy; those require explicit operator checks after rollout.
+
+`apps/gateway/tests/commerce.test.mjs` additionally exercises the real WooCommerce tools and HTTP client against controlled REST/MCP endpoints. The fixture independently verifies OAuth against a public URL and its Host header while accepting requests at an internal loopback address. It verifies published name/price/status propagation, safe draft defaults, member write denial, calendar-day midnight filtering, legacy range compatibility, paired two-upstream results and healthy calculator execution after commerce errors/outage. The chat browser workflow uses this same real commerce adapter. Focused date tests cover DST, half-hour transitions, skipped/repeated midnight and today's rollover. Run `pnpm --filter @urumi/woocommerce-mcp build` then `pnpm --filter @urumi/woocommerce-mcp test` for date tests alone; build gateway and WooCommerce before running `node --test apps/gateway/tests/commerce.test.mjs` with a disposable `MONGODB_TEST_URI`.
 
 ## Regression evidence (#42)
 

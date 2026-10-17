@@ -1,4 +1,5 @@
 import { createHmac, randomBytes } from "node:crypto";
+import { request } from "undici";
 
 type HttpMethod = "GET" | "POST" | "PUT";
 
@@ -114,7 +115,8 @@ export class WooCommerceClient {
       this.config.consumerSecret,
     );
 
-    let response: Response;
+    let status: number;
+    let text: string;
     const requestUrl = new URL(url.toString());
 
     if (this.config.internalUrl) {
@@ -132,7 +134,9 @@ export class WooCommerceClient {
     });
 
     try {
-      response = await fetch(requestUrl, {
+      // Node fetch overrides Host. The request API preserves the public host
+      // required by WordPress while connecting to the internal destination.
+      const response = await request(requestUrl, {
         method,
 
         headers: {
@@ -144,22 +148,20 @@ export class WooCommerceClient {
 
         signal: AbortSignal.timeout(10000),
 
-        redirect: "error",
+        // request() does not follow redirects; 3xx is handled as an error below.
       });
-    } catch (error) {
+      status = response.statusCode;
+      text = await response.body.text();
+    } catch {
       throw new WooCommerceError(
         503,
         "woocommerce_unreachable",
-        error instanceof Error
-          ? `Cannot reach WooCommerce: ${error.message}`
-          : "Cannot reach WooCommerce",
+        "Cannot reach WooCommerce",
       );
     }
     console.log("[WooCommerce] Received response", {
-      status: response.status,
+      status,
     });
-
-    const text = await response.text();
 
     let result: unknown;
 
@@ -167,22 +169,22 @@ export class WooCommerceClient {
       result = text ? JSON.parse(text) : null;
     } catch {
       throw new WooCommerceError(
-        response.status,
+        status,
         "invalid_response",
         "WooCommerce returned invalid JSON",
       );
     }
 
-    if (!response.ok) {
+    if (status < 200 || status >= 300) {
       const error = result as {
         code?: string;
         message?: string;
       } | null;
 
       throw new WooCommerceError(
-        response.status,
+        status,
         error?.code ?? "woocommerce_error",
-        error?.message ?? `WooCommerce returned HTTP ${response.status}`,
+        error?.message ?? `WooCommerce returned HTTP ${status}`,
       );
     }
 

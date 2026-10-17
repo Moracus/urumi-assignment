@@ -157,8 +157,13 @@ test('member-issued key connects SDK, filters discovery, denies writes independe
     const names = (await client.listTools()).tools.map(tool => tool.name).sort();
     expect(names).toEqual(['calculator.calculate', 'time.current', 'woocommerce.get_order', 'woocommerce.list_orders', 'woocommerce.list_products']);
     expect((await client.callTool({ name: 'calculator.calculate', arguments: { operation: 'multiply', a: 6, b: 7 } })).content).toEqual([{ type: 'text', text: '42' }]);
-    expect((await client.callTool({ name: 'time.current', arguments: { timezone: 'UTC' } })).isError).not.toBe(true);
-    expect((await client.callTool({ name: 'woocommerce.list_products' })).content).toEqual([{ type: 'text', text: 'Controlled product' }]);
+    expect((await client.callTool({ name: 'time.current', arguments: { timezone: 'UTC' } })).content)
+      .toEqual([{ type: 'text', text: '2026-10-16T00:00:00Z' }]);
+    const products = await client.callTool({ name: 'woocommerce.list_products' });
+    expect(products.isError).not.toBe(true);
+    const content = products.content;
+    if (!Array.isArray(content) || content[0]?.type !== 'text') throw new Error('Expected commerce text result');
+    expect(JSON.parse(content[0].text)).toMatchObject({ products: expect.any(Array), page: 1 });
     for (const name of ['woocommerce.create_product', 'woocommerce.update_order_status']) {
       await expect(client.callTool({ name })).rejects.toBeInstanceOf(ProtocolError);
     }

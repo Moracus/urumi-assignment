@@ -4,6 +4,7 @@ import { createServer } from 'vite';
 import { createGatewayApp } from '../../gateway/dist/app.js';
 import { connectIdentityStorage } from '../../gateway/dist/identity/storage.js';
 import { initializeAdministrator } from '../../gateway/dist/identity/initial-setup.js';
+import { commerceFixture } from '../../woocommerce-mcp/test/commerce-fixture.mjs';
 
 if (!process.env.MONGODB_TEST_URI) throw new Error('MONGODB_TEST_URI must point to a disposable replica set');
 const uri = new URL(process.env.MONGODB_TEST_URI);
@@ -71,6 +72,30 @@ upstream.all('/secured/:variant', (request, reply) => {
 // Deterministic external provider boundary; production uses the fixed OpenAI endpoint.
 upstream.post('/provider/chat/completions', async (request, reply) => {
   const { messages, tools } = request.body;
+  const prompt = messages.find(message => message.role === 'user')?.content;
+  const results = messages.filter(message => message.role === 'tool');
+  const proposedCall = (id, name, args) => ({ id, type: 'function', function: { name, arguments: JSON.stringify(args) } });
+  const toolCalls = calls => ({ choices: [{ finish_reason: 'tool_calls', message: { role: 'assistant', content: null, tool_calls: calls } }] });
+  const final = content => ({ choices: [{ finish_reason: 'stop', message: { role: 'assistant', content } }] });
+  if (prompt === 'Publish Demo Mug at 12.50 with status=publish') {
+    if (results.length) {
+      const product = JSON.parse(JSON.parse(results[0].content).content[0].text).product;
+      return final(`${product.name}: ${product.status}, ${product.regular_price}`);
+    }
+    const product = tools.find(tool => tool.function.description?.startsWith('Create a new simple product')).function.name;
+    return toolCalls([proposedCall('commerce-publish', product, { name: 'Demo Mug', regular_price: '12.50', status: 'publish' })]);
+  }
+  if (prompt === 'Orders on 2026-03-08 in America/New_York and multiply 6 by 7') {
+    if (results.length) {
+      const orders = JSON.parse(JSON.parse(results.find(result => result.tool_call_id === 'commerce-orders').content).content[0].text);
+      const calculation = JSON.parse(results.find(result => result.tool_call_id === 'commerce-calc').content).content[0].text;
+      return final(`${orders.orders.map(order => order.number).join(', ')}; ${orders.date_range.timezone}: [${orders.date_range.start}, ${orders.date_range.end}); calculator: ${calculation}`);
+    }
+    const orders = tools.find(tool => tool.function.description?.startsWith('List WooCommerce orders')).function.name;
+    const calculator = tools.find(tool => tool.function.parameters.properties?.operation).function.name;
+    return toolCalls([proposedCall('commerce-orders', orders, { date: '2026-03-08', timezone: 'America/New_York' }),
+      proposedCall('commerce-calc', calculator, { operation: 'multiply', a: 6, b: 7 })]);
+  }
   if (messages.some(message => message.role === 'user' && message.content === 'provider failure')) {
     return reply.code(500).send({ error: 'private synthetic-provider-secret' });
   }
@@ -84,7 +109,7 @@ upstream.post('/provider/chat/completions', async (request, reply) => {
     return { choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: '42 and the UTC time. <img src=x onerror="window.modelExecuted=true">' } }] };
   }
   const calculator = tools.find(tool => tool.function.parameters.properties?.operation).function.name;
-  // This shared upstream fixture advertises the same clock on all three servers.
+  // This shared upstream fixture advertises the same clock on calculator and time.
   // The sorted catalog's second clock belongs to time (calculator, time, woocommerce).
   const time = tools.filter(tool => tool.function.parameters.properties?.timezone)[1].function.name;
   return { choices: [{ finish_reason: 'tool_calls', message: { role: 'assistant', content: null, tool_calls: [
@@ -96,6 +121,7 @@ upstream.post('/provider/chat/completions', async (request, reply) => {
 upstream.addHook('onClose', () => handler.close());
 upstream.addHook('onClose', () => replacementHandler.close());
 const upstreamAddress = await upstream.listen({ host: '127.0.0.1', port: 0 });
+const commerce = await commerceFixture();
 const gateway = await createGatewayApp({ mongodbUri: uri.toString(),
   chat: { apiKey: 'synthetic-provider-secret', endpoint: `${upstreamAddress}/provider/chat/completions` },
   approvedSecrets: ['browser-private-reference', 'browser-replacement-reference'].map(name => ({ namespace: 'urumi', name, key: 'token' })),
@@ -104,8 +130,8 @@ const gateway = await createGatewayApp({ mongodbUri: uri.toString(),
     if (reference.name === 'browser-replacement-reference') return 'synthetic-browser-two';
     throw new Error('Secret unavailable');
   } },
-  upstreams: ['calculator', 'time', 'woocommerce'].map(name => ({ name, url: `${upstreamAddress}/mcp/${name}`, enabled: true })),
-  destinations: { allowLoopback: true, rules: [{ origin: upstreamAddress, cidrs: ['127.0.0.1/32'] }] },
+  upstreams: [...['calculator', 'time'].map(name => ({ name, url: `${upstreamAddress}/mcp/${name}`, enabled: true })), commerce.config],
+  destinations: { allowLoopback: true, rules: [upstreamAddress, new URL(commerce.config.url).origin].map(origin => ({ origin, cidrs: ['127.0.0.1/32'] })) },
 });
 await gateway.listen({ host: '127.0.0.1', port: 3009 });
 const vite = await createServer({
@@ -139,6 +165,7 @@ async function close() {
   await vite.close();
   await gateway.close();
   await upstream.close();
+  await commerce.close();
   await storage.connection.dropDatabase();
   await storage.close();
   process.exit(0);

@@ -54,12 +54,16 @@ test('browser-created member replaces password, connects MCP, logs out independe
       .toEqual([{ type: 'text', text: '42' }]);
     expect((await client.callTool({ name: 'time.current', arguments: { timezone: 'UTC' } })).content)
       .toEqual([{ type: 'text', text: '2026-10-16T00:00:00Z' }]);
-    for (const [name, args, text] of [
-      ['woocommerce.list_products', {}, 'Controlled product'],
-      ['woocommerce.list_orders', {}, 'Controlled orders'],
-      ['woocommerce.get_order', { order_id: 42 }, 'Controlled order 42'],
+    for (const [name, args, expected] of [
+      ['woocommerce.list_products', {}, { products: expect.any(Array), page: 1 }],
+      ['woocommerce.list_orders', {}, { count: 4, page: 1, orders: expect.arrayContaining([expect.objectContaining({ number: 'at-midnight' })]) }],
+      ['woocommerce.get_order', { order_id: 42 }, { id: 42, number: '42', payment_method: 'cod' }],
     ] as const) {
-      expect((await client.callTool({ name, arguments: args })).content).toEqual([{ type: 'text', text }]);
+      const result = await client.callTool({ name, arguments: args });
+      expect(result.isError).not.toBe(true);
+      const content = result.content;
+      if (!Array.isArray(content) || content[0]?.type !== 'text') throw new Error('Expected commerce text result');
+      expect(JSON.parse(content[0].text)).toMatchObject(expected);
     }
     for (const name of ['woocommerce.create_product', 'woocommerce.update_order_status']) {
       await expect(client.callTool({ name })).rejects.toBeInstanceOf(ProtocolError);
