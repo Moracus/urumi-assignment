@@ -16,6 +16,9 @@ const maxTurns = 5;
 const maxContextBytes = 131_072;
 const maxResultBytes = 16_384;
 const maxProviderBytes = 262_144;
+class ChatStop extends Error {
+  constructor(readonly reason: string) { super("Chat stopped"); }
+}
 const messageSchema = z.object({
   role: z.literal("assistant"), content: z.string().max(32_768).nullable().optional(),
   tool_calls: z.array(z.object({ id: z.string().min(1).max(200), type: z.literal("function"),
@@ -58,18 +61,31 @@ export async function runChat(prompt: string, config: ChatConfig, dependencies: 
   const deadline = Date.now() + 90_000;
   const ids = new Set<string>();
   const writes = new Set<string>();
+  let writesBlocked = false;
+  let stage = "catalog";
   const requestId = randomUUID();
   const clean = (text: string) => dependencies.redact(text).replaceAll(config.apiKey, "[redacted]");
-  const encode = (value: unknown) => JSON.stringify(value, (_key, item: unknown) => typeof item === "string" ? clean(item) : item);
+  function sanitize(value: unknown): unknown {
+    if (typeof value === "string") return clean(value);
+    if (Array.isArray(value)) return value.map(sanitize);
+    if (value !== null && typeof value === "object") {
+      const entries = Object.entries(value).map(([key, item]) => [clean(key), sanitize(item)] as const);
+      if (new Set(entries.map(([key]) => key)).size !== entries.length) throw new ChatStop("redaction_collision");
+      return Object.fromEntries(entries);
+    }
+    return value;
+  }
+  const encode = (value: unknown) => JSON.stringify(sanitize(value));
   const stopped = () => disconnected.aborted || Date.now() >= deadline;
   try {
     for (let turn = 0; turn < maxTurns; turn++) {
-      if (stopped()) throw new Error("Chat stopped");
+      stage = "catalog";
+      if (stopped()) throw new ChatStop("deadline_or_disconnect");
       const identity = await authenticate();
       const catalog = dependencies.aggregator.listTools().filter(tool => {
         try { authorizeTool(identity, tool.name); return true; } catch { return false; }
       });
-      if (catalog.length > 128) throw new Error("Chat catalog limit");
+      if (catalog.length > 128) throw new ChatStop("catalog_limit");
       // Sorted discovery plus numeric aliases is deterministic and collision-free, including
       // names that differ only in punctuation or exceed provider name limits.
       const aliases = new Map(catalog.map((tool, index) => [`tool_${index}`, tool]));
@@ -79,13 +95,18 @@ export async function runChat(prompt: string, config: ChatConfig, dependencies: 
       const body = encode({ model, messages, store: false, max_completion_tokens: 2048,
         ...(tools.length ? { tools, tool_choice: "auto", parallel_tool_calls: false } : {}),
       });
-      if (Buffer.byteLength(body) > maxContextBytes) throw new Error("Chat context limit");
+      if (Buffer.byteLength(body) > maxContextBytes) throw new ChatStop("context_limit");
+      stage = "provider_request";
       const signal = AbortSignal.any([disconnected, AbortSignal.timeout(Math.min(20_000, Math.max(1, deadline - Date.now())))]);
       const response = await fetch(config.endpoint ?? "https://api.openai.com/v1/chat/completions", {
         method: "POST", redirect: "error", signal,
         headers: { Authorization: `Bearer ${config.apiKey}`, "Content-Type": "application/json" }, body,
       });
-      if (!response.ok || !response.body) { await response.body?.cancel(); throw new Error("Provider unavailable"); }
+      if (!response.ok || !response.body) {
+        await response.body?.cancel();
+        throw new ChatStop(response.status === 401 || response.status === 403 ? "provider_authentication" : "provider_unavailable");
+      }
+      stage = "provider_response";
       const reader = response.body.getReader();
       const chunks: Uint8Array[] = [];
       let size = 0;
@@ -94,7 +115,7 @@ export async function runChat(prompt: string, config: ChatConfig, dependencies: 
           const chunk = await reader.read();
           if (chunk.done) break;
           size += chunk.value.byteLength;
-          if (size > maxProviderBytes) throw new Error("Provider response limit");
+          if (size > maxProviderBytes) throw new ChatStop("provider_response_limit");
           chunks.push(chunk.value);
         }
       } finally { await reader.cancel(); }
@@ -102,18 +123,20 @@ export async function runChat(prompt: string, config: ChatConfig, dependencies: 
       const proposed = message.tool_calls ?? [];
       if (!proposed.length) {
         await authenticate();
-        if (stopped() || !message.content) throw new Error("Chat stopped");
+        if (stopped() || !message.content) throw new ChatStop("empty_answer_or_deadline");
         return { answer: clean(message.content), calls };
       }
       if (calls.length + proposed.length > maxCalls || proposed.some(call => ids.has(call.id))
-        || new Set(proposed.map(call => call.id)).size !== proposed.length) throw new Error("Chat call limit");
+        || new Set(proposed.map(call => call.id)).size !== proposed.length) throw new ChatStop("call_limit_or_duplicate_id");
       messages.push({ role: "assistant", content: message.content ?? null, tool_calls: proposed });
       for (const call of proposed) {
-        if (stopped() || deadline - Date.now() < 12_000) throw new Error("Chat stopped");
+        if (stopped() || deadline - Date.now() < 12_000) throw new ChatStop("deadline_or_disconnect");
+        stage = "tool_execution";
         const currentIdentity = await authenticate();
         ids.add(call.id);
         const offered = aliases.get(call.function.name);
         const toolName = offered?.name ?? null;
+        const isWrite = ["woocommerce.create_product", "woocommerce.update_order_status"].includes(toolName ?? "");
         let result: ToolExecutionResult;
         let outcome: AuditOutcome;
         let executed = false;
@@ -126,9 +149,10 @@ export async function runChat(prompt: string, config: ChatConfig, dependencies: 
           const record = z.record(z.string(), z.unknown()).parse(argumentsValue);
           const validated = await fromJsonSchema<Record<string, unknown>>(current.inputSchema)["~standard"].validate(record);
           if (validated.issues) throw new Error("Invalid arguments");
-          const isWrite = ["woocommerce.create_product", "woocommerce.update_order_status"].includes(toolName ?? "");
-          const fingerprint = JSON.stringify([toolName, record]);
-          if (isWrite && writes.has(fingerprint)) throw new Error("Repeated write");
+          const fingerprint = JSON.stringify([toolName, record], (_key, value: unknown) =>
+            value !== null && typeof value === "object" && !Array.isArray(value)
+              ? Object.fromEntries(Object.entries(value).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)) : value);
+          if (isWrite && (writesBlocked || writes.has(fingerprint))) throw new Error("Repeated or uncertain write");
           if (isWrite) writes.add(fingerprint);
           const executionIdentity = await authenticate();
           executed = true;
@@ -136,9 +160,13 @@ export async function runChat(prompt: string, config: ChatConfig, dependencies: 
             arguments: record, requestId }, dependencies.execution);
           result = response.result;
           outcome = result.isError ? "tool_error" : "success";
+          if (isWrite && result.isError) writesBlocked = true;
         } catch (error) {
           if (error instanceof DashboardAuthError) throw error;
-          if (executed) ({ result, outcome } = safeExecutionError(error));
+          if (executed) {
+            if (isWrite) writesBlocked = true;
+            ({ result, outcome } = safeExecutionError(error));
+          }
           else {
             outcome = error instanceof Error && error.name === "AuthorizationError" ? "unauthorized" : "rejected";
             result = toolError("Tool unavailable, forbidden, repeated, or arguments invalid. No tool was executed.");
@@ -158,11 +186,13 @@ export async function runChat(prompt: string, config: ChatConfig, dependencies: 
         messages.push({ role: "tool", tool_call_id: call.id, content });
       }
     }
+    throw new ChatStop("turn_limit");
   } catch (error) {
     // Provider bodies and raw exceptions may contain credentials or private destinations.
     if (error instanceof DashboardAuthError) {
       return { answer: "", calls, error: "Your session or access changed. Log in again if needed. Review completed calls before repeating any writes." };
     }
+    console.error(JSON.stringify({ event: "chat_failed", requestId, reason: error instanceof ChatStop ? error.reason : stage }));
   }
   return { answer: "", calls, error: "Chat stopped or provider unavailable. Review completed calls before submitting again; writes may already have completed." };
 }

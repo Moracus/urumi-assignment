@@ -246,6 +246,57 @@ test("chat stops at its provider turn budget and rejects duplicate IDs before ex
   assert.equal(turn, 6); assert.equal(executions, 5);
 });
 
+test("chat suppresses equivalent writes even when the provider reorders argument properties", async t => {
+  let executions = 0;
+  let uncertain = false;
+  const commerce = await controlledUpstream(t, "woocommerce", server => {
+    server.registerTool("create_product", { inputSchema: z.object({ name: z.string(), status: z.literal("publish") }) },
+      async () => { executions++; return { content: [{ type: "text", text: "Write outcome" }], isError: uncertain }; });
+  });
+  const provider = Fastify();
+  t.after(() => provider.close());
+  provider.post("/completion", async request => {
+    const body = z.object({ messages: z.array(z.record(z.string(), z.unknown())), tools: z.array(z.object({ function: z.object({ name: z.string() }) })) }).parse(request.body);
+    if (body.messages.some(message => message.role === "tool")) return { choices: [{ finish_reason: "stop", message: { role: "assistant", content: "Created once" } }] };
+    return { choices: [{ finish_reason: "tool_calls", message: { role: "assistant", content: null, tool_calls: [
+      { id: "first", type: "function", function: { name: body.tools[0].function.name, arguments: '{"name":"Mug","status":"publish"}' } },
+      { id: "reordered", type: "function", function: { name: body.tools[0].function.name, arguments: uncertain ? '{"status":"publish","name":"Another Mug"}' : '{"status":"publish","name":"Mug"}' } },
+    ] } }] };
+  });
+  const endpoint = `${await provider.listen({ host: "127.0.0.1", port: 0 })}/completion`;
+  const f = await fixture(t, { upstreams: [commerce.config], chat: { apiKey: "synthetic-provider-secret", endpoint } });
+  await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
+  const response = await f.app.inject({ method: "POST", url: "/api/chat", headers: f.headers, payload: { prompt: "Create a published Mug" } });
+  assert.equal(response.json().answer, "Created once");
+  assert.deepEqual(response.json().calls.map((call: { outcome: string }) => call.outcome), ["success", "rejected"]);
+  assert.equal(executions, 1);
+  uncertain = true;
+  const failed = await f.app.inject({ method: "POST", url: "/api/chat", headers: f.headers, payload: { prompt: "Create a published Mug" } });
+  assert.deepEqual(failed.json().calls.map((call: { outcome: string }) => call.outcome), ["tool_error", "rejected"]);
+  assert.equal(executions, 2);
+});
+
+test("chat never sends resolved upstream credentials in provider schema property names", async t => {
+  const secret = "synthetic-upstream-secret";
+  const calculator = await controlledUpstream(t, "calculator", server => {
+    server.registerTool("calculate", { description: secret, inputSchema: z.object({ [secret]: z.string().optional() }) }, async () => ({ content: [] }));
+  });
+  const provider = Fastify();
+  t.after(() => provider.close());
+  let leaked = false;
+  provider.post("/completion", async request => {
+    leaked = JSON.stringify(request.body).includes(secret);
+    return { choices: [{ finish_reason: "stop", message: { role: "assistant", content: "Safe answer" } }] };
+  });
+  const endpoint = `${await provider.listen({ host: "127.0.0.1", port: 0 })}/completion`;
+  const secretRef = { namespace: "urumi", name: "chat-test-secret", key: "token" };
+  const f = await fixture(t, { upstreams: [{ ...calculator.config, authentication: { type: "header", headerName: "X-Tool-Token", secretRef } }],
+    approvedSecrets: [secretRef], secretReader: { async read() { return secret; } }, chat: { apiKey: "synthetic-provider-secret", endpoint } });
+  const response = await f.app.inject({ method: "POST", url: "/api/chat", headers: f.headers, payload: { prompt: "Answer safely" } });
+  assert.equal(response.json().answer, "Safe answer");
+  assert.equal(leaked, false);
+});
+
 test("manual refresh replaces the catalog for a continuing MCP client without changing desired state", async t => {
   let changed = false;
   const extra = await controlledUpstream(t, "extra", server => {
