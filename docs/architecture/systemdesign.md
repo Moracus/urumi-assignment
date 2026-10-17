@@ -176,7 +176,7 @@ The default audit logger persists execution records through the existing MongoDB
 
 Audit records omit arguments, credentials, result bodies, internal URLs and stacks. Audit-write failure emits only a sanitized `audit_write_failed` event with attempt ID, preserves the already determined result/error, and never repeats upstream execution. There is no durable queue or backfill: storage outages can lose rows.
 
-These records cover calls that enter the execution boundary. Failed HTTP authentication, rejected discovery, unknown tools rejected by SDK dispatch, and schema-validation errors occurring before the callback are not guaranteed execution audit records. Eligible administrators browse `/admin/audit` through `GET /api/admin/audit`, with strict bounded pagination and descending timestamp/ID order. Safe projections and backend session/role guards protect history. Retention/backup policy and a metrics stack remain operator responsibilities.
+Records cover execution and bounded identifiable MCP tool-call rejections, including missing/invalid/revoked authentication, forbidden/unknown tools and SDK schema rejection. Rejected discovery, malformed/oversized traffic, notifications and non-tool methods do not fabricate execution records. Ingress and execution share a server-owned attempt ID for one row per attempt; unverified identities remain null. Eligible administrators browse `/admin/audit` through `GET /api/admin/audit`, with strict bounded pagination and descending timestamp/ID order. Safe projections and backend session/role guards protect history. Retention/backup policy and a metrics stack remain operator responsibilities.
 
 ## Verification and remaining gaps
 
@@ -245,7 +245,7 @@ MongoDB while tolerating all upstreams being unreachable. See
 
 ## Session-authenticated chat (#41)
 
-The dashboard's `/chat` page uses session-protected `GET/POST /api/chat`. A small OpenAI Chat Completions loop derives function definitions from the current authorized discovered catalog, validates proposed arguments and invokes only `executeTool`. Opaque numeric aliases preserve collision-free routing to actual public names. The server owns the transcript and pairs provider call IDs with tool results, including MCP `isError`. Current session eligibility and roles are resolved before each invocation; audit attribution uses the user and dashboard-session origin with no gateway key ID. Provider I/O, context, results and execution are bounded, with no automatic retries. See [configuration, protocol, limits and recovery](../guides/dashboard-chat.md). Provider credentials are server-only; Kubernetes Secret wiring and egress rollout remain a dependent slice.
+The dashboard's `/chat` page uses session-protected `GET/POST /api/chat`. A small OpenAI Chat Completions loop derives function definitions from the current authorized discovered catalog, validates proposed arguments and invokes only `executeTool`. Opaque numeric aliases preserve collision-free routing to actual public names. The server owns the transcript and pairs provider call IDs with tool results, including MCP `isError`. Current session eligibility and roles are resolved before each invocation; audit attribution uses the user and dashboard-session origin with no gateway key ID. Provider I/O, context, results and execution are bounded, with no automatic retries. See [configuration, protocol, limits and recovery](../guides/dashboard-chat.md). Provider credentials are server-only; [Helm Secret references and scoped provider egress](../operations/chat-deployment.md) are implemented and require operator site configuration/live verification.
 
 ## Milestone verification and integration handoff (#37)
 
@@ -261,3 +261,36 @@ validate the public HTTP(S) `/mcp` URL; missing/invalid configuration has an exp
 UI state and never falls back to an upstream address. Authentication, `/api`
 routing, the separate MCP ingress, and the storefront ingress are unchanged.
 See [operator configuration](../operations/dashboard-deployment.md).
+
+## End-to-end trust and provider messages (#46)
+
+The browser sends only a prompt using its dashboard cookie and session-bound CSRF.
+The server owns the transcript, reauthenticates, filters current discovered tools by
+role and sends their descriptions/schemas as OpenAI function definitions with
+collision-free numeric aliases. Provider assistant `tool_calls` carry IDs, aliases
+and JSON argument strings; the gateway maps only offered aliases, validates the
+current schema/generation, reauthenticates again and calls `executeTool`. Each
+result or safe error is paired with its original `tool_call_id` in a `role=tool`
+message. Later turns receive a fresh permitted catalog. A final answer is model
+text, not proof of tool execution; visible call outcomes and audits supply evidence.
+
+Dashboard sessions have null key IDs. External MCP clients supply only the public
+gateway URL and their own revocable API key; the gateway resolves user/role/key
+server-side on every request. Neither dashboard cookies nor incoming gateway
+bearer tokens are forwarded to upstreams or the provider. The provider receives
+its own configured key; upstreams receive only their independently approved
+credentials. Tool authorization, actual-catalog resolution and registry barriers
+remain gateway responsibilities; model aliases and tool-list filtering grant no
+authority by themselves. The two-user fixture and in-flight withdrawal checks
+are described in the [workflow guide](../guides/browser-to-mcp-workflow.md).
+
+The upstream WooCommerce credential represents shared store authority. Gateway
+members retain the existing read allowlist and can read shared store/customer
+information, including data associated with other members. There is no per-member
+store ownership filter. Descriptions, schemas, results and model text are untrusted;
+they can contain prompt injection or hostile claims. Plain-text rendering and
+backend enforcement constrain execution, but permitted result data still reaches
+the configured provider. Operators control who may use chat and the upstreams.
+The [threat model](threat-model.md#consolidated-walkthrough-threats-46) records these
+remaining risks. Live evidence and pending checks are kept in the
+[acceptance handoff](../operations/acceptance-handoff.md).

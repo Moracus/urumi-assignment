@@ -23,22 +23,28 @@ const { toNodeHandler } = requireGateway('@modelcontextprotocol/node');
 const { createMcpHandler, McpServer } = requireGateway('@modelcontextprotocol/server');
 const { z } = requireGateway('zod/v4');
 const upstream = createMcpFastifyApp({ host: '127.0.0.1' });
-const handler = createMcpHandler(() => {
-  const server = new McpServer({ name: 'browser-controlled', version: '1' });
-  server.registerTool('calculate', { description: '<img src=x onerror="window.upstreamExecuted=true">', inputSchema: z.object({ operation: z.literal('multiply'), a: z.number(), b: z.number() }) },
-    async ({ a, b }) => ({ content: [{ type: 'text', text: String(a * b) }] }));
-  server.registerTool('current', { inputSchema: z.object({ timezone: z.string() }) },
-    async () => ({ content: [{ type: 'text', text: '2026-10-16T00:00:00Z' }] }));
-  server.registerTool('list_products', {}, async () => ({ content: [{ type: 'text', text: 'Controlled product' }] }));
-  server.registerTool('list_orders', {}, async () => ({ content: [{ type: 'text', text: 'Controlled orders' }] }));
-  server.registerTool('get_order', { inputSchema: z.object({ order_id: z.number().int().positive() }) },
-    async ({ order_id }) => ({ content: [{ type: 'text', text: `Controlled order ${order_id}` }] }));
-  for (const name of ['create_product', 'update_order_status']) {
-    server.registerTool(name, {}, async () => ({ content: [{ type: 'text', text: 'WRITE WAS INVOKED' }] }));
-  }
-  return server;
-});
+function controlledHandler(namespace) {
+  return createMcpHandler(() => {
+    const server = new McpServer({ name: 'browser-controlled', version: '1' });
+    server.registerTool('calculate', { description: `${namespace === 'calculator' ? 'Default calculator fixture. ' : ''}<img src=x onerror="window.upstreamExecuted=true">`, inputSchema: z.object({ operation: z.literal('multiply'), a: z.number(), b: z.number() }) },
+      async ({ a, b }) => ({ content: [{ type: 'text', text: String(a * b) }] }));
+    server.registerTool('current', { description: namespace === 'time' ? 'Default time fixture clock' : 'Shared fixture clock', inputSchema: z.object({ timezone: z.string() }) },
+      async () => ({ content: [{ type: 'text', text: '2026-10-16T00:00:00Z' }] }));
+    server.registerTool('list_products', {}, async () => ({ content: [{ type: 'text', text: 'Controlled product' }] }));
+    server.registerTool('list_orders', {}, async () => ({ content: [{ type: 'text', text: 'Controlled orders' }] }));
+    server.registerTool('get_order', { inputSchema: z.object({ order_id: z.number().int().positive() }) },
+      async ({ order_id }) => ({ content: [{ type: 'text', text: `Controlled order ${order_id}` }] }));
+    for (const name of ['create_product', 'update_order_status']) {
+      server.registerTool(name, {}, async () => ({ content: [{ type: 'text', text: 'WRITE WAS INVOKED' }] }));
+    }
+    return server;
+  });
+}
+const handler = controlledHandler('shared');
+const calculatorHandler = controlledHandler('calculator');
+const timeHandler = controlledHandler('time');
 const nodeHandler = toNodeHandler(handler);
+const defaultNodeHandlers = { calculator: toNodeHandler(calculatorHandler), time: toNodeHandler(timeHandler) };
 const replacementHandler = createMcpHandler(() => {
   const server = new McpServer({ name: 'replacement-controlled', version: '1' });
   server.registerTool('current', { description: 'Replacement catalog', inputSchema: z.object({ timezone: z.literal('UTC') }) },
@@ -61,7 +67,8 @@ upstream.all('/controlled/:namespace', (request, reply) => {
 });
 upstream.all('/offline', async (_request, reply) => reply.code(503).send({ error: 'private upstream diagnostic' }));
 upstream.all('/offline/:namespace', async (_request, reply) => reply.code(503).send({ error: 'private upstream diagnostic' }));
-upstream.all('/mcp/:namespace', (request, reply) => nodeHandler(request.raw, reply.raw, request.body));
+upstream.all('/mcp/:namespace', (request, reply) =>
+  (defaultNodeHandlers[request.params.namespace] ?? nodeHandler)(request.raw, reply.raw, request.body));
 upstream.all('/secured/:variant', (request, reply) => {
   const replacement = request.params.variant === 'replacement';
   const authorized = replacement ? request.headers['x-upstream-token'] === 'synthetic-browser-two'
@@ -77,6 +84,19 @@ upstream.post('/provider/chat/completions', async (request, reply) => {
   const proposedCall = (id, name, args) => ({ id, type: 'function', function: { name, arguments: JSON.stringify(args) } });
   const toolCalls = calls => ({ choices: [{ finish_reason: 'tool_calls', message: { role: 'assistant', content: null, tool_calls: calls } }] });
   const final = content => ({ choices: [{ finish_reason: 'stop', message: { role: 'assistant', content } }] });
+  if (prompt === 'Acceptance: multiply 6 by 7 and get UTC time') {
+    if (results.length) {
+      if (results.length !== 2 || results[0].tool_call_id !== 'acceptance-calc' || results[1].tool_call_id !== 'acceptance-clock') {
+        return reply.code(400).send({ error: 'Unpaired acceptance results' });
+      }
+      const values = results.map(result => JSON.parse(result.content).content[0].text);
+      return final(`Acceptance: ${values[0]}; ${values[1]}`);
+    }
+    const calculator = tools.find(tool => tool.function.description?.startsWith('Default calculator fixture.')).function.name;
+    const time = tools.find(tool => tool.function.description === 'Default time fixture clock').function.name;
+    return toolCalls([proposedCall('acceptance-calc', calculator, { operation: 'multiply', a: 6, b: 7 }),
+      proposedCall('acceptance-clock', time, { timezone: 'UTC' })]);
+  }
   if (prompt === 'Publish Demo Mug at 12.50 with status=publish') {
     if (results.length) {
       const product = JSON.parse(JSON.parse(results[0].content).content[0].text).product;
@@ -92,7 +112,7 @@ upstream.post('/provider/chat/completions', async (request, reply) => {
       return final(`${orders.orders.map(order => order.number).join(', ')}; ${orders.date_range.timezone}: [${orders.date_range.start}, ${orders.date_range.end}); calculator: ${calculation}`);
     }
     const orders = tools.find(tool => tool.function.description?.startsWith('List WooCommerce orders')).function.name;
-    const calculator = tools.find(tool => tool.function.parameters.properties?.operation).function.name;
+    const calculator = tools.find(tool => tool.function.description?.startsWith('Default calculator fixture.')).function.name;
     return toolCalls([proposedCall('commerce-orders', orders, { date: '2026-03-08', timezone: 'America/New_York' }),
       proposedCall('commerce-calc', calculator, { operation: 'multiply', a: 6, b: 7 })]);
   }
@@ -108,10 +128,8 @@ upstream.post('/provider/chat/completions', async (request, reply) => {
     }
     return { choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: '42 and the UTC time. <img src=x onerror="window.modelExecuted=true">' } }] };
   }
-  const calculator = tools.find(tool => tool.function.parameters.properties?.operation).function.name;
-  // This shared upstream fixture advertises the same clock on calculator and time.
-  // The sorted catalog's second clock belongs to time (calculator, time, woocommerce).
-  const time = tools.filter(tool => tool.function.parameters.properties?.timezone)[1].function.name;
+  const calculator = tools.find(tool => tool.function.description?.startsWith('Default calculator fixture.')).function.name;
+  const time = tools.find(tool => tool.function.description === 'Default time fixture clock').function.name;
   return { choices: [{ finish_reason: 'tool_calls', message: { role: 'assistant', content: null, tool_calls: [
     { id: 'browser-calc', type: 'function', function: { name: calculator, arguments: JSON.stringify({ operation: 'multiply', a: 6, b: 7 }) } },
     { id: 'browser-clock', type: 'function', function: { name: time, arguments: JSON.stringify({ timezone: 'UTC' }) } },
@@ -119,6 +137,8 @@ upstream.post('/provider/chat/completions', async (request, reply) => {
   ] } }] };
 });
 upstream.addHook('onClose', () => handler.close());
+upstream.addHook('onClose', () => calculatorHandler.close());
+upstream.addHook('onClose', () => timeHandler.close());
 upstream.addHook('onClose', () => replacementHandler.close());
 const upstreamAddress = await upstream.listen({ host: '127.0.0.1', port: 0 });
 const commerce = await commerceFixture();

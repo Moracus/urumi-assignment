@@ -44,7 +44,10 @@ async function fixture(t, respond) {
     return server;
   });
   const nodeHandler = toNodeHandler(handler);
-  calculator.all('/mcp', (request, reply) => nodeHandler(request.raw, reply.raw, request.body));
+  let calculatorOffline = false;
+  calculator.all('/mcp', (request, reply) => calculatorOffline
+    ? reply.code(503).send({ error: 'private synthetic-provider-secret' })
+    : nodeHandler(request.raw, reply.raw, request.body));
   t.after(async () => { await calculator.close(); await handler.close(); });
   const calculatorAddress = await calculator.listen({ host: '127.0.0.1', port: 0 });
   const provider = Fastify();
@@ -66,6 +69,7 @@ async function fixture(t, respond) {
   }
   const headers = await login('admin@example.com');
   return { commerce, gateway, headers, address, login,
+    setCalculatorOffline(value) { calculatorOffline = value; },
     async chat(prompt, session = headers) {
       const response = await gateway.inject({ method: 'POST', url: '/api/chat', headers: session, payload: { prompt } });
       assert.equal(response.statusCode, 200, response.body);
@@ -229,4 +233,105 @@ test('commerce chat preserves existing explicit range, status and pagination con
   assert.equal(query.per_page, '1');
   assert.equal(query.page, '2');
   assert.deepEqual(f.commerce.errors, []);
+});
+
+test('server withdrawal blocks stale MCP and provider calls while healthy commerce remains available', async t => {
+  for (const action of ['disable', 'remove']) {
+    await t.test(action, async t => {
+      let f;
+      f = await fixture(t, async body => {
+        const results = body.messages.filter(message => message.role === 'tool');
+        if (results.length) {
+          assert.deepEqual(results.map(result => result.tool_call_id), ['withdrawn', 'healthy']);
+          assert.equal(JSON.parse(results[0].content).isError, true);
+          assert.equal(resultData(results[1]).orders.length, 4);
+          assert.ok(!body.tools.some(tool => tool.function.description === 'Multiply two numbers'), 'fresh provider discovery withdraws the server');
+          return answer('Calculator withdrawn; commerce still works.');
+        }
+        const calculator = body.tools.find(tool => tool.function.description === 'Multiply two numbers').function.name;
+        const orders = body.tools.find(tool => tool.function.description.startsWith('List WooCommerce orders')).function.name;
+        // Change configuration after the provider receives its catalog, before it
+        // returns proposed calls. No registry internals or browser transcript involved.
+        const response = await f.gateway.inject({ method: action === 'disable' ? 'POST' : 'DELETE',
+          url: `/api/admin/servers/calculator${action === 'disable' ? '/disable' : ''}`, headers: f.headers });
+        assert.equal(response.statusCode, action === 'disable' ? 200 : 204);
+        return calls([['withdrawn', calculator, { a: 6, b: 7 }], ['healthy', orders, {}]]);
+      });
+      const member = await f.login('member@example.com');
+      const issued = await f.gateway.inject({ method: 'POST', url: '/api/keys', headers: member, payload: {} });
+      assert.equal(issued.statusCode, 201);
+      const client = new Client({ name: 'withdrawal-acceptance', version: '1' });
+      t.after(() => client.close());
+      await client.connect(new StreamableHTTPClientTransport(new URL(`${f.address}/mcp`), {
+        requestInit: { headers: { authorization: `Bearer ${issued.json().rawKey}` } },
+      }));
+      assert.ok((await client.listTools()).tools.some(tool => tool.name === 'calculator.calculate'));
+      const result = await f.chat('Calculate and get orders while the server is withdrawn');
+      assert.deepEqual(result.calls.map(call => [call.toolName, call.outcome]), [
+        ['calculator.calculate', 'rejected'], ['woocommerce.list_orders', 'success'],
+      ]);
+      assert.ok(!(await client.listTools(undefined, { cacheMode: 'bypass' })).tools.some(tool => tool.name === 'calculator.calculate'));
+      await assert.rejects(client.callTool({ name: 'calculator.calculate', arguments: { a: 6, b: 7 } }), { name: 'ProtocolError' });
+      assert.notEqual((await client.callTool({ name: 'woocommerce.list_orders', arguments: {} })).isError, true);
+      const rows = (await f.gateway.inject({ url: '/api/admin/audit', headers: f.headers })).json().records;
+      assert.ok(rows.some(row => row.toolName === 'calculator.calculate' && row.authenticationOrigin === 'dashboard_session' && row.outcome === 'rejected'));
+      assert.ok(rows.some(row => row.toolName === 'calculator.calculate' && row.authenticationOrigin === 'gateway_api_key' && row.outcome === 'not_found'));
+      if (action === 'disable') {
+        assert.equal((await f.gateway.inject({ method: 'POST', url: '/api/admin/servers/calculator/enable', headers: f.headers })).statusCode, 200);
+        assert.ok((await client.listTools(undefined, { cacheMode: 'bypass' })).tools.some(tool => tool.name === 'calculator.calculate'));
+        assert.deepEqual((await client.callTool({ name: 'calculator.calculate', arguments: { a: 6, b: 7 } })).content, [{ type: 'text', text: '42' }]);
+      } else assert.equal((await f.gateway.inject({ url: '/api/admin/servers/calculator', headers: f.headers })).statusCode, 404);
+      const serialized = JSON.stringify({ result, rows });
+      for (const secret of [issued.json().rawKey, 'synthetic-provider-secret', 'fixture-consumer', 'fixture-secret']) assert.ok(!serialized.includes(secret));
+      assert.deepEqual(f.commerce.errors, []);
+    });
+  }
+});
+
+
+test('chat detects a transport outage within bounds, isolates healthy tools and recovers for the continuing MCP client', async t => {
+  let offline = true;
+  let f;
+  f = await fixture(t, body => {
+    const results = body.messages.filter(message => message.role === 'tool');
+    if (results.length) {
+      assert.deepEqual(results.map(result => result.tool_call_id), ['calculator-call', 'orders-call']);
+      assert.equal(JSON.parse(results[0].content).isError === true, offline);
+      assert.equal(resultData(results[1]).orders.length, 4);
+      assert.equal(body.tools.some(tool => tool.function.description === 'Multiply two numbers'), !offline);
+      return answer(offline ? 'Calculator unavailable; orders succeeded.' : 'Calculator and orders succeeded.');
+    }
+    const calculator = body.tools.find(tool => tool.function.description === 'Multiply two numbers').function.name;
+    const orders = body.tools.find(tool => tool.function.description.startsWith('List WooCommerce orders')).function.name;
+    f.setCalculatorOffline(offline);
+    return calls([['calculator-call', calculator, { a: 6, b: 7 }], ['orders-call', orders, {}]]);
+  });
+  const issued = await f.gateway.inject({ method: 'POST', url: '/api/keys', headers: f.headers, payload: {} });
+  const client = new Client({ name: 'outage-acceptance', version: '1' });
+  t.after(() => client.close());
+  await client.connect(new StreamableHTTPClientTransport(new URL(`${f.address}/mcp`), {
+    requestInit: { headers: { authorization: `Bearer ${issued.json().rawKey}` } },
+  }));
+  await client.listTools();
+  const started = Date.now();
+  const failed = await f.chat('Calculate and list orders during outage');
+  assert.ok(Date.now() - started < 15_000, 'immediate transport failure must remain bounded');
+  assert.deepEqual(failed.calls.map(call => call.outcome), ['upstream_error', 'success']);
+  const status = (await f.gateway.inject({ url: '/api/admin/servers/calculator', headers: f.headers })).json().server;
+  assert.equal(status.status, 'unreachable');
+  assert.equal(status.lastError, 'Upstream unavailable');
+  assert.ok(!(await client.listTools(undefined, { cacheMode: 'bypass' })).tools.some(tool => tool.name === 'calculator.calculate'));
+  await assert.rejects(client.callTool({ name: 'calculator.calculate', arguments: { a: 6, b: 7 } }), { name: 'ProtocolError' });
+  assert.notEqual((await client.callTool({ name: 'woocommerce.list_orders', arguments: {} })).isError, true);
+  assert.equal((await f.gateway.inject({ url: '/health/ready' })).statusCode, 200);
+  offline = false;
+  f.setCalculatorOffline(false);
+  const refreshed = await f.gateway.inject({ method: 'POST', url: '/api/admin/servers/calculator/refresh', headers: f.headers });
+  assert.equal(refreshed.json().server.status, 'connected');
+  assert.deepEqual((await client.callTool({ name: 'calculator.calculate', arguments: { a: 6, b: 7 } })).content, [{ type: 'text', text: '42' }]);
+  assert.deepEqual((await f.chat('Calculate and list orders after recovery')).calls.map(call => call.outcome), ['success', 'success']);
+  const records = (await f.gateway.inject({ url: '/api/admin/audit', headers: f.headers })).json().records;
+  assert.ok(records.some(row => row.toolName === 'calculator.calculate' && row.outcome === 'upstream_error' && row.authenticationOrigin === 'dashboard_session'));
+  const serialized = JSON.stringify({ failed, status, records });
+  for (const secret of [issued.json().rawKey, 'synthetic-provider-secret', 'fixture-consumer', 'fixture-secret']) assert.ok(!serialized.includes(secret));
 });

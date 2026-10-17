@@ -143,3 +143,22 @@ browser storage or management responses beyond one-time gateway-key issuance.
 Capability-level Day 4 status and exact executed results for this issue are in
 the validation record (historical evidence file is not included in this checkout). A full milestone verification
 still requires the separately identified live deployment and commerce checks.
+
+## Completed two-user workflow (#46)
+
+The primary journey now starts with administrator A making a two-upstream chat
+request through a real provider HTTP fixture and verifying session-origin audit
+rows. Distinct member B is created through the browser, replaces their password,
+uses only the public gateway URL and a personal key with a real MCP SDK client,
+calls two upstreams and commerce reads, and loses access on the continuing client
+after revocation. Administrator history distinguishes A’s null-key dashboard
+session from B’s actual bearer-key attribution. Backend member audit denial and
+credential non-disclosure are asserted. The gateway commerce suite also withdraws
+a server while its provider response holds an old catalog, checks fresh provider
+and MCP discovery and stale execution denial, and retains healthy commerce access.
+Existing timeout/periodic recovery, audit classifications, identity and security
+regressions remain part of the full workflow runner.
+
+Use the [ordered live checklist](../operations/acceptance-handoff.md) and
+[k3s setup/upgrade/rollback](../setup/k3s.md). The [issue #46 evidence record](../validation/issue-46.md)
+separates fixture results from remaining live provider, store, CNI and failure checks.

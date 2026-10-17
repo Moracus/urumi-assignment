@@ -14,9 +14,24 @@ test.beforeEach(async ({ request }) => {
   expect((await request.post('/api/__test/reset-login-budget')).status()).toBe(204);
 });
 
-test('browser-created member replaces password, connects MCP, logs out independently and revokes the continuing client', async ({ page, playwright }) => {
+test('two users chat and connect MCP with distinct audit attribution, onboarding and immediate key revocation', async ({ page, playwright }) => {
   await page.goto('/login');
   await login(page, 'admin@example.com', 'browser administrator password');
+  await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
+  // User A acts through a dashboard session, before user B exists.
+  const administrator = await (await page.request.get('/api/auth/me')).json();
+  await page.getByRole('link', { name: 'Chat', exact: true }).click();
+  await page.getByLabel('Prompt', { exact: true }).fill('Acceptance: multiply 6 by 7 and get UTC time');
+  const chatStarted = new Date().toISOString();
+  await page.getByRole('button', { name: 'Send prompt' }).click();
+  await expect(page.getByLabel('Final answer')).toHaveText('Acceptance: 42; 2026-10-16T00:00:00Z');
+  await expect(page.getByRole('table').getByRole('row')).toHaveCount(3);
+  const sessionRows = await (await page.request.get(`/api/admin/audit?userId=${administrator.user.id}&from=${encodeURIComponent(chatStarted)}&limit=100`)).json();
+  expect(sessionRows.records).toHaveLength(2);
+  expect(sessionRows.records).toEqual(expect.arrayContaining([
+    expect.objectContaining({ userId: administrator.user.id, toolName: 'calculator.calculate', authenticationOrigin: 'dashboard_session', keyId: null, outcome: 'success' }),
+    expect.objectContaining({ userId: administrator.user.id, toolName: 'time.current', authenticationOrigin: 'dashboard_session', keyId: null, outcome: 'success' }),
+  ]));
   await page.getByRole('link', { name: 'Users', exact: true }).click();
   const email = `workflow-${Date.now()}@example.com`;
   await page.getByLabel('Member email').fill(email);
@@ -40,6 +55,8 @@ test('browser-created member replaces password, connects MCP, logs out independe
   const input = page.getByLabel('New API key', { exact: true });
   await expect(input).toBeVisible();
   const rawKey = await input.inputValue();
+  const { keys } = await (await page.request.get('/api/keys')).json();
+  const keyId = keys.find((key: { name: string }) => key.name === 'Workflow MCP client').id;
   const client = new Client({ name: 'browser-workflow', version: '1' });
   const bearer = await playwright.request.newContext({ baseURL: origin,
     extraHTTPHeaders: { Authorization: `Bearer ${rawKey}` } });
@@ -80,6 +97,7 @@ test('browser-created member replaces password, connects MCP, logs out independe
     expect(smoke.stderr).not.toContain(rawKey);
     expect((await page.request.get('/api/admin/users')).status()).toBe(403);
     expect((await page.request.get('/api/admin/servers')).status()).toBe(403);
+    expect((await page.request.get('/api/admin/audit')).status()).toBe(403);
     const me = await (await page.request.get('/api/auth/me')).json();
     const rejectedHeaders: Record<string, string>[] = [
       { Origin: origin },
@@ -103,10 +121,34 @@ test('browser-created member replaces password, connects MCP, logs out independe
     await page.getByRole('button', { name: 'Revoke Workflow MCP client', exact: true }).click();
     await page.getByRole('button', { name: 'Confirm revoke', exact: true }).click();
     await expect(page.getByRole('row').filter({ hasText: 'Workflow MCP client' })).toContainText('Revoked');
+    await expect(client.callTool({ name: 'calculator.calculate', arguments: { operation: 'multiply', a: 6, b: 7 } })).rejects.toMatchObject({
+      data: expect.objectContaining({ status: 401 }),
+    });
     await expect(client.listTools(undefined, { cacheMode: 'bypass' })).rejects.toMatchObject({
       data: expect.objectContaining({ status: 401 }),
     });
     expect((await page.request.get('/api/auth/me')).status()).toBe(200);
+    const member = await (await page.request.get('/api/auth/me')).json();
+    expect(member.user.id).not.toBe(administrator.user.id);
+    await page.getByRole('button', { name: 'Log out', exact: true }).click();
+    await login(page, 'admin@example.com', 'browser administrator password');
+    await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
+    const history = await (await page.request.get(`/api/admin/audit?userId=${member.user.id}&limit=100`)).json();
+    for (const name of ['calculator.calculate', 'time.current']) {
+      expect(history.records).toEqual(expect.arrayContaining([
+        expect.objectContaining({ userId: member.user.id, userEmail: email, toolName: name,
+          authenticationOrigin: 'gateway_api_key', keyId, outcome: 'success' }),
+      ]));
+    }
+    const rejected = await page.request.get('/api/admin/audit?outcome=unauthenticated&limit=100');
+    expect((await rejected.json()).records).toEqual(expect.arrayContaining([
+      expect.objectContaining({ toolName: 'calculator.calculate', userId: null, keyId: null, authenticationOrigin: null }),
+    ]));
+    const serialized = JSON.stringify(history);
+    for (const credential of [rawKey, 'synthetic-provider-secret', 'fixture-consumer', 'fixture-secret']) {
+      expect(serialized).not.toContain(credential);
+      expect(await page.content()).not.toContain(credential);
+    }
     expect(await page.evaluate(() => [Object.keys(localStorage), Object.keys(sessionStorage)])).toEqual([[], []]);
   } finally { await client.close(); await bearer.dispose(); }
 });

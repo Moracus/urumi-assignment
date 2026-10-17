@@ -20,3 +20,7 @@ this checkout and are not evidence of a newly verified deployment.
 - [Chat deployment, Secret provisioning and scoped provider egress](operations/chat-deployment.md)
 - [Dashboard chat, provider configuration and execution bounds](guides/dashboard-chat.md)
 - [Commerce chat, timezone conventions and manual COD checkout](operations/commerce-chat-walkthrough.md)
+
+- [Production-like k3s setup, upgrades and rollback](setup/k3s.md)
+- [Two-user live acceptance checklist](operations/acceptance-handoff.md)
+- [Issue #46 executed checks and outstanding operator work](validation/issue-46.md)

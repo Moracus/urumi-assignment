@@ -4,7 +4,7 @@ A TypeScript MCP gateway that exposes WooCommerce, calculator, and time tools th
 
 Repository: [Moracus/urumi-assignment](https://github.com/Moracus/urumi-assignment).
 
-This document describes the current repository implementation. Deployment checks below are instructions, not a claim that a particular cluster has passed them. Use the [milestone operator walkthrough and Day 5 handoff](docs/planning/milestone-handoff.md) and current verification record (historical evidence file is not included in this checkout) to distinguish executed checks from outstanding prerequisites.
+This document describes the current repository implementation. Deployment checks below are instructions, not a claim that a particular cluster has passed them. Use the [milestone operator walkthrough and Day 5 handoff](docs/planning/milestone-handoff.md) and [current acceptance evidence](docs/validation/issue-46.md) to distinguish executed checks from outstanding prerequisites.
 
 ## Implemented capabilities
 
@@ -77,6 +77,8 @@ docs/architecture/systemdesign.md   Architecture and implementation limitations
 
 ## Local setup and configuration
 
+The [production-like k3s guide](docs/setup/k3s.md) covers VPS configuration, image distribution, upgrade and rollback. Use the [two-user live acceptance checklist](docs/operations/acceptance-handoff.md) for the complete chat, external MCP, checkout and failure/recovery demonstration.
+
 Start with the [complete workspace setup guide](docs/setup/local-development.md).
 It covers host development with the root `.env`, Docker-backed MongoDB,
 and the full Docker → Kind → Kubernetes deployment including the dashboard,
@@ -139,7 +141,7 @@ Verify network isolation using ordinary test Pods: unrelated Pods should be deni
 
 - MCP uses individually revocable hashed API keys with per-request eligibility/role lookup. Users, one-time CLI setup, independent eight-hour dashboard sessions, shared login throttling, and key metadata are persisted. Administrator key management is available through session-protected APIs; role changes preserve an active administrator; account disabling permanently invalidates sessions and keys. [Operator recovery](docs/guides/identity-setup.md#operator-recovery-13) restores an existing administrator through a separate database-authorized CLI and permanently invalidates their credentials.
 - [Desired upstream registrations](docs/guides/upstream-registrations.md) persist in MongoDB with transactional one-time default migration, administrator inspection APIs, live unauthenticated registration, and durable disable/enable/remove controls. Connections and discovery remain in memory; authenticated upstreams resolve approved pre-provisioned Kubernetes Secret references in backend memory. See [credential configuration and rotation](docs/operations/upstream-credentials.md). Administrators can manually refresh enabled servers and recover connections through the [refresh API](docs/guides/upstream-registrations.md#refresh-tools-and-recover-connections-21). Run one gateway replica.
-- [Audits are durable MongoDB execution records](docs/guides/tool-history.md), with an administrator API and dashboard. No durable queue or lossless outage guarantee exists. Authentication and SDK rejections before execution are outside this slice.
+- [Audits are durable MongoDB execution records](docs/guides/tool-history.md), with an administrator API and dashboard. No durable queue or lossless outage guarantee exists. Identifiable MCP authentication/SDK tool-call rejections are recorded with safe attribution; malformed traffic and non-tool methods are outside the bounded audit contract.
 - NetworkPolicies preserve workload ingress isolation and restrict gateway egress. Supply explicit MongoDB/API site approvals and an enforcing CNI; defaults fail closed for those destinations. See [egress configuration and live verification](docs/operations/gateway-egress.md). Controller namespace and workload-label selectors require trusted namespace administration.
 - Upstream bearer/custom-header authentication uses approved Kubernetes Secret references; mutual TLS is not implemented. Cluster networking and destination policy still apply.
 - TLS requires operator-provided certificates and exact ingress proxy trust; no broader request rate limiting beyond dashboard login or automatic retry of failed tool calls. Failed writes can have uncertain outcomes and need inspection before retrying.

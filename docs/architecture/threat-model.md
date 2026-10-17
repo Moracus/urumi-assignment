@@ -115,7 +115,7 @@ the separate gateway origin retains `/mcp` bearer authentication. Cookie credent
 do not authenticate MCP. Same-origin routing introduces no CORS allowance and
 preserves backend roles, trusted Origin, and session-bound CSRF. SPA fallback
 excludes `/api`, `/mcp`, and missing assets to avoid masking route mistakes.
-Only the public MCP URL enters frontend build configuration. The static container
+Only the public MCP URL enters frontend runtime configuration. The static container
 has no Secrets, API token, or outbound network requirement and runs unprivileged
 with a read-only root filesystem. The chart preserves existing gateway egress,
 Secret RBAC, and persistent volumes.
@@ -144,7 +144,7 @@ Chat reuses the dashboard's eligible-session, HTTPS, trusted-Origin and CSRF bou
 
 [Tool history](../guides/tool-history.md) now persists through the existing MongoDB connection. Administrator reads reuse current dashboard session eligibility and backend role guards; cookies remain distinct from bearer credentials. Safe storage/read projections omit payloads, credentials, internal URLs and stacks. Snapshot emails and server display labels are retained intentionally for historical attribution after changes/removal; they render as React text. Dashboard-origin executions have null gateway key IDs. Unresolved tools do not acquire guessed upstream identities.
 
-Audit-write rejection emits only a fixed event and server-owned attempt ID, never raw database diagnostics. It cannot replace a determined tool result or replay a side effect. There is no durable queue: lost audit rows during storage failure are an explicit limitation. History has no TTL or automatic retention and shares identity MongoDB access/backup controls. This slice excludes SDK/unauthenticated rejections occurring before execution. No ingress or network-policy changes are needed. The earlier ticket sections describe historical implementation states; durable execution history is implemented by this slice.
+Audit-write rejection emits only a fixed event and server-owned attempt ID, never raw database diagnostics. It cannot replace a determined tool result or replay a side effect. There is no durable queue: lost audit rows during storage failure are an explicit limitation. History has no TTL or automatic retention and shares identity MongoDB access/backup controls. The completed bounded ingress audit also records identifiable SDK and unauthenticated tool-call rejections; malformed traffic and non-tool methods remain excluded. No ingress or network-policy changes are needed. The earlier ticket sections describe historical implementation states; durable execution history is implemented by this slice.
 
 ## Running chat access and resource exhaustion (#42)
 
@@ -161,3 +161,20 @@ userinfo, queries/fragments, non-HTTP(S) schemes, invalid ports, and wrong paths
 The browser validates the fetched shape again and renders URL/code as React text.
 Missing/invalid data never causes inference of an internal upstream endpoint.
 Operators remain responsible for choosing a trusted public gateway host and TLS.
+
+## Consolidated walkthrough threats (#46)
+
+| Threat | Enforced boundary and remaining exposure |
+| --- | --- |
+| Model invents a tool or identity, or reuses a stale catalog | Server-owned transcript, offered-alias mapping, schema/generation checks, fresh eligibility/role lookup and independent `executeTool` authorization precede each admission. Disable/removal prevents later admission; already admitted operations can finish. |
+| Dashboard/API-key confusion or token forwarding | Dashboard session plus Origin/CSRF guards authenticate chat/management; MCP independently checks the user's key. Chat audits carry null key IDs, bearer audits carry actual IDs. Incoming client credentials are not forwarded to upstreams/provider. Provider and upstream credentials have separate server-side purposes. |
+| Malicious upstream descriptions, schemas or results influence model selection | All are untrusted data. Prompt instructions are advisory; current catalog and backend authorization enforce execution. React renders text without HTML execution. Known credential redaction is defense in depth, not a universal detector for arbitrary upstream/customer secrets. |
+| Member accesses another member's store information | Upstreams act with shared service credentials. Member read permissions expose shared WooCommerce records; no tenant/record ownership boundary is implemented. Do not treat separate gateway users as isolated stores. Authorized administrators can mutate shared commerce data. |
+| Provider sees sensitive permitted results | Bounded selected tool definitions/results leave the gateway for the configured provider. Review provider data handling and tool permissions. Raw gateway/provider credentials are excluded/redacted, but permitted customer data can still be disclosed through tool results. |
+| Timeout, disconnect, deployment failure or audit outage | No automatic write replay. Inspect store state before a deliberate retry. Audit writes can be lost or have uncertain acknowledgement; no lossless queue/backfill exists. Helm rollback cannot undo commerce effects or restore external Secret contents. |
+| Network policy mistaken for demonstrated isolation | Rendered charts, policy objects and fixture tests are insufficient. Record allowed/blocked probes against real listeners/control Pods and CNI evidence on the deployed path, including provider egress. |
+
+Follow the [live checklist](../operations/acceptance-handoff.md) and
+[actual evidence record](../validation/issue-46.md). The earlier issue sections
+are historical slices; this table and linked implementation guides describe the
+completed boundaries without asserting live verification.
