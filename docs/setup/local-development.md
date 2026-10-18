@@ -39,7 +39,7 @@ An existing `.env` must be merged rather than overwritten. Fill `WC_CONSUMER_KEY
 `WC_CONSUMER_SECRET` from WooCommerce and choose a private random
 `GATEWAY_BOOTSTRAP_KEY` for initial administrator setup. No real credentials are
 prefilled. `.env` is gitignored and excluded from Docker build contexts.
-`WC_URL` is the supported canonical storefront variable; an old `WC_BASE_URL`
+`WC_URL` is the supported canonical storefront variable; an old ``
 setting alone does not configure the adapter. `LLM_API_KEY` has no current consumer.
 
 ```bash

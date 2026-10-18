@@ -120,11 +120,11 @@ timeMcp:
       memory: 256Mi
 gateway:
   chat:
-    enabled: false
+    enabled: true
     provider: openai
     model: gpt-4.1-mini-2025-04-14
     # Existing same-namespace Secret; no raw credentials in values.
-    secretName: ""
+    secretName: urumi-chat-provider
     secretKey: api-key
 
   # Exact key-level application approval; names also generate get-only RBAC.
@@ -208,7 +208,9 @@ networkPolicy:
     additionalDestinations: []
     # Site-approved provider IPv4 /32 or expanded IPv6 /128 routes, TCP 443 only.
     # Used only when gateway.chat.enabled; no portable provider IP defaults.
-    chatProvider: []
+    chatProvider:
+      - cidr: 162.159.140.245/32
+        ports: [443]
   
 # Never put raw credentials in values files.
 
