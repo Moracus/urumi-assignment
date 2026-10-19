@@ -47,7 +47,7 @@ All endpoints require an eligible administrator **dashboard cookie session** and
 | `POST /api/admin/servers` | `201 { "server": detail }`, including offline connection outcome |
 | `GET /api/admin/servers` | `{ "servers": [summary, ...] }`, sorted by `serverId` |
 | `GET /api/admin/servers/:serverId` | `{ "server": detail }` |
-| `GET /api/admin/servers/:serverId/tools` | `{ "tools": [{ "name": "calculator.calculate", "description": "…", "inputSchema": {...} }] }` |
+| `GET /api/admin/servers/:serverId/tools` | `{ "tools": [{ "name": "calculator_calculate", "description": "…", "inputSchema": {...} }] }` |
 
 Summaries contain `serverId`, `displayName`, `enabled`, `configurationRevision`, `createdAt`, `updatedAt`, live `status`, `toolCount`, `lastConnectedAt`, `lastDiscoveredAt`, and `lastError`. Dates serialize as ISO strings; absent observations are null. Errors are null or the fixed `Upstream unavailable` message. Unavailable/disabled servers report zero public tools, even if old definitions remain internally cached.
 
@@ -146,7 +146,7 @@ curl --cookie "$COOKIE_JAR" -X PATCH \
   "$GATEWAY_URL/api/admin/servers/calculator"
 ```
 
-Success returns `200 { "server": detail }`. The stable `serverId` and public namespace remain unchanged: editing calculator's display name or URL still exposes `calculator.calculate` when that tool is discovered. Each successful edit advances the desired configuration revision. A display-only edit (or a URL that canonicalizes to the current URL) preserves the connection, callable generation, catalog and observation timestamps. Disabled registrations can be edited without connecting.
+Success returns `200 { "server": detail }`. The stable `serverId` and public namespace remain unchanged: editing calculator's display name or URL still exposes `calculator_calculate` when that tool is discovered. Each successful edit advances the desired configuration revision. A display-only edit (or a URL that canonicalizes to the current URL) preserves the connection, callable generation, catalog and observation timestamps. Disabled registrations can be edited without connecting.
 
 Endpoint edits persist desired configuration first. Immediately after persistence, the registry advances the callable generation, withdraws the previous client and tools, clears previous observation timestamps and records the new desired endpoint. It then waits for older maintenance and already-started bounded calls, retires the old connection, and connects/discovers through the current destination policy. No new call may enter the old connection after that barrier; already-sent operations may finish and are never retried automatically. Delayed discovery cannot publish an obsolete catalog, stale resolved mappings cannot invoke the replacement or old client, and late failures from an old client cannot mark the replacement unhealthy. Per-server management serialization includes edits, creation, enable, disable and removal; unrelated servers remain independent. Observations are associated with the current configuration revision.
 

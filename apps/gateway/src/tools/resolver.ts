@@ -46,26 +46,10 @@ export class AggregatedToolResolver
       return null;
     }
 
-    // Check previously discovered tools.
-    for (const upstream of this.registry.list()) {
-      if (!upstream.config.enabled) {
-        continue;
-      }
-
-      const match = upstream.tools.find(
-        (registeredTool) =>
-          `${upstream.config.name}.${registeredTool.name}` ===
-          publicToolName,
-      );
-
-      if (
-        match &&
-        upstream.status !== "connected"
-      ) {
-        throw new UpstreamUnavailableError(
-          upstream.config.name,
-        );
-      }
+    // Use the same collision-checked mapping for cached unavailable tools.
+    const cached = this.aggregator.getTool(publicToolName, true);
+    if (cached && this.registry.getState(cached.upstreamName)?.status !== "connected") {
+      throw new UpstreamUnavailableError(cached.upstreamName);
     }
 
     return null;

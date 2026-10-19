@@ -78,7 +78,7 @@ await client.connect(new StreamableHTTPClientTransport(new URL(${JSON.stringify(
 }));
 try {
   console.log(await client.listTools());
-  console.log(await client.callTool({ name: 'calculator.calculate',
+  console.log(await client.callTool({ name: 'calculator_calculate',
     arguments: { operation: 'multiply', a: 6, b: 7 } }));
 } finally { await client.close(); }`}</pre>
       <p>Replace the credential placeholder privately. Keep credentials out of source control and logs. Revocation rejects the next MCP request; your dashboard session remains active.</p></>

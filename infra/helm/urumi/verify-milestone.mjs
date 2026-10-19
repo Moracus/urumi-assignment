@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { isIP } from 'node:net';
+import { makePublicToolName } from '../../../apps/gateway/dist/tools/public-name.js';
 
 const require = createRequire(`${process.cwd()}/apps/dashboard/package.json`);
 const { chromium, expect } = require('@playwright/test');
@@ -75,7 +76,7 @@ try {
   };
   const catalog = async client => (await client.listTools(undefined, { cacheMode: 'bypass' })).tools.map(tool => tool.name);
   const calculate = async client => {
-    const result = await client.callTool({ name: 'calculator.calculate',
+    const result = await client.callTool({ name: 'calculator_calculate',
       arguments: { operation: 'multiply', a: 6, b: 7 } });
     assert.ok(!result.isError && result.content?.[0]?.type === 'text');
     assert.deepEqual(JSON.parse(result.content[0].text), { operation: 'multiply', a: 6, b: 7, result: 42 });
@@ -105,14 +106,14 @@ try {
   stage = 'member MCP discovery, read-only calls and revocation';
   const member = await issue(`Milestone ${suffix}`);
   stage = 'member fresh discovery';
-  assert.ok((await catalog(member)).includes('calculator.calculate'));
-  assert.ok(!(await catalog(member)).includes('woocommerce.create_product'));
+  assert.ok((await catalog(member)).includes('calculator_calculate'));
+  assert.ok(!(await catalog(member)).includes('woocommerce_create_product'));
   stage = 'member calculator call';
   await calculate(member);
   stage = 'member time call';
-  assert.ok(!(await member.callTool({ name: 'time.current', arguments: { timezone: 'UTC' } })).isError);
+  assert.ok(!(await member.callTool({ name: 'time_current', arguments: { timezone: 'UTC' } })).isError);
   stage = 'member direct write rejection';
-  await assert.rejects(member.callTool({ name: 'woocommerce.create_product' }), ProtocolError);
+  await assert.rejects(member.callTool({ name: 'woocommerce_create_product' }), ProtocolError);
   stage = 'member role and CSRF denial';
   assert.equal((await api('/api/admin/users')).status(), 403);
   assert.equal((await page.request.post(new URL('/api/keys', origin).href,
@@ -149,38 +150,38 @@ try {
   await page.getByLabel('Endpoint', { exact: true }).fill(calculator);
   await click('Save server');
   await expect(details).toContainText('Runtime statusconnected');
-  assert.ok((await catalog(admin)).includes(`${serverId}.calculate`));
+  assert.ok((await catalog(admin)).includes(makePublicToolName(serverId, 'calculate')));
   const definitions = (await admin.listTools(undefined, { cacheMode: 'bypass' })).tools;
-  assert.deepEqual(definitions.find(tool => tool.name === `${serverId}.calculate`)?.inputSchema,
-    definitions.find(tool => tool.name === 'calculator.calculate')?.inputSchema);
+  assert.deepEqual(definitions.find(tool => tool.name === makePublicToolName(serverId, 'calculate'))?.inputSchema,
+    definitions.find(tool => tool.name === 'calculator_calculate')?.inputSchema);
   await click('Disable server');
   await click('Confirm disable');
   await expect(details).toContainText('Runtime statusdisabled');
-  assert.ok(!(await catalog(admin)).includes(`${serverId}.calculate`));
-  await assert.rejects(admin.callTool({ name: `${serverId}.calculate`, arguments: { operation: 'multiply', a: 1, b: 2 } }), ProtocolError);
+  assert.ok(!(await catalog(admin)).includes(makePublicToolName(serverId, 'calculate')));
+  await assert.rejects(admin.callTool({ name: makePublicToolName(serverId, 'calculate'), arguments: { operation: 'multiply', a: 1, b: 2 } }), ProtocolError);
   await click('Enable server');
   await expect(details).toContainText('Runtime statusconnected');
   await click('Edit server');
   await page.getByLabel('Endpoint', { exact: true }).fill(new URL('/offline', calculator).href);
   await click('Save server');
   await expect(details).toContainText('Runtime statusunreachable');
-  assert.ok(!(await catalog(admin)).includes(`${serverId}.calculate`));
+  assert.ok(!(await catalog(admin)).includes(makePublicToolName(serverId, 'calculate')));
   await calculate(admin);
   await click('Edit server');
   await page.getByLabel('Endpoint', { exact: true }).fill(time);
   await click('Save server');
   await expect(details).toContainText('Runtime statusconnected');
-  assert.ok((await catalog(admin)).includes(`${serverId}.current`));
-  assert.ok(!(await catalog(admin)).includes(`${serverId}.calculate`));
-  await assert.rejects(admin.callTool({ name: `${serverId}.calculate` }), ProtocolError);
-  assert.ok(!(await admin.callTool({ name: `${serverId}.current`, arguments: { timezone: 'UTC' } })).isError);
+  assert.ok((await catalog(admin)).includes(makePublicToolName(serverId, 'current')));
+  assert.ok(!(await catalog(admin)).includes(makePublicToolName(serverId, 'calculate')));
+  await assert.rejects(admin.callTool({ name: makePublicToolName(serverId, 'calculate') }), ProtocolError);
+  assert.ok(!(await admin.callTool({ name: makePublicToolName(serverId, 'current'), arguments: { timezone: 'UTC' } })).isError);
   await click('Refresh discovery');
   await expect(details).toContainText('Runtime statusconnected');
   await click('Remove server');
   await click('Confirm remove');
   await expect(details).toHaveCount(0);
-  assert.ok(!(await catalog(admin)).includes(`${serverId}.current`));
-  await assert.rejects(admin.callTool({ name: `${serverId}.current` }), ProtocolError);
+  assert.ok(!(await catalog(admin)).includes(makePublicToolName(serverId, 'current')));
+  await assert.rejects(admin.callTool({ name: makePublicToolName(serverId, 'current') }), ProtocolError);
   // Leave a second registration disabled to distinguish desired state from runtime observations.
   const retainedId = `${serverId}-retained`;
   assert.equal((await api('/api/admin/servers', 'POST', { serverId: retainedId,

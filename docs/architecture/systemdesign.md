@@ -48,7 +48,7 @@ An upstream becomes `connected` only after a successful `listTools` response. It
 
 The gateway refreshes discovery every 30 seconds. A disconnected or unreachable upstream is reconnected on a subsequent refresh. Failed discovery closes the connection, marks the upstream unreachable, and preserves earlier tool definitions internally. Those cached definitions are excluded from public discovery while the upstream is unavailable.
 
-The aggregator publishes `<upstream>.<tool>` names, such as `woocommerce.list_products` and `calculator.calculate`, sorts them predictably, and rejects duplicate public names. Identical unprefixed names from different upstreams remain distinct. Input schemas are cloned and converted through the MCP server SDK for registration.
+The aggregator publishes `<server_name>_<tool_name>` names, such as `woocommerce_list_products` and `calculator_calculate`, sorts them predictably, and omits all tools with colliding public names while preserving unrelated tools. Identical unprefixed names from different upstreams remain distinct. Input schemas are cloned and converted through the MCP server SDK for registration.
 
 The gateway constructs an MCP server using the current catalog and request identity. It filters out tools the identity cannot invoke. Changes appear through subsequent requests and catalog construction; the code does not implement an explicit proactive tool-list-change notification mechanism.
 
@@ -60,7 +60,7 @@ A request-local asynchronous scope propagates verified `AuthenticatedIdentity` (
 
 Users and permanently consumed initial administrator setup are stored in MongoDB, with Argon2id passwords and unique normalized email. [Personal key management](../guides/api-keys.md) uses a separate dashboard cookie/session boundary. [Dashboard sessions](../guides/dashboard-sessions.md) persist hashed opaque credentials with a fixed eight-hour expiry, exact trusted Origin and session-bound CSRF for mutations, and current user eligibility/roles. Password replacement transactionally replaces the password hash, clears required replacement, and invalidates every target-user session without revoking keys. Only account details, password change, and logout permit pending replacement. Transactions coordinate rolling login throttles across gateway instances. Secure HTTPS is required unless explicit development HTTP is configured. See [identity setup](../guides/identity-setup.md) for storage and CLI behavior.
 
-The authorization module permits admins to invoke all registered tools. Its member allowlist includes `woocommerce.list_products`, `woocommerce.list_orders`, `woocommerce.get_order`, `calculator.calculate`, and `time.current`. Product creation and order updates are rejected for members. Member behavior is exercised through real MCP SDK requests with persisted keys as well as shared execution tests.
+The authorization module permits admins to invoke all registered tools. Its member allowlist includes `woocommerce_list_products`, `woocommerce_list_orders`, `woocommerce_get_order`, `calculator_calculate`, and `time_current`. Product creation and order updates are rejected for members. Member behavior is exercised through real MCP SDK requests with persisted keys as well as shared execution tests.
 
 Authorization is applied both while constructing the visible catalog and before resolving/executing a tool. This prevents an internal caller from bypassing authorization simply by naming a hidden tool. Host allowlists provide HTTP host validation; they are separate from bearer authentication and Kubernetes network controls.
 
@@ -245,7 +245,7 @@ MongoDB while tolerating all upstreams being unreachable. See
 
 ## Session-authenticated chat (#41)
 
-The dashboard's `/chat` page uses session-protected `GET/POST /api/chat`. A small OpenAI Chat Completions loop derives function definitions from the current authorized discovered catalog, validates proposed arguments and invokes only `executeTool`. Opaque numeric aliases preserve collision-free routing to actual public names. The server owns the transcript and pairs provider call IDs with tool results, including MCP `isError`. Current session eligibility and roles are resolved before each invocation; audit attribution uses the user and dashboard-session origin with no gateway key ID. Provider I/O, context, results and execution are bounded, with no automatic retries. See [configuration, protocol, limits and recovery](../guides/dashboard-chat.md). Provider credentials are server-only; [Helm Secret references and scoped provider egress](../operations/chat-deployment.md) are implemented and require operator site configuration/live verification.
+The dashboard's `/chat` page uses session-protected `GET/POST /api/chat`. A small OpenAI Chat Completions loop derives function definitions from the current authorized discovered catalog, validates proposed arguments and invokes only `executeTool`. Canonical public names are shared by MCP and OpenAI; explicit mappings preserve routing to native tools. The server owns the transcript and pairs provider call IDs with tool results, including MCP `isError`. Current session eligibility and roles are resolved before each invocation; audit attribution uses the user and dashboard-session origin with no gateway key ID. Provider I/O, context, results and execution are bounded, with no automatic retries. See [configuration, protocol, limits and recovery](../guides/dashboard-chat.md). Provider credentials are server-only; [Helm Secret references and scoped provider egress](../operations/chat-deployment.md) are implemented and require operator site configuration/live verification.
 
 ## Milestone verification and integration handoff (#37)
 
@@ -267,8 +267,8 @@ See [operator configuration](../operations/dashboard-deployment.md).
 The browser sends only a prompt using its dashboard cookie and session-bound CSRF.
 The server owns the transcript, reauthenticates, filters current discovered tools by
 role and sends their descriptions/schemas as OpenAI function definitions with
-collision-free numeric aliases. Provider assistant `tool_calls` carry IDs, aliases
-and JSON argument strings; the gateway maps only offered aliases, validates the
+canonical public names. Provider assistant `tool_calls` carry IDs, names
+and JSON argument strings; the gateway maps only offered names, validates the
 current schema/generation, reauthenticates again and calls `executeTool`. Each
 result or safe error is paired with its original `tool_call_id` in a `role=tool`
 message. Later turns receive a fresh permitted catalog. A final answer is model
@@ -280,7 +280,7 @@ server-side on every request. Neither dashboard cookies nor incoming gateway
 bearer tokens are forwarded to upstreams or the provider. The provider receives
 its own configured key; upstreams receive only their independently approved
 credentials. Tool authorization, actual-catalog resolution and registry barriers
-remain gateway responsibilities; model aliases and tool-list filtering grant no
+remain gateway responsibilities; model names and tool-list filtering grant no
 authority by themselves. The two-user fixture and in-flight withdrawal checks
 are described in the [workflow guide](../guides/browser-to-mcp-workflow.md).
 

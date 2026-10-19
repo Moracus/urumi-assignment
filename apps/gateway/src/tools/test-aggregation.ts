@@ -47,7 +47,7 @@ async function main() {
     console.log("\n=== Resolution Test ===");
 
     const resolved = await resolver.resolve(
-      "calculator.calculate",
+      "calculator_calculate",
     );
 
     console.log(resolved);
@@ -55,7 +55,7 @@ async function main() {
     console.log("\n=== Unknown Tool Test ===");
 
     const unknown = await resolver.resolve(
-      "woocommerce.delete_customer",
+      "woocommerce_delete_customer",
     );
 
     console.log(unknown);

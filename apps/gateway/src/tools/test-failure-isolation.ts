@@ -79,17 +79,17 @@ async function main() {
     console.log("\n=== Healthy requests ===");
 
     await Promise.all([
-      call("calculator.calculate", {
+      call("calculator_calculate", {
         operation: "add",
         a: 10,
         b: 20,
       }),
 
-      call("time.current", {
+      call("time_current", {
         timezone: "Asia/Kolkata",
       }),
 
-      call("woocommerce.list_products", {
+      call("woocommerce_list_products", {
         limit: 5,
         page: 1,
       }),
@@ -104,7 +104,7 @@ async function main() {
     console.log("\n=== Failure test ===");
 
     try {
-      await call("calculator.calculate", {
+      await call("calculator_calculate", {
         operation: "add",
         a: 10,
         b: 20,
@@ -125,11 +125,11 @@ async function main() {
     console.log("\n=== Other upstreams ===");
 
     await Promise.all([
-      call("time.current", {
+      call("time_current", {
         timezone: "UTC",
       }),
 
-      call("woocommerce.list_products", {
+      call("woocommerce_list_products", {
         limit: 5,
         page: 1,
       }),
@@ -164,7 +164,7 @@ async function main() {
       throw new Error("Calculator did not reconnect successfully");
     }
 
-    const recovered = await call("calculator.calculate", {
+    const recovered = await call("calculator_calculate", {
       operation: "multiply",
       a: 6,
       b: 7,

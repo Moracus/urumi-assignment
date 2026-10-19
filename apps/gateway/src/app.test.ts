@@ -159,6 +159,9 @@ test("chat encodes real provider calls, validates schemas, pairs results and aud
       messages: z.array(z.record(z.string(), z.unknown())),
       tools: z.array(z.object({ type: z.literal("function"), function: z.object({ name: z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/), description: z.string().optional(), parameters: z.record(z.string(), z.unknown()) }) })) }).parse(request.body);
     assert.equal(body.tools.length, expectedCatalogSize);
+    assert.ok(body.tools.some(tool => tool.function.name === "calculator_calculate"));
+    assert.ok(body.tools.some(tool => tool.function.name === "time_current"));
+    assert.ok(body.tools.every(tool => !tool.function.name.startsWith("tool_")));
     assert.equal(new Set(body.tools.map(tool => tool.function.name)).size, expectedCatalogSize);
     const results = body.messages.filter(message => message.role === "tool");
     rounds++;
@@ -188,8 +191,8 @@ test("chat encodes real provider calls, validates schemas, pairs results and aud
   const result = await response.json();
   assert.equal(result.answer, "The answer is 42. <script>untrusted</script>");
   assert.deepEqual(result.calls.map((call: { id: string; toolName: string | null; outcome: string }) => [call.id, call.toolName, call.outcome]), [
-    ["call-product", "calculator.calculate", "success"], ["call-invalid", "calculator.calculate", "rejected"],
-    ["call-clock", "time.current", "tool_error"], ["call-forged", null, "rejected"],
+    ["call-product", "calculator_calculate", "success"], ["call-invalid", "calculator_calculate", "rejected"],
+    ["call-clock", "time_current", "tool_error"], ["call-forged", null, "rejected"],
   ]);
   await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
   const rows = (await f.app.inject({ url: "/api/admin/audit", headers: f.headers })).json().records;
@@ -199,7 +202,7 @@ test("chat encodes real provider calls, validates schemas, pairs results and aud
     assert.equal(row.userId, f.userId); assert.equal(row.userEmail, "member@example.com");
   }
   assert.ok(!JSON.stringify(rows).includes("synthetic-provider-secret"));
-  expectedCatalogSize = 6;
+  expectedCatalogSize = 4;
   assert.equal((await send()).status, 200);
   assert.equal(rounds, 4);
 });
@@ -335,7 +338,7 @@ test("manual refresh replaces the catalog for a continuing MCP client without ch
   const f = await fixture(t, { upstreams: [extra.config] });
   await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
   const client = await f.connect();
-  assert.equal((await client.listTools()).tools[0].name, "extra.old");
+  assert.equal((await client.listTools()).tools[0].name, "extra_old");
   const before = (await f.app.inject({ url: "/api/admin/servers/extra", headers: f.headers })).json().server;
   changed = true;
   const response = await f.app.inject({ method: "POST", url: "/api/admin/servers/extra/refresh", headers: f.headers });
@@ -348,10 +351,10 @@ test("manual refresh replaces the catalog for a continuing MCP client without ch
   assert.equal(after.lastConnectedAt, before.lastConnectedAt);
   assert.ok(Date.parse(after.lastDiscoveredAt) > Date.parse(before.lastDiscoveredAt));
   assert.deepEqual((await client.listTools(undefined, { cacheMode: "bypass" })).tools, [{
-    name: "extra.new", description: "New description", inputSchema: { type: "object", properties: { value: { type: "number" } } },
+    name: "extra_new", description: "New description", inputSchema: { type: "object", properties: { value: { type: "number" } } },
   }]);
-  await assert.rejects(client.callTool({ name: "extra.old" }), ProtocolError);
-  const result = await client.callTool({ name: "extra.new", arguments: { value: 42 } });
+  await assert.rejects(client.callTool({ name: "extra_old" }), ProtocolError);
+  const result = await client.callTool({ name: "extra_new", arguments: { value: 42 } });
   assert.equal(result.isError, true);
   assert.deepEqual(result.structuredContent, { refreshed: true });
 });
@@ -415,7 +418,7 @@ test("manual refresh rejects invalid discovery, bounds discovery and connection 
   const client = await f.connect();
   const refresh = () => f.app.inject({ method: "POST", url: "/api/admin/servers/extra/refresh", headers: f.headers }).then(value => value);
   const healthy = async () => {
-    assert.deepEqual((await client.callTool({ name: "calculator.calculate", arguments: { a: 6, b: 7 } })).content, [{ type: "text", text: "42" }]);
+    assert.deepEqual((await client.callTool({ name: "calculator_calculate", arguments: { a: 6, b: 7 } })).content, [{ type: "text", text: "42" }]);
     assert.equal((await f.app.inject({ url: "/api/auth/me", headers: f.headers })).statusCode, 200);
     assert.equal((await f.app.inject({ url: "/api/keys", headers: f.headers })).statusCode, 200);
   };
@@ -425,7 +428,7 @@ test("manual refresh rejects invalid discovery, bounds discovery and connection 
   assert.equal(failed.json().server.status, "unreachable");
   assert.equal(failed.json().server.lastError, "Upstream unavailable");
   assert.equal(failed.json().server.toolCount, 0);
-  await assert.rejects(client.callTool({ name: "extra.echo" }), ProtocolError);
+  await assert.rejects(client.callTool({ name: "extra_echo" }), ProtocolError);
   assert.equal(calls, 0);
   mode = "valid";
   assert.equal((await refresh()).json().server.status, "connected");
@@ -442,7 +445,7 @@ test("manual refresh rejects invalid discovery, bounds discovery and connection 
   assert.equal(timedOut.statusCode, 200);
   assert.equal(timedOut.json().server.status, "unreachable");
   assert.ok(Date.now() - started >= 4500 && Date.now() - started < 10000);
-  assert.deepEqual((await client.listTools(undefined, { cacheMode: "bypass" })).tools.map(tool => tool.name), ["calculator.calculate"]);
+  assert.deepEqual((await client.listTools(undefined, { cacheMode: "bypass" })).tools.map(tool => tool.name), ["calculator_calculate"]);
   mode = "connection delay";
   const connecting = refresh();
   await initialization.entered;
@@ -454,8 +457,8 @@ test("manual refresh rejects invalid discovery, bounds discovery and connection 
   assert.equal(recovered.json().server.lastError, null);
   assert.ok(recovered.json().server.lastConnectedAt && recovered.json().server.lastDiscoveredAt);
   initialization.release(); discovery.release();
-  assert.deepEqual((await client.listTools(undefined, { cacheMode: "bypass" })).tools.map(tool => tool.name), ["calculator.calculate", "extra.echo"]);
-  await client.callTool({ name: "extra.echo" });
+  assert.deepEqual((await client.listTools(undefined, { cacheMode: "bypass" })).tools.map(tool => tool.name), ["calculator_calculate", "extra_echo"]);
+  await client.callTool({ name: "extra_echo" });
   assert.equal(calls, 1);
 });
 
@@ -570,21 +573,21 @@ test("SDK discovery and calls use a controlled upstream and injected audit logge
   const client = await f.connect();
   const { tools } = await client.listTools(undefined, { cacheMode: "bypass" });
   assert.equal(tools.length, 1);
-  assert.equal(tools[0].name, "calculator.calculate");
+  assert.equal(tools[0].name, "calculator_calculate");
   assert.equal(tools[0].description, "Controlled calculator");
   assert.deepEqual(tools[0].inputSchema.required, ["a", "b"]);
   assert.deepEqual(tools[0].inputSchema.properties, { a: { type: "number" }, b: { type: "number" } });
-  const result = await client.callTool({ name: "calculator.calculate", arguments: { a: 6, b: 7 } });
+  const result = await client.callTool({ name: "calculator_calculate", arguments: { a: 6, b: 7 } });
   assert.deepEqual(result.content, [{ type: "text", text: "42" }]);
   assert.deepEqual(result.structuredContent, { result: 42 });
   assert.equal(records.length, 1);
   assert.equal(records[0].userId, f.userId);
   assert.equal(records[0].keyId, f.key.id);
-  assert.equal(records[0].toolName, "calculator.calculate");
+  assert.equal(records[0].toolName, "calculator_calculate");
   assert.equal(records[0].upstreamName, "calculator");
   assert.equal(records[0].outcome, "success");
   assert.ok(records[0].requestId);
-  const toolError = await client.callTool({ name: "calculator.calculate", arguments: { a: 6, b: 0 } });
+  const toolError = await client.callTool({ name: "calculator_calculate", arguments: { a: 6, b: 0 } });
   assert.equal(toolError.isError, true);
   assert.deepEqual(toolError.content, [{ type: "text", text: "Controlled tool error" }]);
   assert.equal(records[1].outcome, "tool_error");
@@ -631,7 +634,7 @@ test("connected MCP clients lose access on the very next request after key revoc
   assert.ok(Number.isFinite(Date.parse(used.lastUsedAt)));
   assert.equal((await f.app.inject({ method: "DELETE", url: `/api/keys/${f.key.id}`, headers: f.headers })).statusCode, 204);
   await assert.rejects(client.listTools(undefined, { cacheMode: "bypass" }), httpFailure(401));
-  await assert.rejects(client.callTool({ name: "calculator.calculate", arguments: { a: 1, b: 2 } }), httpFailure(401));
+  await assert.rejects(client.callTool({ name: "calculator_calculate", arguments: { a: 1, b: 2 } }), httpFailure(401));
   await assert.rejects(f.connect(), httpFailure(401));
   const after = (await f.app.inject({ url: "/api/keys", headers: f.headers })).json().keys[0];
   assert.equal(after.lastUsedAt, used.lastUsedAt);
@@ -697,7 +700,7 @@ test("fresh roles filter discovery and calls, last-use advances on denied tools,
     assert.equal(response.statusCode, 200, response.body);
   }
   const client = await f.connect();
-  const memberTools = ["calculator.calculate", "time.current", "woocommerce.get_order", "woocommerce.list_orders", "woocommerce.list_products"];
+  const memberTools = ["calculator_calculate", "time_current", "woocommerce_get_order", "woocommerce_list_orders", "woocommerce_list_products"];
   assert.deepEqual((await client.listTools(undefined, { cacheMode: "bypass" })).tools.map((tool) => tool.name).sort(), memberTools);
   async function denied(name: string) {
     // SDK eras may represent an unknown registered tool as a protocol error or an isError result.
@@ -706,24 +709,24 @@ test("fresh roles filter discovery and calls, last-use advances on denied tools,
       (error: unknown) => assert.ok(error instanceof ProtocolError),
     );
   }
-  for (const name of ["woocommerce.create_product", "woocommerce.update_order_status", "woocommerce.invented"]) await denied(name);
+  for (const name of ["woocommerce_create_product", "woocommerce_update_order_status", "woocommerce_invented"]) await denied(name);
   assert.equal(writes, 0);
   assert.deepEqual(records.map(record => record.outcome), ["unauthorized", "unauthorized", "not_found"]);
   const usedBefore = (await f.app.inject({ url: "/api/keys", headers: f.headers })).json().keys[0].lastUsedAt;
-  await denied("woocommerce.create_product");
+  await denied("woocommerce_create_product");
   const usedAfter = (await f.app.inject({ url: "/api/keys", headers: f.headers })).json().keys[0].lastUsedAt;
   assert.ok(Date.parse(usedAfter) > Date.parse(usedBefore));
   await changeRole("admin");
-  const adminTools = [...memberTools, "woocommerce.create_product", "woocommerce.update_order_status"].sort();
+  const adminTools = [...memberTools, "woocommerce_create_product", "woocommerce_update_order_status"].sort();
   assert.deepEqual((await client.listTools(undefined, { cacheMode: "bypass" })).tools.map((tool) => tool.name).sort(), adminTools);
-  const result = await client.callTool({ name: "woocommerce.create_product" });
+  const result = await client.callTool({ name: "woocommerce_create_product" });
   assert.deepEqual(result.structuredContent, { tool: "create_product" });
   assert.equal(writes, 1);
   assert.equal(records[0].userId, f.userId);
   assert.equal(records[0].keyId, f.key.id);
   await changeRole("member");
   assert.deepEqual((await client.listTools(undefined, { cacheMode: "bypass" })).tools.map((tool) => tool.name).sort(), memberTools);
-  await denied("woocommerce.update_order_status");
+  await denied("woocommerce_update_order_status");
   assert.equal(writes, 1);
   const issued = await f.app.inject({ method: "POST", url: "/api/keys", payload: {},
     headers: adminHeaders });
@@ -731,18 +734,25 @@ test("fresh roles filter discovery and calls, last-use advances on denied tools,
   const admin = await f.connect(issued.json().rawKey);
   const offset = records.length;
   await Promise.all([
-    client.callTool({ name: "calculator.calculate", arguments: { a: 6, b: 7 } }),
-    admin.callTool({ name: "woocommerce.update_order_status" }),
+    client.callTool({ name: "calculator_calculate", arguments: { a: 6, b: 7 } }),
+    admin.callTool({ name: "woocommerce_update_order_status" }),
   ]);
   assert.deepEqual(records.slice(offset).map((record) => [record.toolName, record.userId, record.keyId]).sort(), [
-    ["calculator.calculate", f.userId, f.key.id],
-    ["woocommerce.update_order_status", otherUser.insertedId.toHexString(), issued.json().key.id],
+    ["calculator_calculate", f.userId, f.key.id],
+    ["woocommerce_update_order_status", otherUser.insertedId.toHexString(), issued.json().key.id],
   ]);
   for (const record of records) {
     assert.deepEqual(Object.keys(record).sort(), ["attemptId", "authenticationOrigin", "durationMs", "keyId", "outcome", "requestId", "timestamp", "toolName", "upstreamName", "userId", "userEmail", "upstreamId", "upstreamDisplayName"].sort());
     assert.ok(!JSON.stringify(record).includes(f.rawKey));
     assert.ok(!JSON.stringify(record).includes(issued.json().rawKey));
   }
+  // Public names reach the original native tools, with member read permissions.
+  assert.deepEqual((await client.callTool({ name: "woocommerce_list_orders" })).structuredContent, { tool: "list_orders" });
+  assert.deepEqual((await client.callTool({ name: "time_current" })).content, [{ type: "text", text: "UTC" }]);
+  const beforeLegacy = records.length;
+  await assert.rejects(admin.callTool({ name: "calculator.calculate", arguments: { a: 6, b: 7 } }), ProtocolError);
+  assert.equal(records[beforeLegacy].outcome, "not_found");
+  assert.equal(records[beforeLegacy].userId, otherUser.insertedId.toHexString());
 });
 
 test("authenticated MCP timeout isolates an upstream, never retries writes, and recovers through normal refresh", async (t) => {
@@ -765,7 +775,7 @@ test("authenticated MCP timeout isolates an upstream, never retries writes, and 
   const client = await f.connect();
   const lastUsedBefore = (await f.app.inject({ url: "/api/keys", headers: f.headers })).json().keys[0].lastUsedAt;
   const started = Date.now();
-  const result = await client.callTool({ name: "woocommerce.create_product" }, { timeout: 15000 });
+  const result = await client.callTool({ name: "woocommerce_create_product" }, { timeout: 15000 });
   assert.equal(result.isError, true);
   assert.deepEqual(result.content, [{ type: "text", text: "Upstream request timed out" }]);
   assert.ok(Date.now() - started >= 9500);
@@ -776,18 +786,18 @@ test("authenticated MCP timeout isolates an upstream, never retries writes, and 
   assert.equal(records[0].keyId, f.key.id);
   const lastUsedAfter = (await f.app.inject({ url: "/api/keys", headers: f.headers })).json().keys[0].lastUsedAt;
   assert.ok(Date.parse(lastUsedAfter) > Date.parse(lastUsedBefore));
-  assert.deepEqual((await client.listTools(undefined, { cacheMode: "bypass" })).tools.map((tool) => tool.name), ["time.current"]);
-  assert.deepEqual((await client.callTool({ name: "time.current" })).content, [{ type: "text", text: "UTC" }]);
+  assert.deepEqual((await client.listTools(undefined, { cacheMode: "bypass" })).tools.map((tool) => tool.name), ["time_current"]);
+  assert.deepEqual((await client.callTool({ name: "time_current" })).content, [{ type: "text", text: "UTC" }]);
   assert.equal((await f.app.inject({ url: "/health/ready" })).statusCode, 200);
   stall = false;
   const deadline = Date.now() + 35000;
   let restored = false;
   while (Date.now() < deadline && !restored) {
-    restored = (await client.listTools(undefined, { cacheMode: "bypass" })).tools.some((tool) => tool.name === "woocommerce.create_product");
+    restored = (await client.listTools(undefined, { cacheMode: "bypass" })).tools.some((tool) => tool.name === "woocommerce_create_product");
     if (!restored) await new Promise((resolve) => setTimeout(resolve, 200));
   }
   assert.equal(restored, true, "Periodic refresh must restore upstream discovery");
-  const recovered = await client.callTool({ name: "woocommerce.create_product" });
+  const recovered = await client.callTool({ name: "woocommerce_create_product" });
   assert.deepEqual(recovered.content, [{ type: "text", text: "Controlled product" }]);
   assert.equal(calls, 2);
 });
@@ -797,15 +807,15 @@ test("dashboard logout and ordinary password changes leave a connected MCP key u
   const f = await fixture(t, { upstreams: [calculator.config] });
   const client = await f.connect();
   assert.equal((await f.app.inject({ method: "POST", url: "/api/auth/logout", headers: f.headers })).statusCode, 204);
-  assert.deepEqual((await client.callTool({ name: "calculator.calculate", arguments: { a: 6, b: 7 } })).content, [{ type: "text", text: "42" }]);
+  assert.deepEqual((await client.callTool({ name: "calculator_calculate", arguments: { a: 6, b: 7 } })).content, [{ type: "text", text: "42" }]);
   const login = await f.app.inject({ method: "POST", url: "/api/auth/login", headers: { origin }, payload: { email: "member@example.com", password } });
   const headers = { cookie: String(login.headers["set-cookie"]).split(";")[0], origin, "x-csrf-token": login.json().csrfToken };
   const replaced = await f.app.inject({ method: "POST", url: "/api/auth/change-password", headers,
     payload: { currentPassword: password, newPassword: "a different final MCP password" } });
   assert.equal(replaced.statusCode, 204);
   assert.equal((await f.app.inject({ url: "/api/auth/me", headers })).statusCode, 401);
-  assert.deepEqual((await client.callTool({ name: "calculator.calculate", arguments: { a: 2, b: 3 } })).content, [{ type: "text", text: "6" }]);
-  assert.deepEqual((await (await f.connect()).listTools(undefined, { cacheMode: "bypass" })).tools.map((tool) => tool.name), ["calculator.calculate"]);
+  assert.deepEqual((await client.callTool({ name: "calculator_calculate", arguments: { a: 2, b: 3 } })).content, [{ type: "text", text: "6" }]);
+  assert.deepEqual((await (await f.connect()).listTools(undefined, { cacheMode: "bypass" })).tools.map((tool) => tool.name), ["calculator_calculate"]);
 });
 
 
@@ -874,14 +884,14 @@ test("DNS validates every answer before dialing approved services and denies red
     },
   });
   const client = await f.connect();
-  assert.deepEqual((await client.listTools(undefined, { cacheMode: "bypass" })).tools.map(tool => tool.name), ["calculator.calculate"]);
+  assert.deepEqual((await client.listTools(undefined, { cacheMode: "bypass" })).tools.map(tool => tool.name), ["calculator_calculate"]);
   assert.equal((await f.app.inject({ url: "/health/ready" })).json().connectedUpstreams, 2);
   assert.ok(dialed.includes("10.42.1.6"), "approved service address is passed literally to the socket boundary");
   assert.ok(!dialed.includes("10.42.1.5"));
   assert.ok(!dialed.includes("169.254.169.254"));
   assert.ok(redirectCalls > 0);
   assert.equal(targetCalls, 0);
-  assert.deepEqual((await client.callTool({ name: "calculator.calculate", arguments: { a: 6, b: 7 } })).content, [{ type: "text", text: "42" }]);
+  assert.deepEqual((await client.callTool({ name: "calculator_calculate", arguments: { a: 6, b: 7 } })).content, [{ type: "text", text: "42" }]);
 });
 
 test("automatic recovery rechecks changed DNS and never dials a newly forbidden address", async (t) => {
@@ -910,7 +920,7 @@ test("automatic recovery rechecks changed DNS and never dials a newly forbidden 
   const client = await f.connect();
   await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
   const names = async () => (await client.listTools(undefined, { cacheMode: "bypass" })).tools.map(tool => tool.name);
-  assert.deepEqual(await names(), ["calculator.calculate"]);
+  assert.deepEqual(await names(), ["calculator_calculate"]);
   assert.equal(approvedDials, 0);
   address = "10.42.1.5";
   async function waitFor(check: () => Promise<boolean>) {
@@ -921,15 +931,15 @@ test("automatic recovery rechecks changed DNS and never dials a newly forbidden 
     }
     assert.fail("Periodic maintenance did not reach expected state");
   }
-  await waitFor(async () => (await names()).includes("time.calculate"));
+  await waitFor(async () => (await names()).includes("time_calculate"));
   assert.ok(approvedDials > 0);
   const before = approvedDials;
   const previousLookups = lookups;
   address = "169.254.169.254";
   for (const socket of sockets) socket.destroy();
-  await waitFor(async () => lookups > previousLookups && !(await names()).includes("time.calculate"));
+  await waitFor(async () => lookups > previousLookups && !(await names()).includes("time_calculate"));
   assert.equal(approvedDials, before);
-  assert.deepEqual((await client.callTool({ name: "calculator.calculate", arguments: { a: 3, b: 7 } })).content, [{ type: "text", text: "21" }]);
+  assert.deepEqual((await client.callTool({ name: "calculator_calculate", arguments: { a: 3, b: 7 } })).content, [{ type: "text", text: "21" }]);
 });
 
 
@@ -958,7 +968,7 @@ test("all default service origins and explicitly approved external destinations 
   assert.equal((await f.app.inject({ url: "/health/ready" })).json().connectedUpstreams, 4);
   assert.deepEqual([...new Set(seen)].sort(), ["tools.example.test", "urumi-calculator-mcp", "urumi-time-mcp", "urumi-woocommerce-mcp"]);
   const client = await f.connect();
-  assert.deepEqual((await client.callTool({ name: "calculator.calculate", arguments: { a: 2, b: 9 } })).content, [{ type: "text", text: "18" }]);
+  assert.deepEqual((await client.callTool({ name: "calculator_calculate", arguments: { a: 2, b: 9 } })).content, [{ type: "text", text: "18" }]);
 });
 
 test("Kubernetes API service IP is denied through approved DNS aliases even on HTTPS 443", async (t) => {
@@ -1061,9 +1071,9 @@ test("restart restores desired registrations, preserves edits and deletions, and
     requestInit: { headers: { authorization: `Bearer ${f.rawKey}` } },
   }));
   const tools = (await client.listTools(undefined, { cacheMode: "bypass" })).tools;
-  assert.deepEqual(tools.map(tool => tool.name), ["calculator.calculate"]);
+  assert.deepEqual(tools.map(tool => tool.name), ["calculator_calculate"]);
   assert.equal(tools[0].description, "Fresh discovery");
-  assert.deepEqual((await client.callTool({ name: "calculator.calculate", arguments: { a: 42 } })).structuredContent, { value: 42 });
+  assert.deepEqual((await client.callTool({ name: "calculator_calculate", arguments: { a: 42 } })).structuredContent, { value: 42 });
   assert.equal((await restarted.inject({ url: "/health/ready" })).statusCode, 200);
 });
 
@@ -1185,7 +1195,7 @@ test("administrator registers a durable upstream visible to an already connected
     })) } });
   await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
   const client = await f.connect();
-  assert.deepEqual((await client.listTools(undefined, { cacheMode: "bypass" })).tools.map(tool => tool.name), ["calculator.calculate"]);
+  assert.deepEqual((await client.listTools(undefined, { cacheMode: "bypass" })).tools.map(tool => tool.name), ["calculator_calculate"]);
   const response = await f.app.inject({ method: "POST", url: "/api/admin/servers", headers: f.headers, payload: {
     serverId: "extra", displayName: "Extra tools", url: extra.config.url, transport: "streamable-http", enabled: true, authentication: { type: "none" },
   } });
@@ -1198,13 +1208,13 @@ test("administrator registers a durable upstream visible to an already connected
   assert.equal((await f.app.inject({ url: "/api/admin/servers", headers: f.headers })).json().servers.length, 2);
   assert.deepEqual((await f.app.inject({ url: "/api/admin/servers/extra", headers: f.headers })).json().server, created);
   const tools = (await client.listTools(undefined, { cacheMode: "bypass" })).tools;
-  assert.deepEqual(tools.map(tool => tool.name), ["calculator.calculate", "extra.echo"]);
+  assert.deepEqual(tools.map(tool => tool.name), ["calculator_calculate", "extra_echo"]);
   const schema = tools[1].inputSchema;
   assert.equal(tools[1].description, "Echo a value");
   assert.deepEqual(schema.required, ["value"]);
   assert.deepEqual((await f.app.inject({ url: "/api/admin/servers/extra/tools", headers: f.headers })).json().tools, [tools[1]]);
-  assert.deepEqual((await client.callTool({ name: "extra.echo", arguments: { value: 42 } })).structuredContent, { value: 42 });
-  assert.equal((await client.callTool({ name: "extra.echo", arguments: { value: -1 } })).isError, true);
+  assert.deepEqual((await client.callTool({ name: "extra_echo", arguments: { value: 42 } })).structuredContent, { value: 42 });
+  assert.equal((await client.callTool({ name: "extra_echo", arguments: { value: -1 } })).isError, true);
   assert.equal(records.at(-1)?.outcome, "tool_error");
   assert.equal(records.at(-1)?.userId, f.userId);
   assert.equal(records.at(-1)?.keyId, f.key.id);
@@ -1317,7 +1327,7 @@ test("offline creation is durable, leaves unrelated requests responsive and reco
   assert.equal(observed.status, "connecting");
   assert.equal(observed.toolCount, 0);
   assert.equal((await f.app.inject({ url: "/api/auth/me", headers: f.headers })).statusCode, 200);
-  assert.deepEqual((await client.callTool({ name: "calculator.calculate", arguments: { a: 6, b: 7 } })).content, [{ type: "text", text: "42" }]);
+  assert.deepEqual((await client.callTool({ name: "calculator_calculate", arguments: { a: 6, b: 7 } })).content, [{ type: "text", text: "42" }]);
   release();
   const response = await pending;
   assert.equal(response.statusCode, 201, response.body);
@@ -1328,17 +1338,17 @@ test("offline creation is durable, leaves unrelated requests responsive and reco
   online = true;
   const deadline = Date.now() + 35000;
   while (Date.now() < deadline) {
-    if ((await client.listTools(undefined, { cacheMode: "bypass" })).tools.some(tool => tool.name === "extra.calculate")) break;
+    if ((await client.listTools(undefined, { cacheMode: "bypass" })).tools.some(tool => tool.name === "extra_calculate")) break;
     await new Promise(resolve => setTimeout(resolve, 100));
   }
-  assert.ok((await client.listTools(undefined, { cacheMode: "bypass" })).tools.some(tool => tool.name === "extra.calculate"));
-  assert.equal((await client.callTool({ name: "extra.calculate", arguments: { a: 1, b: 2 } })).isError, undefined);
+  assert.ok((await client.listTools(undefined, { cacheMode: "bypass" })).tools.some(tool => tool.name === "extra_calculate"));
+  assert.equal((await client.callTool({ name: "extra_calculate", arguments: { a: 1, b: 2 } })).isError, undefined);
   assert.equal(calls, 1);
   assert.equal(records.at(-1)?.outcome, "success");
   assert.equal(records.at(-1)?.keyId, f.key.id);
   await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "member" } });
-  assert.deepEqual((await client.listTools(undefined, { cacheMode: "bypass" })).tools.map(tool => tool.name), ["calculator.calculate"]);
-  await assert.rejects(client.callTool({ name: "extra.calculate", arguments: { a: 1, b: 2 } }), ProtocolError);
+  assert.deepEqual((await client.listTools(undefined, { cacheMode: "bypass" })).tools.map(tool => tool.name), ["calculator_calculate"]);
+  await assert.rejects(client.callTool({ name: "extra_calculate", arguments: { a: 1, b: 2 } }), ProtocolError);
   assert.equal(calls, 1);
   assert.equal((await f.app.inject({ method: "DELETE", url: `/api/keys/${f.key.id}`, headers: f.headers })).statusCode, 204);
   await assert.rejects(client.listTools(undefined, { cacheMode: "bypass" }), httpFailure(401));
@@ -1380,7 +1390,7 @@ test("executeTool rejects a mapping from an older generation and ignores its lat
   registry.register(extra.config);
   await registry.connect("extra");
   const resolver = new AggregatedToolResolver(new ToolAggregator(registry), registry);
-  const old = await resolver.resolve("extra.echo");
+  const old = await resolver.resolve("extra_echo");
   assert.ok(old);
   const previousClient = registry.getClient("extra")!;
   await registry.connect("extra");
@@ -1389,7 +1399,7 @@ test("executeTool rejects a mapping from an older generation and ignores its lat
   const records: AuditRecord[] = [];
   const dependencies = { resolver: { async resolve() { return old; } }, invoker: new McpUpstreamInvoker(registry),
     auditLogger: { async write(record: AuditRecord) { records.push(record); } } };
-  const request = { identity: { userId: "admin", role: "admin" as const, keyId: "key" }, toolName: "extra.echo", arguments: {}, requestId: "stale" };
+  const request = { identity: { userId: "admin", role: "admin" as const, keyId: "key" }, toolName: "extra_echo", arguments: {}, requestId: "stale" };
   await assert.rejects(executeTool(request, dependencies), { name: "UpstreamUnavailableError" });
   assert.equal(calls, 0);
   assert.equal(records[0].outcome, "upstream_unavailable");
@@ -1420,8 +1430,8 @@ test("duplicate discovered names cannot publish a partial catalog or disrupt hea
   assert.equal(response.statusCode, 201, response.body);
   assert.equal(response.json().server.status, "unreachable");
   assert.equal(response.json().server.toolCount, 0);
-  assert.deepEqual((await client.listTools(undefined, { cacheMode: "bypass" })).tools.map(tool => tool.name), ["calculator.calculate"]);
-  assert.deepEqual((await client.callTool({ name: "calculator.calculate", arguments: { a: 6, b: 7 } })).content, [{ type: "text", text: "42" }]);
+  assert.deepEqual((await client.listTools(undefined, { cacheMode: "bypass" })).tools.map(tool => tool.name), ["calculator_calculate"]);
+  assert.deepEqual((await client.callTool({ name: "calculator_calculate", arguments: { a: 6, b: 7 } })).content, [{ type: "text", text: "42" }]);
 });
 
 test("a transport failure from the current client remains effective after a successful catalog refresh", async (t) => {
@@ -1458,29 +1468,29 @@ test("lifecycle APIs stop stale MCP calls, rediscover on enable and preserve dis
   const client = await f.connect();
   const mutate = (name: string, action: string) => f.app.inject({ method: action === "remove" ? "DELETE" : "POST",
     url: `/api/admin/servers/${name}${action === "remove" ? "" : `/${action}`}`, headers: f.headers });
-  await client.callTool({ name: "calculator.calculate", arguments: {} });
+  await client.callTool({ name: "calculator_calculate", arguments: {} });
   assert.equal(calls, 1);
   const disabled = await mutate("calculator", "disable");
   assert.equal(disabled.statusCode, 200, disabled.body);
   assert.equal(disabled.json().server.status, "disabled");
   assert.equal(disabled.json().server.enabled, false);
   assert.equal(disabled.json().server.toolCount, 0);
-  assert.deepEqual((await client.listTools(undefined, { cacheMode: "bypass" })).tools.map(tool => tool.name), ["time.current"]);
-  await assert.rejects(client.callTool({ name: "calculator.calculate", arguments: {} }), ProtocolError);
+  assert.deepEqual((await client.listTools(undefined, { cacheMode: "bypass" })).tools.map(tool => tool.name), ["time_current"]);
+  await assert.rejects(client.callTool({ name: "calculator_calculate", arguments: {} }), ProtocolError);
   assert.equal(calls, 1);
-  await client.callTool({ name: "time.current", arguments: {} });
+  await client.callTool({ name: "time_current", arguments: {} });
   description = "Fresh after enable";
   const enabled = await mutate("calculator", "enable");
   assert.equal(enabled.statusCode, 200, enabled.body);
   assert.equal(enabled.json().server.status, "connected");
-  assert.equal((await client.listTools(undefined, { cacheMode: "bypass" })).tools.find(tool => tool.name === "calculator.calculate")?.description, description);
-  await client.callTool({ name: "calculator.calculate", arguments: {} });
+  assert.equal((await client.listTools(undefined, { cacheMode: "bypass" })).tools.find(tool => tool.name === "calculator_calculate")?.description, description);
+  await client.callTool({ name: "calculator_calculate", arguments: {} });
   assert.equal(calls, 2);
   assert.equal((await mutate("calculator", "disable")).statusCode, 200);
   assert.equal((await mutate("time", "remove")).statusCode, 204);
   assert.equal((await mutate("time", "remove")).statusCode, 404);
   for (const action of ["enable", "disable", "remove"]) assert.equal((await mutate("missing", action)).statusCode, 404);
-  await assert.rejects(client.callTool({ name: "time.current", arguments: {} }), ProtocolError);
+  await assert.rejects(client.callTool({ name: "time_current", arguments: {} }), ProtocolError);
   await client.close();
   await f.app.close();
   const restarted = await createGatewayApp({ mongodbUri: f.mongodbUri, upstreams: configs,
@@ -1511,9 +1521,9 @@ test("lifecycle mutations require eligible administrator sessions, trusted Origi
     }
     await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { requiredPasswordChange: false, status: "active", role: "member" } });
   }
-  assert.equal((await client.callTool({ name: "calculator.calculate", arguments: { a: 6, b: 7 } })).isError, undefined);
+  assert.equal((await client.callTool({ name: "calculator_calculate", arguments: { a: 6, b: 7 } })).isError, undefined);
   assert.equal((await f.app.inject({ method: "DELETE", url: `/api/keys/${f.key.id}`, headers: f.headers })).statusCode, 204);
-  await assert.rejects(client.callTool({ name: "calculator.calculate", arguments: { a: 6, b: 7 } }), httpFailure(401));
+  await assert.rejects(client.callTool({ name: "calculator_calculate", arguments: { a: 6, b: 7 } }), httpFailure(401));
 });
 
 test("lifecycle persistence failures return non-success without changing callable state", async t => {
@@ -1531,18 +1541,18 @@ test("lifecycle persistence failures return non-success without changing callabl
     const response = await mutate(action);
     assert.equal(response.statusCode, 503, response.body);
     assert.deepEqual(response.json(), { error: "Authentication unavailable" });
-    await client.callTool({ name: "calculator.calculate", arguments: {} });
+    await client.callTool({ name: "calculator_calculate", arguments: {} });
   }
   assert.equal(calls, 2);
   await f.db.db!.command({ collMod: "upstream_registrations", validator: {}, validationLevel: "strict" });
   assert.equal((await mutate("disable")).statusCode, 200);
   await f.db.db!.command({ collMod: "upstream_registrations", validator: { enabled: false }, validationLevel: "strict" });
   assert.equal((await mutate("enable")).statusCode, 503);
-  await assert.rejects(client.callTool({ name: "calculator.calculate", arguments: {} }), ProtocolError);
+  await assert.rejects(client.callTool({ name: "calculator_calculate", arguments: {} }), ProtocolError);
   assert.equal(calls, 2);
   await f.db.db!.command({ collMod: "upstream_registrations", validator: {}, validationLevel: "strict" });
   assert.equal((await mutate("enable")).statusCode, 200);
-  await client.callTool({ name: "calculator.calculate", arguments: {} });
+  await client.callTool({ name: "calculator_calculate", arguments: {} });
   assert.equal(calls, 3);
 });
 
@@ -1578,13 +1588,13 @@ test("concurrent enable and removal serialize while delayed discovery leaves hea
   let removed = false;
   const removing = f.app.inject({ method: "DELETE", url: "/api/admin/servers/extra", headers: f.headers }).then(value => { removed = true; return value; });
   assert.equal((await f.app.inject({ url: "/api/auth/me", headers: f.headers })).statusCode, 200);
-  await client.callTool({ name: "calculator.calculate", arguments: { a: 6, b: 7 } });
+  await client.callTool({ name: "calculator_calculate", arguments: { a: 6, b: 7 } });
   assert.equal(removed, false);
   discovery.release();
   assert.equal((await enabling).statusCode, 200);
   assert.equal((await removing).statusCode, 204);
-  assert.deepEqual((await client.listTools(undefined, { cacheMode: "bypass" })).tools.map(tool => tool.name), ["calculator.calculate"]);
-  await assert.rejects(client.callTool({ name: "extra.echo", arguments: {} }), ProtocolError);
+  assert.deepEqual((await client.listTools(undefined, { cacheMode: "bypass" })).tools.map(tool => tool.name), ["calculator_calculate"]);
+  await assert.rejects(client.callTool({ name: "extra_echo", arguments: {} }), ProtocolError);
   assert.equal(calls, 0);
   assert.equal((await disable()).statusCode, 404);
   assert.equal((await f.app.inject({ method: "POST", url: "/api/admin/servers/extra/enable", headers: f.headers })).statusCode, 404);
@@ -1616,7 +1626,7 @@ test("disable barriers reject resolved mappings and delayed automatic discovery 
       registry.register(extra.config);
       await registry.connect("extra");
       const resolver = new AggregatedToolResolver(new ToolAggregator(registry), registry);
-      const mapping = await resolver.resolve("extra.echo");
+      const mapping = await resolver.resolve("extra_echo");
       assert.ok(mapping);
       const previousClient = registry.getClient("extra")!;
       delay = true;
@@ -1626,7 +1636,7 @@ test("disable barriers reject resolved mappings and delayed automatic discovery 
       await discovery.entered;
       const disabling = registry.disable("extra");
       const records: AuditRecord[] = [];
-      const request = { identity: { userId: "admin", role: "admin" as const, keyId: "key" }, toolName: "extra.echo", arguments: {}, requestId: "stale" };
+      const request = { identity: { userId: "admin", role: "admin" as const, keyId: "key" }, toolName: "extra_echo", arguments: {}, requestId: "stale" };
       const dependencies = { resolver: { async resolve() { return mapping; } }, invoker: new McpUpstreamInvoker(registry),
         auditLogger: { async write(record: AuditRecord) { records.push(record); } } };
       await assert.rejects(executeTool(request, dependencies), { name: "UpstreamUnavailableError" });
@@ -1636,7 +1646,7 @@ test("disable barriers reject resolved mappings and delayed automatic discovery 
       await disabling;
       registry.remove("extra");
       await registry.refreshAll();
-      assert.equal(await resolver.resolve("extra.echo"), null);
+      assert.equal(await resolver.resolve("extra_echo"), null);
       await assert.rejects(executeTool(request, dependencies), { name: "UpstreamUnavailableError" });
       assert.equal(calls, 0);
       assert.deepEqual(records.map(record => record.outcome), ["upstream_unavailable", "upstream_unavailable"]);
@@ -1676,7 +1686,7 @@ test("enable rediscovers with current destination checks and offline servers sta
   });
   await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
   const client = await f.connect();
-  await client.callTool({ name: "extra.echo", arguments: {} });
+  await client.callTool({ name: "extra_echo", arguments: {} });
   assert.equal(calls, 1);
   assert.equal((await f.app.inject({ method: "POST", url: "/api/admin/servers/extra/disable", headers: f.headers })).statusCode, 200);
   online = false;
@@ -1688,9 +1698,9 @@ test("enable rediscovers with current destination checks and offline servers sta
   assert.equal(response.json().server.status, "unreachable");
   assert.equal(response.json().server.lastError, "Upstream unavailable");
   assert.equal(response.json().server.toolCount, 0);
-  assert.deepEqual((await client.listTools(undefined, { cacheMode: "bypass" })).tools.map(tool => tool.name), ["calculator.calculate"]);
-  await client.callTool({ name: "calculator.calculate", arguments: { a: 6, b: 7 } });
-  await assert.rejects(client.callTool({ name: "extra.echo", arguments: {} }), ProtocolError);
+  assert.deepEqual((await client.listTools(undefined, { cacheMode: "bypass" })).tools.map(tool => tool.name), ["calculator_calculate"]);
+  await client.callTool({ name: "calculator_calculate", arguments: { a: 6, b: 7 } });
+  await assert.rejects(client.callTool({ name: "extra_echo", arguments: {} }), ProtocolError);
   assert.equal(calls, 1);
   const deniedRefresh = await f.app.inject({ method: "POST", url: "/api/admin/servers/extra/refresh", headers: f.headers });
   assert.equal(deniedRefresh.statusCode, 200);
@@ -1698,7 +1708,7 @@ test("enable rediscovers with current destination checks and offline servers sta
   assert.equal(deniedRefresh.json().server.configurationRevision, response.json().server.configurationRevision);
   online = true;
   assert.equal((await f.app.inject({ method: "POST", url: "/api/admin/servers/extra/refresh", headers: f.headers })).json().server.status, "connected");
-  await client.callTool({ name: "extra.echo", arguments: {} });
+  await client.callTool({ name: "extra_echo", arguments: {} });
   assert.equal(calls, 2);
 });
 
@@ -1718,7 +1728,7 @@ test("disable drains an already-started call while blocking new invocations and 
   t.after(call.release);
   await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
   const client = await f.connect();
-  const started = client.callTool({ name: "calculator.calculate", arguments: {} });
+  const started = client.callTool({ name: "calculator_calculate", arguments: {} });
   await call.entered;
   let completed = false;
   const disabling = f.app.inject({ method: "POST", url: "/api/admin/servers/calculator/disable", headers: f.headers }).then(response => { completed = true; return response; });
@@ -1730,7 +1740,7 @@ test("disable drains an already-started call while blocking new invocations and 
   }
   assert.equal((await f.app.inject({ url: "/api/admin/servers/calculator", headers: f.headers })).json().server.enabled, false);
   assert.equal(completed, false);
-  await assert.rejects(client.callTool({ name: "calculator.calculate", arguments: {} }), ProtocolError);
+  await assert.rejects(client.callTool({ name: "calculator_calculate", arguments: {} }), ProtocolError);
   assert.equal(calls, 1);
   call.release();
   assert.deepEqual((await started).content, [{ type: "text", text: "finished" }]);
@@ -1755,7 +1765,7 @@ test("failed removal deletion leaves a durable disabled registration that can be
   assert.equal(detail.enabled, false);
   assert.equal(detail.status, "disabled");
   assert.equal(detail.toolCount, 0);
-  await assert.rejects(client.callTool({ name: "calculator.calculate", arguments: {} }), ProtocolError);
+  await assert.rejects(client.callTool({ name: "calculator_calculate", arguments: {} }), ProtocolError);
   assert.equal(calls, 0);
   await client.close();
   await f.app.close();
@@ -1782,7 +1792,7 @@ test("failed connection cleanup keeps the barrier and retained connection availa
   registry.register(extra.config);
   await registry.connect("extra");
   const resolver = new AggregatedToolResolver(new ToolAggregator(registry), registry);
-  const mapping = await resolver.resolve("extra.echo");
+  const mapping = await resolver.resolve("extra_echo");
   assert.ok(mapping);
   const client = registry.getClient("extra")!;
   const close = client.close.bind(client);
@@ -1797,7 +1807,7 @@ test("failed connection cleanup keeps the barrier and retained connection availa
   client.close = close;
   await registry.disable("extra");
   registry.remove("extra");
-  assert.equal(await resolver.resolve("extra.echo"), null);
+  assert.equal(await resolver.resolve("extra_echo"), null);
 });
 
 test("server edits preserve display-only connections and replace endpoints for a continuing MCP client", async t => {
@@ -1827,12 +1837,12 @@ test("server edits preserve display-only connections and replace endpoints for a
   assert.equal(display.json().server.displayName, "Renamed calculator");
   assert.equal(display.json().server.lastConnectedAt, before.lastConnectedAt);
   assert.equal(discoveries, 1);
-  assert.deepEqual((await client.callTool({ name: "calculator.calculate" })).content, [{ type: "text", text: "old" }]);
+  assert.deepEqual((await client.callTool({ name: "calculator_calculate" })).content, [{ type: "text", text: "old" }]);
   const swapped = await patch({ url: replacement.config.url });
   assert.equal(swapped.statusCode, 200, swapped.body);
   assert.equal(swapped.json().server.serverId, "calculator");
   assert.equal(swapped.json().server.configurationRevision, 3);
-  assert.deepEqual((await client.callTool({ name: "calculator.calculate" })).content, [{ type: "text", text: "new" }]);
+  assert.deepEqual((await client.callTool({ name: "calculator_calculate" })).content, [{ type: "text", text: "new" }]);
   assert.equal(oldCalls, 1);
   const restarted = await createGatewayApp({ mongodbUri: f.mongodbUri, upstreams: [old.config],
     destinations: { allowLoopback: true, rules: [old, replacement, time].map(upstream => ({
@@ -1849,9 +1859,9 @@ test("server edits preserve display-only connections and replace endpoints for a
   assert.equal(failed.statusCode, 200);
   assert.equal(failed.json().server.status, "unreachable");
   assert.equal(failed.json().server.toolCount, 0);
-  assert.deepEqual((await client.listTools(undefined, { cacheMode: "bypass" })).tools.map(tool => tool.name), ["time.current"]);
-  await client.callTool({ name: "time.current" });
-  await assert.rejects(client.callTool({ name: "calculator.calculate" }), ProtocolError);
+  assert.deepEqual((await client.listTools(undefined, { cacheMode: "bypass" })).tools.map(tool => tool.name), ["time_current"]);
+  await client.callTool({ name: "time_current" });
+  await assert.rejects(client.callTool({ name: "calculator_calculate" }), ProtocolError);
   assert.equal(oldCalls, 1);
 });
 
@@ -1899,7 +1909,7 @@ test("server edit persistence failure leaves desired configuration and the calla
   assert.equal(unchanged.url, calculator.config.url);
   assert.equal(unchanged.displayName, "calculator");
   assert.equal(unchanged.configurationRevision, 1);
-  assert.deepEqual((await client.callTool({ name: "calculator.calculate", arguments: { a: 6, b: 7 } })).content,
+  assert.deepEqual((await client.callTool({ name: "calculator_calculate", arguments: { a: 6, b: 7 } })).content,
     [{ type: "text", text: "42" }]);
 });
 
@@ -1928,8 +1938,8 @@ test("competing server edits serialize desired revisions while healthy MCP reque
   let secondCompleted = false;
   const second = patch({ displayName: "Final display" }).then(response => { secondCompleted = true; return response; });
   assert.equal((await f.app.inject({ url: "/api/admin/servers/extra/tools", headers: f.headers })).json().tools.length, 0);
-  await assert.rejects(client.callTool({ name: "extra.echo" }), ProtocolError);
-  await client.callTool({ name: "calculator.calculate", arguments: { a: 6, b: 7 } });
+  await assert.rejects(client.callTool({ name: "extra_echo" }), ProtocolError);
+  await client.callTool({ name: "calculator_calculate", arguments: { a: 6, b: 7 } });
   assert.equal(secondCompleted, false);
   discovery.release();
   assert.equal((await first).statusCode, 200);
@@ -1939,7 +1949,7 @@ test("competing server edits serialize desired revisions while healthy MCP reque
   assert.equal(final.json().server.displayName, "Final display");
   assert.equal(final.json().server.configurationRevision, 3);
   assert.equal(final.json().server.status, "connected");
-  await client.callTool({ name: "extra.echo" });
+  await client.callTool({ name: "extra_echo" });
   assert.equal(oldCalls, 0);
 });
 
@@ -1973,7 +1983,7 @@ test("endpoint replacement rejects stale mappings, delayed old discovery and lat
       registry.register(old.config);
       await registry.connect("extra");
       const resolver = new AggregatedToolResolver(new ToolAggregator(registry), registry);
-      const mapping = await resolver.resolve("extra.echo");
+      const mapping = await resolver.resolve("extra_echo");
       assert.ok(mapping);
       const previousClient = registry.getClient("extra")!;
       delay = true;
@@ -1981,7 +1991,7 @@ test("endpoint replacement rejects stale mappings, delayed old discovery and lat
       await discovery.entered;
       const replacing = registry.reconfigure({ ...old.config, url: replacement.config.url, configurationRevision: 2 });
       const records: AuditRecord[] = [];
-      const request = { identity: { userId: "admin", role: "admin" as const, keyId: "key" }, toolName: "extra.echo", arguments: {}, requestId: "replacement" };
+      const request = { identity: { userId: "admin", role: "admin" as const, keyId: "key" }, toolName: "extra_echo", arguments: {}, requestId: "replacement" };
       const dependencies = { resolver: { async resolve() { return mapping; } }, invoker: new McpUpstreamInvoker(registry),
         auditLogger: { async write(record: AuditRecord) { records.push(record); } } };
       await assert.rejects(executeTool(request, dependencies), { name: "UpstreamUnavailableError" });
@@ -2024,7 +2034,7 @@ test("HTTP endpoint replacement drains a delayed failing old call without poison
   t.after(failure.release);
   await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
   const client = await f.connect();
-  const failing = client.callTool({ name: "extra.echo" });
+  const failing = client.callTool({ name: "extra_echo" });
   await failure.entered;
   const replacing = f.app.inject({ method: "PATCH", url: "/api/admin/servers/extra", headers: f.headers,
     payload: { url: replacement.config.url } }).then(response => response);
@@ -2040,17 +2050,17 @@ test("HTTP endpoint replacement drains a delayed failing old call without poison
     await new Promise(resolve => setTimeout(resolve, 10));
   }
   assert.ok(withdrawn, "Persisted replacement must withdraw the old catalog before draining calls");
-  await assert.rejects(client.callTool({ name: "extra.echo" }), ProtocolError);
-  await client.callTool({ name: "calculator.calculate", arguments: { a: 6, b: 7 } });
+  await assert.rejects(client.callTool({ name: "extra_echo" }), ProtocolError);
+  await client.callTool({ name: "calculator_calculate", arguments: { a: 6, b: 7 } });
   failure.release();
   const edited = await replacing;
   assert.equal(edited.statusCode, 200, edited.body);
   assert.equal((await failing).isError, true);
   assert.equal(edited.json().server.status, "connected");
   assert.equal((await f.app.inject({ url: "/api/admin/servers/extra", headers: f.headers })).json().server.status, "connected");
-  assert.deepEqual((await client.callTool({ name: "extra.echo" })).content, [{ type: "text", text: "replacement" }]);
+  assert.deepEqual((await client.callTool({ name: "extra_echo" })).content, [{ type: "text", text: "replacement" }]);
   assert.equal(oldCalls, 1);
-  assert.equal(records.filter(record => record.toolName === "extra.echo" && record.outcome === "upstream_error").length, 1);
+  assert.equal(records.filter(record => record.toolName === "extra_echo" && record.outcome === "upstream_error").length, 1);
 });
 
 
@@ -2077,7 +2087,7 @@ test("approved bearer Secret authenticates only its upstream through dashboard a
   assert.equal(response.statusCode, 201, response.body);
   assert.equal(response.json().server.status, "connected");
   const client = await f.connect();
-  assert.equal((await client.callTool({ name: "extra.echo" })).isError, undefined);
+  assert.equal((await client.callTool({ name: "extra_echo" })).isError, undefined);
   assert.ok(seen.length > 0);
   assert.ok(seen.every(value => value === `Bearer ${secret}` && !value.includes(f.rawKey)));
   assert.ok(!JSON.stringify([response.json(), records, await f.db.collection("upstream_registrations").find().toArray()]).includes(secret));
@@ -2151,7 +2161,7 @@ test("credential edits retire old authentication and reconnect rotation resolves
     authentication: { type: "bearer", secretRef: first },
   } });
   assert.equal(created.statusCode, 201, created.body);
-  await client.callTool({ name: "extra.echo" });
+  await client.callTool({ name: "extra_echo" });
   // Failure replacing the reference must withdraw the old credential/catalog.
   readFailure = true;
   const failed = await request("PATCH", "", { authentication: { type: "bearer", secretRef: second } });
@@ -2159,9 +2169,9 @@ test("credential edits retire old authentication and reconnect rotation resolves
   assert.equal(failed.json().server.status, "unreachable");
   assert.equal(failed.json().server.toolCount, 0);
   const afterFailure = seen.length;
-  await assert.rejects(client.callTool({ name: "extra.echo" }), ProtocolError);
+  await assert.rejects(client.callTool({ name: "extra_echo" }), ProtocolError);
   assert.equal(seen.length, afterFailure);
-  await client.callTool({ name: "calculator.calculate" });
+  await client.callTool({ name: "calculator_calculate" });
   // Recovery resolves again and sends only the custom header, never stale bearer.
   readFailure = false;
   value = "synthetic-second-22";
@@ -2169,7 +2179,7 @@ test("credential edits retire old authentication and reconnect rotation resolves
   const custom = await request("PATCH", "", { authentication: { type: "header", secretRef: second, headerName: "X-Upstream-Token" } });
   assert.equal(custom.json().server.status, "connected", custom.body);
   const afterCustom = seen.length;
-  await client.callTool({ name: "extra.echo" });
+  await client.callTool({ name: "extra_echo" });
   assert.ok(seen.slice(afterCustom).every(headers => headers.custom === value && headers.bearer === undefined));
   await request("POST", "/disable");
   value = "synthetic-rotated-22";
@@ -2178,7 +2188,7 @@ test("credential edits retire old authentication and reconnect rotation resolves
   const enabled = await request("POST", "/enable");
   assert.equal(enabled.json().server.status, "connected");
   assert.equal(reads, beforeRotation + 1);
-  await client.callTool({ name: "extra.echo" });
+  await client.callTool({ name: "extra_echo" });
   assert.equal(seen.at(-1)?.custom, value);
   // Invalid Secret contents fail closed before HTTP and leave the healthy server usable.
   await request("POST", "/disable");
@@ -2191,7 +2201,7 @@ test("credential edits retire old authentication and reconnect rotation resolves
   expected.value = value;
   const recovered = await request("POST", "/refresh");
   assert.equal(recovered.json().server.status, "connected", recovered.body);
-  await client.callTool({ name: "extra.echo" });
+  await client.callTool({ name: "extra_echo" });
   assert.equal(seen.at(-1)?.custom, value);
   // Restart resolves persisted references with the current value, rather than storing headers.
   await f.app.close();
@@ -2247,7 +2257,7 @@ test("authenticated upstream redirects cannot disclose credentials and failed Se
     assert.ok(!refreshed.body.includes(failure));
     assert.equal(redirectRequests, before);
     assert.equal(destinationCalls, 0);
-    await client.callTool({ name: "calculator.calculate", arguments: { a: 6, b: 7 } });
+    await client.callTool({ name: "calculator_calculate", arguments: { a: 6, b: 7 } });
   }
 });
 
@@ -2272,7 +2282,7 @@ test("administrator reads durable safe tool history across gateway restart", asy
   assert.equal((await f.app.inject({ url: "/api/admin/audit" })).statusCode, 401);
   await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
   const client = await f.connect();
-  const result = await client.callTool({ name: "calculator.calculate", arguments: { a: 6, b: 7 } });
+  const result = await client.callTool({ name: "calculator_calculate", arguments: { a: 6, b: 7 } });
   assert.deepEqual(result.content, [{ type: "text", text: "42" }]);
   const response = await f.app.inject({ url: "/api/admin/audit?page=1&limit=1", headers: f.headers });
   assert.equal(response.statusCode, 200, response.body);
@@ -2285,7 +2295,7 @@ test("administrator reads durable safe tool history across gateway restart", asy
   assert.equal(row.keyId, f.key.id); assert.equal(row.authenticationOrigin, "gateway_api_key");
   assert.equal(row.upstreamName, "calculator"); assert.equal(row.upstreamDisplayName, "calculator");
   assert.match(row.upstreamId, /^[a-f0-9]{24}$/);
-  assert.equal(row.toolName, "calculator.calculate"); assert.equal(row.outcome, "success");
+  assert.equal(row.toolName, "calculator_calculate"); assert.equal(row.outcome, "success");
   assert.match(row.attemptId, /^[a-f0-9-]{36}$/); assert.ok(row.requestId);
   assert.ok(Number.isFinite(Date.parse(row.timestamp))); assert.ok(row.durationMs >= 0);
   assert.deepEqual(Object.keys(row).sort(), ["id", "attemptId", "requestId", "userId", "userEmail", "keyId", "authenticationOrigin",
@@ -2311,7 +2321,7 @@ test("audit preserves historical attribution and MCP tool errors with bounded de
   await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
   const client = await f.connect();
   for (let index = 0; index < 3; index++) {
-    const result = await client.callTool({ name: "calculator.calculate", arguments: { secret: "secret-argument" } });
+    const result = await client.callTool({ name: "calculator_calculate", arguments: { secret: "secret-argument" } });
     assert.equal(result.isError, true);
     assert.deepEqual(result.structuredContent, { privateValue: "secret-result" });
   }
@@ -2357,7 +2367,7 @@ test("MongoDB audit-write rejection signals safely without replacing a tool resu
   await f.db.db!.command({ collMod: "tool_audit", validator: { $expr: { $eq: [1, 0] } }, validationLevel: "strict" });
   const signals: unknown[][] = [];
   t.mock.method(console, "error", (...args: unknown[]) => { signals.push(args); });
-  const result = await client.callTool({ name: "woocommerce.create_product" });
+  const result = await client.callTool({ name: "woocommerce_create_product" });
   assert.deepEqual(result.structuredContent, { id: 42 }); assert.equal(result.isError, undefined); assert.equal(writes, 1);
   assert.equal(signals.length, 1);
   assert.equal(signals[0].length, 1);
@@ -2366,7 +2376,7 @@ test("MongoDB audit-write rejection signals safely without replacing a tool resu
   assert.equal(signal.event, "audit_write_failed"); assert.match(signal.attemptId, /^[a-f0-9-]{36}$/);
   assert.deepEqual((await f.app.inject({ url: "/api/admin/audit", headers: f.headers })).json().records, []);
   await f.db.db!.command({ collMod: "tool_audit", validator: {} });
-  await client.callTool({ name: "woocommerce.create_product" });
+  await client.callTool({ name: "woocommerce_create_product" });
   assert.equal(writes, 2);
   assert.equal((await f.app.inject({ url: "/api/admin/audit", headers: f.headers })).json().records.length, 1);
 });
@@ -2398,10 +2408,10 @@ test("shared execution records real dashboard-session origin, rejections and una
   const dependencies = { resolver: new AggregatedToolResolver(new ToolAggregator(registry), registry),
     invoker: new McpUpstreamInvoker(registry), auditLogger: storage.audit,
     upstreamAttribution: storage.upstreamRegistrations.auditAttribution };
-  const request = { identity, toolName: "calculator.calculate", arguments: { a: 6, b: 7 }, requestId: "session-request" };
+  const request = { identity, toolName: "calculator_calculate", arguments: { a: 6, b: 7 }, requestId: "session-request" };
   assert.deepEqual((await executeTool(request, dependencies)).result.content, [{ type: "text", text: "42" }]);
-  await assert.rejects(executeTool({ ...request, toolName: "calculator.unknown" }, dependencies), { name: "ToolNotFoundError" });
-  await assert.rejects(executeTool({ ...request, identity: { ...identity, role: "member" }, toolName: "woocommerce.create_product" }, dependencies), { name: "AuthorizationError" });
+  await assert.rejects(executeTool({ ...request, toolName: "calculator_unknown" }, dependencies), { name: "ToolNotFoundError" });
+  await assert.rejects(executeTool({ ...request, identity: { ...identity, role: "member" }, toolName: "woocommerce_create_product" }, dependencies), { name: "AuthorizationError" });
   await registry.markUnreachable("calculator", "Test outage");
   await assert.rejects(executeTool(request, dependencies), { name: "UpstreamUnavailableError" });
   const response = await f.app.inject({ url: "/api/admin/audit", headers: f.headers });
@@ -2409,7 +2419,7 @@ test("shared execution records real dashboard-session origin, rejections and una
   const rows: AuditRecord[] = response.json().records;
   assert.equal(rows.length, 4);
   assert.deepEqual(rows.map(row => row.outcome).sort(), ["not_found", "success", "unauthorized", "upstream_unavailable"]);
-  const filtered = await f.app.inject({ url: `/api/admin/audit?userId=${f.userId}&toolName=calculator.calculate&outcome=success&from=2000-01-01T00:00:00Z&to=2100-01-01T00:00:00Z`, headers: f.headers });
+  const filtered = await f.app.inject({ url: `/api/admin/audit?userId=${f.userId}&toolName=calculator_calculate&outcome=success&from=2000-01-01T00:00:00Z&to=2100-01-01T00:00:00Z`, headers: f.headers });
   assert.equal(filtered.statusCode, 200, filtered.body);
   assert.deepEqual(filtered.json().records, rows.filter(row => row.outcome === "success"));
   for (const query of ["userId=000000000000000000000000", "toolName=unknown", "outcome=tool_error", "from=2100-01-01T00:00:00Z", "to=2000-01-01T00:00:00Z"]) {
@@ -2444,15 +2454,15 @@ test("durable audit classifies upstream protocol failure and timeout while healt
   const f = await fixture(t, { upstreams: [upstream.config, calculator.config] });
   await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
   const client = await f.connect();
-  const timedOut = await client.callTool({ name: "woocommerce.create_product" }, { timeout: 15000 });
+  const timedOut = await client.callTool({ name: "woocommerce_create_product" }, { timeout: 15000 });
   assert.equal(timedOut.isError, true);
   assert.deepEqual(timedOut.content, [{ type: "text", text: "Upstream request timed out" }]);
   assert.equal(writes, 1);
-  await client.callTool({ name: "calculator.calculate", arguments: { a: 6, b: 7 } });
+  await client.callTool({ name: "calculator_calculate", arguments: { a: 6, b: 7 } });
   mode = "invalid";
   const refresh = await f.app.inject({ method: "POST", url: "/api/admin/servers/woocommerce/refresh", headers: f.headers });
   assert.equal(refresh.statusCode, 200);
-  const invalid = await client.callTool({ name: "woocommerce.create_product" });
+  const invalid = await client.callTool({ name: "woocommerce_create_product" });
   assert.equal(invalid.isError, true);
   assert.deepEqual(invalid.content, [{ type: "text", text: "Tool execution failed" }]);
   assert.equal(writes, 1);
@@ -2478,10 +2488,10 @@ test("SDK rejected tool attempts and normal execution each have one durable row"
       error => assert.ok(error instanceof ProtocolError),
     );
   }
-  await rejected("calculator.missing");
-  await rejected("woocommerce.create_product");
-  await rejected("calculator.calculate", { a: "private-invalid-argument", b: 7 });
-  await client.callTool({ name: "calculator.calculate", arguments: { a: 6, b: 7 } });
+  await rejected("calculator_missing");
+  await rejected("woocommerce_create_product");
+  await rejected("calculator_calculate", { a: "private-invalid-argument", b: 7 });
+  await client.callTool({ name: "calculator_calculate", arguments: { a: 6, b: 7 } });
   await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
   const response = await f.app.inject({ url: "/api/admin/audit", headers: f.headers });
   assert.equal(response.statusCode, 200);
@@ -2507,9 +2517,9 @@ test("identifiable unauthenticated calls have null attribution and malformed tra
   const f = await fixture(t, { upstreams: [calculator.config] });
   const client = await f.connect();
   await f.app.inject({ method: "DELETE", url: `/api/keys/${f.key.id}`, headers: f.headers });
-  await assert.rejects(client.callTool({ name: "calculator.calculate", arguments: { a: 6, b: 7 } }), httpFailure(401));
+  await assert.rejects(client.callTool({ name: "calculator_calculate", arguments: { a: 6, b: 7 } }), httpFailure(401));
   const body = { jsonrpc: "2.0", id: "same-client-id", method: "tools/call", params: {
-    name: "calculator.calculate", arguments: { a: "private-argument", userId: f.userId, role: "admin", keyId: f.key.id },
+    name: "calculator_calculate", arguments: { a: "private-argument", userId: f.userId, role: "admin", keyId: f.key.id },
     _meta: { attemptId: "forged-attempt", userId: f.userId },
   } };
   // A repeated client ID still describes independent server-owned attempts.
@@ -2542,7 +2552,7 @@ test("identifiable unauthenticated calls have null attribution and malformed tra
     assert.equal(row.userId, null); assert.equal(row.userEmail, null); assert.equal(row.keyId, null);
     assert.equal(row.authenticationOrigin, null); assert.equal(row.upstreamId, null);
     assert.equal(row.upstreamName, null); assert.equal(row.upstreamDisplayName, null);
-    assert.equal(row.toolName, "calculator.calculate"); assert.equal(row.outcome, "unauthenticated");
+    assert.equal(row.toolName, "calculator_calculate"); assert.equal(row.outcome, "unauthenticated");
     assert.match(row.attemptId, /^[a-f0-9-]{36}$/);
   }
   assert.equal((await f.app.inject({ url: "/api/admin/audit", headers: f.headers })).json().records.length, 4);
@@ -2559,7 +2569,7 @@ test("legacy HTTP SDK validation and concurrent repeated RPC IDs retain one row 
       authorization: `Bearer ${f.rawKey}`, "content-type": "application/json",
       accept: "application/json, text/event-stream", "mcp-protocol-version": "2025-03-26",
     }, body: JSON.stringify({ jsonrpc: "2.0", id: 42, method: "tools/call", params: {
-      name: "calculator.calculate", arguments: args,
+      name: "calculator_calculate", arguments: args,
     } }) });
     assert.equal(response.status, 200);
     return response.text();
@@ -2584,9 +2594,9 @@ test("rejected-attempt audit-write failure preserves authentication and SDK reje
   await f.db.db!.command({ collMod: "tool_audit", validator: { $expr: { $eq: [1, 0] } }, validationLevel: "strict" });
   const signals: unknown[][] = [];
   t.mock.method(console, "error", (...args: unknown[]) => { signals.push(args); });
-  await assert.rejects(client.callTool({ name: "calculator.missing" }), ProtocolError);
+  await assert.rejects(client.callTool({ name: "calculator_missing" }), ProtocolError);
   const response = await fetch(`${f.address}/mcp`, { method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "calculator.calculate" } }) });
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "calculator_calculate" } }) });
   assert.equal(response.status, 401); assert.deepEqual(await response.json(), { error: "Unauthorized" });
   // The HTTP denial can arrive while its bounded audit insert is completing.
   for (let retry = 0; signals.length < 2 && retry < 100; retry++) await new Promise(resolve => setTimeout(resolve, 10));
@@ -2598,7 +2608,7 @@ test("rejected-attempt audit-write failure preserves authentication and SDK reje
     assert.equal(parsed.event, "audit_write_failed"); assert.match(parsed.attemptId, /^[a-f0-9-]{36}$/);
   }
   await f.db.db!.command({ collMod: "tool_audit", validator: {} });
-  await client.callTool({ name: "calculator.calculate", arguments: { a: 6, b: 7 } });
+  await client.callTool({ name: "calculator_calculate", arguments: { a: 6, b: 7 } });
   await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
   const rows = (await f.app.inject({ url: "/api/admin/audit", headers: f.headers })).json().records;
   assert.equal(rows.length, 1); assert.equal(rows[0].outcome, "success");
@@ -2611,7 +2621,7 @@ test("gateway shutdown drains rejected-attempt audit inserts before closing Mong
   const f = await fixture(t, { upstreams: [calculator.config] });
   await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
   const client = await f.connect();
-  await assert.rejects(client.callTool({ name: "calculator.missing" }), ProtocolError);
+  await assert.rejects(client.callTool({ name: "calculator_missing" }), ProtocolError);
   await client.close();
   await f.app.close();
   const restarted = await createGatewayApp({ mongodbUri: f.mongodbUri, upstreams: [],
@@ -2638,8 +2648,8 @@ test("chat stops after an oversized UTF-8 tool result and preserves the complete
   provider.post("/completion", async () => {
     requests++;
     return { choices: [{ finish_reason: "tool_calls", message: { role: "assistant", tool_calls: [
-      { id: `large-${requests}`, type: "function", function: { name: "tool_0", arguments: '{}' } },
-      { id: `later-${requests}`, type: "function", function: { name: "tool_0", arguments: '{}' } },
+      { id: `large-${requests}`, type: "function", function: { name: "calculator_calculate", arguments: '{}' } },
+      { id: `later-${requests}`, type: "function", function: { name: "calculator_calculate", arguments: '{}' } },
     ] } }] };
   });
   const endpoint = `${await provider.listen({ host: "127.0.0.1", port: 0 })}/completion`;
@@ -2679,7 +2689,7 @@ test("running chat observes account, session and server changes before subsequen
             return { choices: [{ finish_reason: "stop", message: { role: "assistant", content: "Access changed" } }] };
           }
           if (timing === "next turn" && turn === 2) await withdraw();
-          const call = (id: string) => ({ id, type: "function", function: { name: "tool_0", arguments: JSON.stringify({ name: id }) } });
+          const call = (id: string) => ({ id, type: "function", function: { name: "woocommerce_create_product", arguments: JSON.stringify({ name: id }) } });
           return { choices: [{ finish_reason: "tool_calls", message: { role: "assistant", tool_calls:
             timing === "same response" ? [call("first"), call("second")] : [call(`turn-${turn}`)] } }] };
         });
@@ -2728,10 +2738,10 @@ test("chat enforces request, provider, context and call byte/count budgets at HT
     if (mode === "malformed") return { choices: [] };
     if (mode === "authentication") return reply.code(401).send({ error: "synthetic-provider-secret" });
     if (mode === "context") return { choices: [{ finish_reason: "tool_calls", message: { role: "assistant", content: "界".repeat(32_000), tool_calls: [
-      { id: `context-${requests}`, type: "function", function: { name: "tool_0", arguments: '{}' } },
+      { id: `context-${requests}`, type: "function", function: { name: "calculator_calculate", arguments: '{}' } },
     ] } }] };
     return { choices: [{ finish_reason: "tool_calls", message: { role: "assistant", tool_calls:
-      Array.from({ length: mode === "too-many" ? 9 : 8 }, (_, i) => ({ id: `call-${requests}-${i}`, type: "function", function: { name: "tool_0", arguments: '{}' } })) } }] };
+      Array.from({ length: mode === "too-many" ? 9 : 8 }, (_, i) => ({ id: `call-${requests}-${i}`, type: "function", function: { name: "calculator_calculate", arguments: '{}' } })) } }] };
   });
   const endpoint = `${await provider.listen({ host: "127.0.0.1", port: 0 })}/completion`;
   const f = await fixture(t, { upstreams: [calculator.config], chat: { apiKey: "synthetic-provider-secret", endpoint } });
@@ -2781,7 +2791,7 @@ test("provider timeout and client disconnect never replay a completed write", as
       return;
     }
     return { choices: [{ finish_reason: "tool_calls", message: { role: "assistant", tool_calls: [
-      { id: "write", type: "function", function: { name: "tool_0", arguments: '{}' } },
+      { id: "write", type: "function", function: { name: "woocommerce_create_product", arguments: '{}' } },
     ] } }] };
   });
   const endpoint = `${await provider.listen({ host: "127.0.0.1", port: 0 })}/completion`;
@@ -2813,7 +2823,7 @@ test("overall chat duration prevents dispatch from a delayed provider response",
   provider.post("/completion", async () => {
     t.mock.timers.tick(90_000);
     return { choices: [{ finish_reason: "tool_calls", message: { role: "assistant", tool_calls: [
-      { id: "too-late", type: "function", function: { name: "tool_0", arguments: '{}' } },
+      { id: "too-late", type: "function", function: { name: "calculator_calculate", arguments: '{}' } },
     ] } }] };
   });
   const endpoint = `${await provider.listen({ host: "127.0.0.1", port: 0 })}/completion`;
@@ -2845,7 +2855,7 @@ test("uncertain upstream write timeout is paired by ID and blocks a different wr
       return { choices: [{ finish_reason: "stop", message: { role: "assistant", content: "Inspect the store before trying again" } }] };
     }
     return { choices: [{ finish_reason: "tool_calls", message: { role: "assistant", tool_calls:
-      ["uncertain", "different-write"].map(id => ({ id, type: "function", function: { name: "tool_0", arguments: JSON.stringify({ name: id }) } })) } }] };
+      ["uncertain", "different-write"].map(id => ({ id, type: "function", function: { name: "woocommerce_create_product", arguments: JSON.stringify({ name: id }) } })) } }] };
   });
   const endpoint = `${await provider.listen({ host: "127.0.0.1", port: 0 })}/completion`;
   const f = await fixture(t, { upstreams: [commerce.config], chat: { apiKey: "synthetic-provider-secret", endpoint } });
@@ -2893,8 +2903,8 @@ test("queued calls cannot reach a server withdrawn during the same provider resp
         return { choices: [{ finish_reason: "stop", message: { role: "assistant", content: "Server withdrawn" } }] };
       }
       return { choices: [{ finish_reason: "tool_calls", message: { role: "assistant", tool_calls: [
-        { id: "withdraw", type: "function", function: { name: "tool_0", arguments: '{}' } },
-        { id: "queued-write", type: "function", function: { name: "tool_1", arguments: '{}' } },
+        { id: "withdraw", type: "function", function: { name: "calculator_calculate", arguments: '{}' } },
+        { id: "queued-write", type: "function", function: { name: "woocommerce_create_product", arguments: '{}' } },
       ] } }] };
     });
     const endpoint = `${await provider.listen({ host: "127.0.0.1", port: 0 })}/completion`;
@@ -2910,4 +2920,55 @@ test("queued calls cannot reach a server withdrawn during the same provider resp
     assert.deepEqual(response.json().calls.map((call: { outcome: string }) => call.outcome), ["success", "rejected"]);
     assert.equal(writes, 0);
   });
+});
+
+
+test("ambiguous public names fail closed in MCP and server inspection while healthy tools remain callable", async t => {
+  let ambiguousCalls = 0;
+  const shop = await controlledUpstream(t, "shop", server => {
+    server.registerTool("orders_list", {}, async () => { ambiguousCalls++; return { content: [] }; });
+  });
+  const other = await controlledUpstream(t, "shop_orders", server => {
+    server.registerTool("list", {}, async () => { ambiguousCalls++; return { content: [] }; });
+  });
+  const calculator = await calculatorUpstream(t);
+  const f = await fixture(t, { upstreams: [shop.config, other.config, calculator.config] });
+  await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
+  const client = await f.connect();
+  assert.deepEqual((await client.listTools()).tools.map(tool => tool.name), ["calculator_calculate"]);
+  await assert.rejects(client.callTool({ name: "shop_orders_list" }), ProtocolError);
+  assert.equal(ambiguousCalls, 0);
+  for (const serverId of ["shop", "shop_orders"]) {
+    assert.deepEqual((await f.app.inject({ url: `/api/admin/servers/${serverId}/tools`, headers: f.headers })).json().tools, []);
+    assert.equal((await f.app.inject({ url: `/api/admin/servers/${serverId}`, headers: f.headers })).json().server.toolCount, 0);
+  }
+  assert.deepEqual((await client.callTool({ name: "calculator_calculate", arguments: { a: 6, b: 7 } })).content, [{ type: "text", text: "42" }]);
+  assert.equal((await f.app.inject({ method: "POST", url: "/api/admin/servers/shop_orders/disable", headers: f.headers })).statusCode, 200);
+  assert.deepEqual((await client.callTool({ name: "shop_orders_list" })).content, []);
+  assert.equal(ambiguousCalls, 1);
+});
+
+test("normalized and bounded public names invoke native tools and historical audit names remain readable", async t => {
+  const nativeNames = ["Orders.List", "very_long_".repeat(12), "very_long_".repeat(12) + "other"];
+  const upstream = await controlledUpstream(t, "my-shop", server => {
+    for (const name of nativeNames) server.registerTool(name, { description: name }, async () => ({ content: [{ type: "text", text: name }] }));
+  });
+  const f = await fixture(t, { upstreams: [upstream.config] });
+  await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
+  const client = await f.connect();
+  const { tools } = await client.listTools();
+  assert.equal(tools.length, 3);
+  assert.equal(new Set(tools.map(tool => tool.name)).size, 3);
+  for (const tool of tools) {
+    assert.match(tool.name, /^[a-z0-9_]{1,64}$/);
+    assert.deepEqual((await client.callTool({ name: tool.name })).content, [{ type: "text", text: tool.description }]);
+  }
+  await assert.rejects(client.callTool({ name: "my-shop.Orders.List" }), ProtocolError);
+  const rows = (await f.app.inject({ url: "/api/admin/audit", headers: f.headers })).json().records;
+  const { id, ...historical } = rows.find((row: AuditRecord) => row.outcome === "success");
+  await f.db.collection("tool_audit").insertOne({ ...historical, attemptId: randomUUID(), toolName: "calculator.calculate" });
+  const history = await f.app.inject({ url: "/api/admin/audit?toolName=calculator.calculate", headers: f.headers });
+  assert.equal(history.statusCode, 200);
+  assert.equal(history.json().records.length, 1);
+  assert.equal(history.json().records[0].toolName, "calculator.calculate");
 });

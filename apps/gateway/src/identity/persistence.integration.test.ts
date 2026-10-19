@@ -196,7 +196,7 @@ test("database outage fails readiness and MCP safely while liveness stays health
   const lastUsedAfterOutage = keysAfter.json().keys[0].lastUsedAt;
   assert.deepEqual(keysAfter.json().keys, [{ ...keysBefore[0], lastUsedAt: lastUsedAfterOutage }]);
   assert.ok(Date.parse(lastUsedAfterOutage) >= Date.parse(keysBefore[0].lastUsedAt));
-  assert.deepEqual((await client.callTool({ name: "time.current" })).content, [{ type: "text", text: "controlled" }]);
+  assert.deepEqual((await client.callTool({ name: "time_current" })).content, [{ type: "text", text: "controlled" }]);
   const usedAfter = (await app.inject({ url: "/api/keys", headers: keyHeaders })).json().keys[0].lastUsedAt;
   assert.ok(Date.parse(usedAfter) > Date.parse(keysBefore[0].lastUsedAt));
 });

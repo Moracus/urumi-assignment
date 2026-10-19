@@ -137,7 +137,7 @@ test('disable and re-enable permanently withdraw old sessions and keys including
     await client.connect(new StreamableHTTPClientTransport(new URL(`${origin}/mcp`), {
       requestInit: { headers: { Authorization: `Bearer ${rawKey}` } },
     }));
-    const call = () => client.callTool({ name: 'calculator.calculate', arguments: { operation: 'multiply', a: 6, b: 7 } });
+    const call = () => client.callTool({ name: 'calculator_calculate', arguments: { operation: 'multiply', a: 6, b: 7 } });
     expect((await call()).content).toEqual([{ type: 'text', text: '42' }]);
     await details.getByRole('button', { name: 'Disable user', exact: true }).click();
     await page.getByRole('button', { name: 'Cancel', exact: true }).click();
@@ -174,7 +174,7 @@ test('disable and re-enable permanently withdraw old sessions and keys including
       await fresh.connect(new StreamableHTTPClientTransport(new URL(`${origin}/mcp`), {
         requestInit: { headers: { Authorization: `Bearer ${await raw.inputValue()}` } },
       }));
-      expect((await fresh.listTools()).tools.map(tool => tool.name)).toContain('calculator.calculate');
+      expect((await fresh.listTools()).tools.map(tool => tool.name)).toContain('calculator_calculate');
     } finally { await fresh.close(); }
   } finally { await client.close(); await context.close(); }
 });

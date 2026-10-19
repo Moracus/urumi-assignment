@@ -174,8 +174,8 @@ test("connected SDK client resumes with the same unrevoked key only after requir
   await client.connect(new StreamableHTTPClientTransport(new URL(`${gatewayAddress}/mcp`), {
     requestInit: { headers: { authorization: `Bearer ${issued.json().rawKey}` } },
   }));
-  assert.equal((await client.listTools(undefined, { cacheMode: "bypass" })).tools[0].name, "time.current");
-  await client.callTool({ name: "time.current", arguments: {} });
+  assert.equal((await client.listTools(undefined, { cacheMode: "bypass" })).tools[0].name, "time_current");
+  await client.callTool({ name: "time_current", arguments: {} });
   assert.equal(invocations, 1);
   const temporary = "assigned temporary reset password";
   assert.equal((await f.app.inject({ method: "POST", url: `/api/admin/users/${f.memberId}/reset-password`,
@@ -186,7 +186,7 @@ test("connected SDK client resumes with the same unrevoked key only after requir
     return true;
   };
   await assert.rejects(client.listTools(undefined, { cacheMode: "bypass" }), unauthorized);
-  await assert.rejects(client.callTool({ name: "time.current", arguments: {} }), unauthorized);
+  await assert.rejects(client.callTool({ name: "time_current", arguments: {} }), unauthorized);
   assert.equal(invocations, 1);
   const login = await f.app.inject({ method: "POST", url: "/api/auth/login", headers: { origin },
     payload: { email: "member@example.com", password: temporary } });
@@ -202,8 +202,8 @@ test("connected SDK client resumes with the same unrevoked key only after requir
   assert.equal((await f.app.inject({ method: "POST", url: "/api/auth/change-password", headers,
     payload: { currentPassword: temporary, newPassword: "a different final reset password" } })).statusCode, 204);
   assert.equal((await f.app.inject({ url: "/api/auth/me", headers })).statusCode, 401);
-  assert.equal((await client.listTools(undefined, { cacheMode: "bypass" })).tools[0].name, "time.current");
-  const result = await client.callTool({ name: "time.current", arguments: {} });
+  assert.equal((await client.listTools(undefined, { cacheMode: "bypass" })).tools[0].name, "time_current");
+  const result = await client.callTool({ name: "time_current", arguments: {} });
   assert.deepEqual(result.content, [{ type: "text", text: "controlled" }]);
   assert.equal(invocations, 2);
   const keys = await f.app.inject({ url: `/api/admin/users/${f.memberId}/keys`, headers: admin });

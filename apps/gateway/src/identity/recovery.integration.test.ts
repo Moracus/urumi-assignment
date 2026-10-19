@@ -112,7 +112,7 @@ test("recovery restores members and disabled administrators with irreversible cr
       await client.connect(new StreamableHTTPClientTransport(new URL(`${gatewayAddress}/mcp`), {
         requestInit: { headers: { authorization: `Bearer ${keys[0].rawKey}` } },
       }));
-      assert.equal((await client.listTools(undefined, { cacheMode: "bypass" })).tools[0].name, "time.current");
+      assert.equal((await client.listTools(undefined, { cacheMode: "bypass" })).tools[0].name, "time_current");
       // Operator fixture simulates loss of administrator access while retaining old credentials.
       await storage.users.updateOne({ _id: user._id }, { $set: state });
       const recovered = await runCli(uri, ["--user-id", user._id.toHexString()]);
@@ -150,7 +150,7 @@ test("recovery restores members and disabled administrators with irreversible cr
       const fresh = await login(final);
       assert.equal(fresh.statusCode, 200, fresh.body);
       assert.equal((await app.inject({ url: "/api/admin/users", headers: sessionHeaders(fresh) })).statusCode, 200);
-      await assert.rejects(client.callTool({ name: "time.current", arguments: {} }), unauthorized);
+      await assert.rejects(client.callTool({ name: "time_current", arguments: {} }), unauthorized);
       for (const key of keys) {
         assert.equal((await app.inject({ url: "/mcp", headers: { authorization: `Bearer ${key.rawKey}` } })).statusCode, 401);
         assert.ok((await storage.apiKeys.findById(key.key.id))?.revokedAt);
@@ -164,7 +164,7 @@ test("recovery restores members and disabled administrators with irreversible cr
       await freshClient.connect(new StreamableHTTPClientTransport(new URL(`${gatewayAddress}/mcp`), {
         requestInit: { headers: { authorization: `Bearer ${issued.json().rawKey}` } },
       }));
-      assert.deepEqual((await freshClient.callTool({ name: "time.current", arguments: {} })).content, [{ type: "text", text: "controlled" }]);
+      assert.deepEqual((await freshClient.callTool({ name: "time_current", arguments: {} })).content, [{ type: "text", text: "controlled" }]);
     });
   }
 });

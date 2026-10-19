@@ -140,9 +140,9 @@ try {
   }));
   const catalog = (await client.listTools(undefined, { cacheMode: 'bypass' })).tools;
   console.log(catalog.map(tool => tool.name));
-  assert.ok(!catalog.some(tool => tool.name === 'woocommerce.create_product'));
-  console.log(await client.callTool({ name: 'calculator.calculate', arguments: { operation: 'multiply', a: 6, b: 7 } }));
-  console.log(await client.callTool({ name: 'time.current', arguments: { timezone: 'UTC' } }));
+  assert.ok(!catalog.some(tool => tool.name === 'woocommerce_create_product'));
+  console.log(await client.callTool({ name: 'calculator_calculate', arguments: { operation: 'multiply', a: 6, b: 7 } }));
+  console.log(await client.callTool({ name: 'time_current', arguments: { timezone: 'UTC' } }));
   const revoke = await fetch(`http://localhost:3000/api/keys/${key.id}`, {
     method: 'DELETE', headers: {
       Cookie: `urumi_dashboard=${cookie}`, Origin: 'http://localhost:3000', 'X-CSRF-Token': csrfToken,

@@ -100,8 +100,8 @@ pnpm --filter @urumi/dashboard smoke:readonly
 ```
 
 The command uses Streamable HTTP, discovers tools, and invokes only
-`calculator.calculate`, `time.current`, `woocommerce.list_products`,
-`woocommerce.list_orders`, and `woocommerce.get_order`. It reports one PASS per
+`calculator_calculate`, `time_current`, `woocommerce_list_products`,
+`woocommerce_list_orders`, and `woocommerce_get_order`. It reports one PASS per
 successful call, exits nonzero for missing configuration/tools or an MCP tool
 error, and never prints keys, result bodies, order data, or raw exceptions.
 It does not retry writes or issue any write call. The automated primary journey

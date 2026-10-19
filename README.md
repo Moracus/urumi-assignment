@@ -49,13 +49,15 @@ Gateway names include the upstream prefix. Direct upstream endpoints use the unp
 
 | Gateway tool | Behavior and principal inputs |
 | --- | --- |
-| `woocommerce.list_products` | Search and paginate products; `limit` (1–100, default 10), `page` (default 1), optional `search`. |
-| `woocommerce.create_product` | Create a simple product; `name`, `regular_price` as a non-negative decimal string, optional `description`, `status` (`draft` by default or `publish`). |
-| `woocommerce.list_orders` | Paginate orders; `limit`, `page`, optional `status`, `after`, and `before` as ISO datetimes with offsets. |
-| `woocommerce.get_order` | Retrieve an order by positive integer `order_id`. |
-| `woocommerce.update_order_status` | Change `order_id` to `processing`, `on-hold`, `completed`, or `cancelled`. |
-| `calculator.calculate` | `operation`: `add`, `subtract`, `multiply`, or `divide`; numeric `a` and `b`. Rejects division by zero and non-finite results. |
-| `time.current` | Current time in an IANA `timezone` (default `UTC`), with date, local time, UTC ISO timestamp, and Unix timestamp. |
+| `woocommerce_list_products` | Search and paginate products; `limit` (1–100, default 10), `page` (default 1), optional `search`. |
+| `woocommerce_create_product` | Create a simple product; `name`, `regular_price` as a non-negative decimal string, optional `description`, `status` (`draft` by default or `publish`). |
+| `woocommerce_list_orders` | Paginate orders; `limit`, `page`, optional `status`, `after`, and `before` as ISO datetimes with offsets. |
+| `woocommerce_get_order` | Retrieve an order by positive integer `order_id`. |
+| `woocommerce_update_order_status` | Change `order_id` to `processing`, `on-hold`, `completed`, or `cancelled`. |
+| `calculator_calculate` | `operation`: `add`, `subtract`, `multiply`, or `divide`; numeric `a` and `b`. Rejects division by zero and non-finite results. |
+| `time_current` | Current time in an IANA `timezone` (default `UTC`), with date, local time, UTC ISO timestamp, and Unix timestamp. |
+
+Public names use `<server_name>_<tool_name>` through one canonical naming utility. Upstream native names remain unchanged: `woocommerce_list_orders` routes to server `woocommerce`, native tool `list_orders`. Names are normalized and bounded to 64 characters; ambiguous names are omitted from discovery and execution without disrupting unrelated tools. Dotted public names are no longer accepted. See [naming policy, rebuild/deploy commands and Cursor/Inspector checks](docs/operations/tool-name-migration.md). Historical audit names remain readable without a database migration.
 
 Admin authorization permits all registered tools. The member policy permits the three WooCommerce read tools, calculator, and time, but rejects product creation and order updates. MCP bearer authentication resolves the current user and role from the individually hashed key on every request. Dashboard session cookies and API keys authenticate only their respective boundaries; bootstrap credentials never authenticate MCP.
 

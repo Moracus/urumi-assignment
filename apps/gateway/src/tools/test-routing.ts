@@ -76,7 +76,7 @@ async function main() {
     }
 
     // Test Calculator
-    const calculatorResult = await callTool("calculator.calculate", {
+    const calculatorResult = await callTool("calculator_calculate", {
       operation: "add",
       a: 10,
       b: 20,
@@ -87,7 +87,7 @@ async function main() {
     }
 
     // Test Time
-    const timeResult = await callTool("time.current", {
+    const timeResult = await callTool("time_current", {
       timezone: "Asia/Kolkata",
     });
 
@@ -96,7 +96,7 @@ async function main() {
     }
 
     // Test WooCommerce read-only operation
-    const productsResult = await callTool("woocommerce.list_products", {
+    const productsResult = await callTool("woocommerce_list_products", {
       limit: 5,
       page: 1,
     });
@@ -118,7 +118,7 @@ async function main() {
         {
           identity: memberIdentity,
 
-          toolName: "woocommerce.create_product",
+          toolName: "woocommerce_create_product",
 
           arguments: {
             name: "Unauthorized Product",
@@ -145,7 +145,7 @@ async function main() {
       {
         identity,
 
-        toolName: "calculator.calculate",
+        toolName: "calculator_calculate",
 
         arguments: {
           operation: "divide",
@@ -171,7 +171,7 @@ async function main() {
         {
           identity,
 
-          toolName: "woocommerce.delete_everything",
+          toolName: "woocommerce_delete_everything",
 
           arguments: {},
 

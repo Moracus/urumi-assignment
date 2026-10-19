@@ -4,11 +4,13 @@ import type { RegistrationStorage, UpstreamRegistration } from "./registrations.
 import type { UpstreamRegistry } from "./registry.js";
 import type { UpstreamManagement } from "./management.js";
 import type { DestinationPolicy } from "./destination-policy.js";
+import { ToolAggregator } from "../tools/aggregator.js";
 
 export function registerServerInspectionRoutes(
   app: FastifyInstance, storage: RegistrationStorage, registry: UpstreamRegistry,
   policy: DestinationPolicy, management: UpstreamManagement,
 ) {
+  const aggregator = new ToolAggregator(registry);
   function observed(server: UpstreamRegistration) {
     const state = registry.getState(server.serverId);
     return state?.config.configurationRevision === server.configurationRevision ? state : undefined;
@@ -19,7 +21,8 @@ export function registerServerInspectionRoutes(
       serverId: server.serverId, displayName: server.displayName, enabled: server.enabled,
       configurationRevision: server.configurationRevision, createdAt: server.createdAt, updatedAt: server.updatedAt,
       status: !server.enabled ? "disabled" : state?.status ?? "disconnected",
-      toolCount: server.enabled && state?.status === "connected" ? state.tools.length : 0,
+      toolCount: server.enabled && state?.status === "connected"
+        ? aggregator.listTools().filter(tool => tool.upstreamName === server.serverId).length : 0,
       lastConnectedAt: state?.lastConnectedAt ?? null,
       lastDiscoveredAt: state?.lastDiscoveredAt ?? null,
       // Do not serialize raw diagnostics, even if the registry's error convention changes.
@@ -72,8 +75,9 @@ export function registerServerInspectionRoutes(
   app.get<{ Params: { serverId: string } }>("/api/admin/servers/:serverId/tools", async request => {
     const server = await find(request.params.serverId);
     const state = observed(server);
-    return { tools: server.enabled && state?.status === "connected" ? state.tools.map(tool => ({
-      name: `${server.serverId}.${tool.name}`, description: tool.description, inputSchema: tool.inputSchema,
+    return { tools: server.enabled && state?.status === "connected" ? aggregator.listTools()
+      .filter(tool => tool.upstreamName === server.serverId).map(tool => ({
+      name: tool.name, description: tool.description, inputSchema: tool.inputSchema,
     })) : [] };
   });
 }

@@ -74,8 +74,8 @@ test("aggregates and namespaces tools", () => {
   );
 
   assert.deepEqual(names, [
-    "calculator.calculate",
-    "time.current",
+    "calculator_calculate",
+    "time_current",
   ]);
 });
 
@@ -97,8 +97,8 @@ test("allows identical original names across upstreams", () => {
   );
 
   assert.deepEqual(names, [
-    "calculator.status",
-    "time.status",
+    "calculator_status",
+    "time_status",
   ]);
 });
 
@@ -119,7 +119,7 @@ test("excludes unavailable upstreams", () => {
     aggregator.listTools().map(
       (tool) => tool.name,
     ),
-    ["time.current"],
+    ["time_current"],
   );
 });
 
@@ -137,7 +137,7 @@ test("excludes disabled upstreams", () => {
   const aggregator = new ToolAggregator(registry);
 
   assert.equal(
-    aggregator.getTool("calculator.calculate"),
+    aggregator.getTool("calculator_calculate"),
     null,
   );
 });
@@ -156,12 +156,12 @@ test("resolves public names to original upstream tools", async () => {
   );
 
   const resolved = await resolver.resolve(
-    "calculator.calculate",
+    "calculator_calculate",
   );
 
   assert.deepEqual(resolved, {
     generation: 1,
-    publicName: "calculator.calculate",
+    publicName: "calculator_calculate",
     upstreamName: "calculator",
     upstreamToolName: "calculate",
   });
@@ -182,13 +182,13 @@ test("rejects unknown tools", async () => {
 
   assert.equal(
     await resolver.resolve(
-      "calculator.delete_everything",
+      "calculator_delete_everything",
     ),
     null,
   );
 });
 
-test("rejects duplicate public names", () => {
+test("omits duplicate public names", () => {
   const registry = createMockRegistry([
     createState("calculator", "connected", [
       "calculate",
@@ -198,10 +198,7 @@ test("rejects duplicate public names", () => {
 
   const aggregator = new ToolAggregator(registry);
 
-  assert.throws(
-    () => aggregator.listTools(),
-    /Tool name collision/,
-  );
+  assert.deepEqual(aggregator.listTools(), []);
 });
 
 test("preserves tool descriptions and schemas", () => {
@@ -214,7 +211,7 @@ test("preserves tool descriptions and schemas", () => {
   const aggregator = new ToolAggregator(registry);
 
   const tool = aggregator.getTool(
-    "calculator.calculate",
+    "calculator_calculate",
   );
 
   assert.equal(
@@ -226,4 +223,51 @@ test("preserves tool descriptions and schemas", () => {
     type: "object",
     properties: {},
   });
+});
+
+test("rejects ambiguous underscore mappings without hiding healthy tools", async () => {
+  for (const status of ["connected", "unreachable"] as const) {
+    const registry = createMockRegistry([
+      createState("shop", "connected", ["orders_list"]),
+      createState("shop_orders", status, ["list"]),
+      createState("time", "connected", ["current"]),
+    ]);
+    const aggregator = new ToolAggregator(registry);
+    const resolver = new AggregatedToolResolver(aggregator, registry);
+    assert.deepEqual(aggregator.listTools().map(tool => tool.name), ["time_current"]);
+    assert.equal(await resolver.resolve("shop_orders_list"), null);
+  }
+});
+
+test("normalizes punctuation and long names while retaining explicit native mappings", async () => {
+  const longName = "very_long_".repeat(12);
+  const registry = createMockRegistry([
+    createState("my-shop", "connected", ["Orders.List", longName]),
+  ]);
+  const aggregator = new ToolAggregator(registry);
+  const resolver = new AggregatedToolResolver(aggregator);
+  const tools = aggregator.listTools();
+  assert.equal(tools.length, 2);
+  for (const tool of tools) {
+    assert.match(tool.name, /^[a-z0-9_]{1,64}$/);
+    assert.equal((await resolver.resolve(tool.name))?.upstreamToolName, tool.upstreamToolName);
+    assert.equal(tool.upstreamName, "my-shop");
+  }
+  assert.equal(aggregator.getTool("my_shop_orders_list")?.upstreamToolName, "Orders.List");
+  assert.equal(await resolver.resolve("my-shop.Orders.List"), null);
+  const longTool = tools.find(tool => tool.upstreamToolName === longName)!;
+  assert.equal(longTool.name.length, 64);
+  assert.equal(aggregator.getTool(longTool.name)?.name, longTool.name);
+});
+
+test("normalization collisions are omitted and recover after the conflict is disabled", () => {
+  const conflict = createState("my_shop", "connected", ["list"]);
+  const registry = createMockRegistry([
+    createState("my-shop", "connected", ["list"]), conflict,
+    createState("time", "connected", ["current"]),
+  ]);
+  const aggregator = new ToolAggregator(registry);
+  assert.equal(aggregator.getTool("my_shop_list"), null);
+  conflict.config.enabled = false;
+  assert.equal(aggregator.getTool("my_shop_list")?.upstreamName, "my-shop");
 });

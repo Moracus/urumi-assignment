@@ -13,6 +13,8 @@ import {
   UpstreamTimeoutError,
   UpstreamCallError,
 } from "./errors.js";
+import { makePublicToolName } from "./public-name.js";
+import { ToolAggregator } from "./aggregator.js";
 
 export class McpUpstreamInvoker
   implements UpstreamInvoker {
@@ -51,7 +53,7 @@ export class McpUpstreamInvoker
     }
 
     const expectedPublicName =
-      `${tool.upstreamName}.${tool.upstreamToolName}`;
+      makePublicToolName(tool.upstreamName, tool.upstreamToolName);
 
     if (tool.publicName !== expectedPublicName) {
       throw new UpstreamCallError(
@@ -68,6 +70,11 @@ export class McpUpstreamInvoker
       throw new UpstreamCallError(
         tool.upstreamName,
       );
+    }
+
+    const current = new ToolAggregator(this.registry).getTool(tool.publicName);
+    if (!current || current.upstreamName !== tool.upstreamName || current.upstreamToolName !== tool.upstreamToolName) {
+      throw new UpstreamCallError(tool.upstreamName);
     }
 
     let result: unknown;

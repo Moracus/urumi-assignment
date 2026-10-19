@@ -29,8 +29,8 @@ test('two users chat and connect MCP with distinct audit attribution, onboarding
   const sessionRows = await (await page.request.get(`/api/admin/audit?userId=${administrator.user.id}&from=${encodeURIComponent(chatStarted)}&limit=100`)).json();
   expect(sessionRows.records).toHaveLength(2);
   expect(sessionRows.records).toEqual(expect.arrayContaining([
-    expect.objectContaining({ userId: administrator.user.id, toolName: 'calculator.calculate', authenticationOrigin: 'dashboard_session', keyId: null, outcome: 'success' }),
-    expect.objectContaining({ userId: administrator.user.id, toolName: 'time.current', authenticationOrigin: 'dashboard_session', keyId: null, outcome: 'success' }),
+    expect.objectContaining({ userId: administrator.user.id, toolName: 'calculator_calculate', authenticationOrigin: 'dashboard_session', keyId: null, outcome: 'success' }),
+    expect.objectContaining({ userId: administrator.user.id, toolName: 'time_current', authenticationOrigin: 'dashboard_session', keyId: null, outcome: 'success' }),
   ]));
   await page.getByRole('link', { name: 'Users', exact: true }).click();
   const email = `workflow-${Date.now()}@example.com`;
@@ -65,16 +65,16 @@ test('two users chat and connect MCP with distinct audit attribution, onboarding
       requestInit: { headers: { Authorization: `Bearer ${rawKey}` } },
     }));
     expect((await client.listTools()).tools.map(tool => tool.name).sort()).toEqual([
-      'calculator.calculate', 'time.current', 'woocommerce.get_order', 'woocommerce.list_orders', 'woocommerce.list_products',
+      'calculator_calculate', 'time_current', 'woocommerce_get_order', 'woocommerce_list_orders', 'woocommerce_list_products',
     ]);
-    expect((await client.callTool({ name: 'calculator.calculate', arguments: { operation: 'multiply', a: 6, b: 7 } })).content)
+    expect((await client.callTool({ name: 'calculator_calculate', arguments: { operation: 'multiply', a: 6, b: 7 } })).content)
       .toEqual([{ type: 'text', text: '42' }]);
-    expect((await client.callTool({ name: 'time.current', arguments: { timezone: 'UTC' } })).content)
+    expect((await client.callTool({ name: 'time_current', arguments: { timezone: 'UTC' } })).content)
       .toEqual([{ type: 'text', text: '2026-10-16T00:00:00Z' }]);
     for (const [name, args, expected] of [
-      ['woocommerce.list_products', {}, { products: expect.any(Array), page: 1 }],
-      ['woocommerce.list_orders', {}, { count: 4, page: 1, orders: expect.arrayContaining([expect.objectContaining({ number: 'at-midnight' })]) }],
-      ['woocommerce.get_order', { order_id: 42 }, { id: 42, number: '42', payment_method: 'cod' }],
+      ['woocommerce_list_products', {}, { products: expect.any(Array), page: 1 }],
+      ['woocommerce_list_orders', {}, { count: 4, page: 1, orders: expect.arrayContaining([expect.objectContaining({ number: 'at-midnight' })]) }],
+      ['woocommerce_get_order', { order_id: 42 }, { id: 42, number: '42', payment_method: 'cod' }],
     ] as const) {
       const result = await client.callTool({ name, arguments: args });
       expect(result.isError).not.toBe(true);
@@ -82,7 +82,7 @@ test('two users chat and connect MCP with distinct audit attribution, onboarding
       if (!Array.isArray(content) || content[0]?.type !== 'text') throw new Error('Expected commerce text result');
       expect(JSON.parse(content[0].text)).toMatchObject(expected);
     }
-    for (const name of ['woocommerce.create_product', 'woocommerce.update_order_status']) {
+    for (const name of ['woocommerce_create_product', 'woocommerce_update_order_status']) {
       await expect(client.callTool({ name })).rejects.toBeInstanceOf(ProtocolError);
     }
     // Verify the operator command against controlled upstreams too. This is
@@ -91,8 +91,8 @@ test('two users chat and connect MCP with distinct audit attribution, onboarding
       env: { ...process.env, URUMI_MCP_URL: `${origin}/mcp`, URUMI_API_KEY: rawKey, URUMI_ORDER_ID: '42' },
     });
     expect(smoke.stdout.trim().split('\n')).toEqual([
-      'PASS calculator.calculate', 'PASS time.current', 'PASS woocommerce.list_products',
-      'PASS woocommerce.list_orders', 'PASS woocommerce.get_order',
+      'PASS calculator_calculate', 'PASS time_current', 'PASS woocommerce_list_products',
+      'PASS woocommerce_list_orders', 'PASS woocommerce_get_order',
     ]);
     expect(smoke.stderr).not.toContain(rawKey);
     expect((await page.request.get('/api/admin/users')).status()).toBe(403);
@@ -113,7 +113,7 @@ test('two users chat and connect MCP with distinct audit attribution, onboarding
     await page.getByRole('button', { name: 'Log out', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Log in', exact: true })).toBeVisible();
     expect(await page.content()).not.toContain(rawKey);
-    expect((await client.callTool({ name: 'calculator.calculate', arguments: { operation: 'multiply', a: 7, b: 8 } })).content)
+    expect((await client.callTool({ name: 'calculator_calculate', arguments: { operation: 'multiply', a: 7, b: 8 } })).content)
       .toEqual([{ type: 'text', text: '56' }]);
     await login(page, email, 'replacement workflow password');
     await page.getByRole('link', { name: 'API keys', exact: true }).click();
@@ -121,7 +121,7 @@ test('two users chat and connect MCP with distinct audit attribution, onboarding
     await page.getByRole('button', { name: 'Revoke Workflow MCP client', exact: true }).click();
     await page.getByRole('button', { name: 'Confirm revoke', exact: true }).click();
     await expect(page.getByRole('row').filter({ hasText: 'Workflow MCP client' })).toContainText('Revoked');
-    await expect(client.callTool({ name: 'calculator.calculate', arguments: { operation: 'multiply', a: 6, b: 7 } })).rejects.toMatchObject({
+    await expect(client.callTool({ name: 'calculator_calculate', arguments: { operation: 'multiply', a: 6, b: 7 } })).rejects.toMatchObject({
       data: expect.objectContaining({ status: 401 }),
     });
     await expect(client.listTools(undefined, { cacheMode: 'bypass' })).rejects.toMatchObject({
@@ -134,7 +134,7 @@ test('two users chat and connect MCP with distinct audit attribution, onboarding
     await login(page, 'admin@example.com', 'browser administrator password');
     await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
     const history = await (await page.request.get(`/api/admin/audit?userId=${member.user.id}&limit=100`)).json();
-    for (const name of ['calculator.calculate', 'time.current']) {
+    for (const name of ['calculator_calculate', 'time_current']) {
       expect(history.records).toEqual(expect.arrayContaining([
         expect.objectContaining({ userId: member.user.id, userEmail: email, toolName: name,
           authenticationOrigin: 'gateway_api_key', keyId, outcome: 'success' }),
@@ -142,7 +142,7 @@ test('two users chat and connect MCP with distinct audit attribution, onboarding
     }
     const rejected = await page.request.get('/api/admin/audit?outcome=unauthenticated&limit=100');
     expect((await rejected.json()).records).toEqual(expect.arrayContaining([
-      expect.objectContaining({ toolName: 'calculator.calculate', userId: null, keyId: null, authenticationOrigin: null }),
+      expect.objectContaining({ toolName: 'calculator_calculate', userId: null, keyId: null, authenticationOrigin: null }),
     ]));
     const serialized = JSON.stringify(history);
     for (const credential of [rawKey, 'synthetic-provider-secret', 'fixture-consumer', 'fixture-secret']) {

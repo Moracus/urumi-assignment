@@ -8,7 +8,7 @@ Authentication happens once per incoming HTTP request. A request-local asynchron
 
 Successful authentication advances the key's `lastUsedAt` before protocol handling, including when authorization, input validation, unknown-tool rejection, or execution later fails. A conditional update avoids updating a concurrently revoked key; `$max` prevents concurrent requests from moving the timestamp backwards. Invalid credentials never advance last use. MongoDB digest lookup uses the unique hash index; there is no raw-secret comparison in application code. Raw keys and hashes never appear in audit records.
 
-Discovery filters tools by the current role. Members may use `woocommerce.list_products`, `woocommerce.list_orders`, `woocommerce.get_order`, `calculator.calculate`, and `time.current`. Administrators may use every registered tool, including the two WooCommerce writes. Every call entering the shared execution boundary is independently authorized before resolution/invocation. Hidden or unknown names cannot route arbitrary upstream tools. Upstream descriptions, schemas, names, structured results, and `isError` results retain their existing behavior. [Durable audit records](tool-history.md) attribute execution to the real user/key IDs and authentication origin with request/attempt IDs, historical display snapshots, timestamp, tool/upstream, duration, and outcome; credentials and payloads are omitted. Authentication and SDK rejections that never reach execution do not produce execution audit records.
+Discovery filters tools by the current role. Members may use `woocommerce_list_products`, `woocommerce_list_orders`, `woocommerce_get_order`, `calculator_calculate`, and `time_current`. Administrators may use every registered tool, including the two WooCommerce writes. Every call entering the shared execution boundary is independently authorized before resolution/invocation. Hidden or unknown names cannot route arbitrary upstream tools. Upstream descriptions, schemas, names, structured results, and `isError` results retain their existing behavior. [Durable audit records](tool-history.md) attribute execution to the real user/key IDs and authentication origin with request/attempt IDs, historical display snapshots, timestamp, tool/upstream, duration, and outcome; credentials and payloads are omitted. Authentication and SDK rejections that never reach execution do not produce execution audit records.
 
 The existing ten-second upstream call timeout, independent unhealthy-upstream exclusion, approximately 30-second refresh/reconnection, and no automatic retries of non-idempotent WooCommerce writes remain unchanged. Role changes affect subsequent requests. Dashboard logout and ordinary password changes preserve API keys. Pending required password replacement blocks a retained key until replacement is completed. [Account disabling/re-enabling](dashboard-sessions.md#disable-and-re-enable-users-11) permanently revokes old credentials. [Administrator reset](dashboard-sessions.md#reset-a-password-12) preserves keys and blocks them until password replacement; [operator recovery](identity-setup.md#operator-recovery-13) permanently revokes existing keys and requires fresh issuance. Direct database edits are privileged and do not implement these workflows.
 
@@ -29,8 +29,8 @@ try {
     requestInit: { headers: { Authorization: `Bearer ${rawKey}` } },
   }));
   console.log((await client.listTools(undefined, { cacheMode: "bypass" })).tools.map((tool) => tool.name));
-  console.log(await client.callTool({ name: "calculator.calculate", arguments: { operation: "multiply", a: 6, b: 7 } }));
-  console.log(await client.callTool({ name: "time.current", arguments: { timezone: "UTC" } }));
+  console.log(await client.callTool({ name: "calculator_calculate", arguments: { operation: "multiply", a: 6, b: 7 } }));
+  console.log(await client.callTool({ name: "time_current", arguments: { timezone: "UTC" } }));
 } finally {
   await client.close();
 }

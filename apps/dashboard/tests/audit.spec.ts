@@ -46,17 +46,17 @@ test('administrator browses real MCP history pages and member access is denied',
     await client.connect(new StreamableHTTPClientTransport(new URL('http://localhost:5174/mcp'), {
       requestInit: { headers: { Authorization: `Bearer ${rawKey}` } },
     }));
-    for (let index = 0; index < 11; index++) await client.callTool({ name: 'calculator.calculate', arguments: { operation: 'multiply', a: 6, b: 7 } });
+    for (let index = 0; index < 11; index++) await client.callTool({ name: 'calculator_calculate', arguments: { operation: 'multiply', a: 6, b: 7 } });
   } finally { await client.close(); }
   await page.getByRole('link', { name: 'Tool history', exact: true }).click();
   await expect(page.getByRole('table')).toContainText('admin@example.com');
-  await expect(page.getByRole('table')).toContainText('calculator.calculate');
+  await expect(page.getByRole('table')).toContainText('calculator_calculate');
   await expect(page.getByRole('columnheader')).toHaveText(['User', 'Server', 'Tool', 'Time', 'Duration', 'Outcome']);
   await expect(page.getByRole('row')).toHaveCount(11);
   await page.getByRole('button', { name: 'Next page' }).click();
   await expect(page.getByText('Page 2', { exact: true })).toBeVisible();
   await expect(page.getByText('Loading tool history…')).toHaveCount(0);
-  await expect(page.getByRole('cell', { name: 'calculator.calculate', exact: true }).first()).toBeVisible();
+  await expect(page.getByRole('cell', { name: 'calculator_calculate', exact: true }).first()).toBeVisible();
   await page.getByRole('button', { name: 'Previous page' }).click();
   await expect(page.getByText('Page 1', { exact: true })).toBeVisible();
   expect(await page.locator('body').textContent()).not.toContain(rawKey);
@@ -86,7 +86,7 @@ test('administrator browses real MCP history pages and member access is denied',
 test('administrator sees unauthenticated MCP attempts with honest attribution', async ({ page }) => {
   const denied = await page.request.post('/mcp', { data: {
     jsonrpc: '2.0', id: 'browser-unverified', method: 'tools/call',
-    params: { name: 'calculator.calculate', arguments: { a: 'private-browser-argument' } },
+    params: { name: 'calculator_calculate', arguments: { a: 'private-browser-argument' } },
   } });
   expect(denied.status()).toBe(401);
   await login(page);

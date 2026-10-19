@@ -342,7 +342,7 @@ test("connected MCP client is denied on the next request and old credentials sta
   await client.connect(new StreamableHTTPClientTransport(new URL(`${gatewayAddress}/mcp`), {
     requestInit: { headers: { authorization: `Bearer ${issued.json().rawKey}` } },
   }));
-  assert.equal((await client.listTools(undefined, { cacheMode: "bypass" })).tools[0].name, "time.current");
+  assert.equal((await client.listTools(undefined, { cacheMode: "bypass" })).tools[0].name, "time_current");
   const url = `/api/admin/users/${f.memberId}`;
   assert.equal((await f.app.inject({ method: "PATCH", url, headers: admin, payload: { status: "disabled" } })).statusCode, 200);
   const unauthorized = (error: unknown) => {
@@ -351,7 +351,7 @@ test("connected MCP client is denied on the next request and old credentials sta
     return true;
   };
   await assert.rejects(client.listTools(undefined, { cacheMode: "bypass" }), unauthorized);
-  await assert.rejects(client.callTool({ name: "time.current", arguments: {} }), unauthorized);
+  await assert.rejects(client.callTool({ name: "time_current", arguments: {} }), unauthorized);
   assert.equal((await f.app.inject({ method: "PATCH", url, headers: admin, payload: { status: "active" } })).statusCode, 200);
   await assert.rejects(client.listTools(undefined, { cacheMode: "bypass" }), unauthorized);
   const freshGateway = await createGatewayApp({ mongodbUri: f.uri, upstreams: [],

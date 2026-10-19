@@ -17,11 +17,11 @@ async function main() {
     }));
     const names = new Set((await client.listTools(undefined, { cacheMode: 'bypass' })).tools.map(tool => tool.name));
     const calls = [
-      ['calculator.calculate', { operation: 'multiply', a: 6, b: 7 }],
-      ['time.current', { timezone: 'UTC' }],
-      ['woocommerce.list_products', { limit: 1, page: 1 }],
-      ['woocommerce.list_orders', { limit: 1, page: 1 }],
-      ['woocommerce.get_order', { order_id: orderId }],
+      ['calculator_calculate', { operation: 'multiply', a: 6, b: 7 }],
+      ['time_current', { timezone: 'UTC' }],
+      ['woocommerce_list_products', { limit: 1, page: 1 }],
+      ['woocommerce_list_orders', { limit: 1, page: 1 }],
+      ['woocommerce_get_order', { order_id: orderId }],
     ];
     for (const [name, args] of calls) {
       if (!names.has(name)) throw new Error('Required tool unavailable');

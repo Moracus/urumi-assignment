@@ -33,12 +33,12 @@ test('confirmed dashboard disable withdraws cached tools, cancellation preserves
     requestInit: { headers: { Authorization: `Bearer ${rawKey}` } },
   }));
   try {
-    expect((await client.listTools()).tools.map(tool => tool.name)).toContain('lifecycle.calculate');
+    expect((await client.listTools()).tools.map(tool => tool.name)).toContain('lifecycle_calculate');
     await details.getByRole('button', { name: 'Disable server', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: 'Disable server confirmation' });
     await expect(dialog).toContainText('tools will become unavailable');
     await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
-    expect((await client.callTool({ name: 'lifecycle.calculate', arguments: { operation: 'multiply', a: 6, b: 7 } })).content)
+    expect((await client.callTool({ name: 'lifecycle_calculate', arguments: { operation: 'multiply', a: 6, b: 7 } })).content)
       .toEqual([{ type: 'text', text: '42' }]);
     await details.getByRole('button', { name: 'Disable server', exact: true }).click();
     await dialog.getByRole('button', { name: 'Confirm disable', exact: true }).click();
@@ -46,13 +46,13 @@ test('confirmed dashboard disable withdraws cached tools, cancellation preserves
     await expect(details).toContainText('No available tools.');
     await expect(details.getByRole('button', { name: 'Refresh discovery', exact: true })).toBeDisabled();
     expect((await page.request.post('/api/admin/servers/lifecycle/refresh', { headers })).status()).toBe(409);
-    expect((await client.listTools(undefined, { cacheMode: 'bypass' })).tools.map(tool => tool.name)).not.toContain('lifecycle.calculate');
-    await expect(client.callTool({ name: 'lifecycle.calculate', arguments: { operation: 'multiply', a: 2, b: 3 } })).rejects.toBeInstanceOf(ProtocolError);
-    expect((await client.callTool({ name: 'time.current', arguments: { timezone: 'UTC' } })).content).toEqual([{ type: 'text', text: '2026-10-16T00:00:00Z' }]);
+    expect((await client.listTools(undefined, { cacheMode: 'bypass' })).tools.map(tool => tool.name)).not.toContain('lifecycle_calculate');
+    await expect(client.callTool({ name: 'lifecycle_calculate', arguments: { operation: 'multiply', a: 2, b: 3 } })).rejects.toBeInstanceOf(ProtocolError);
+    expect((await client.callTool({ name: 'time_current', arguments: { timezone: 'UTC' } })).content).toEqual([{ type: 'text', text: '2026-10-16T00:00:00Z' }]);
     await details.getByRole('button', { name: 'Enable server', exact: true }).click();
     await expect(details).toContainText('Runtime statusconnected');
     await expect(page.getByRole('status').filter({ hasText: 'Server enabled.' })).toContainText('connected');
-    expect((await client.listTools(undefined, { cacheMode: 'bypass' })).tools.map(tool => tool.name)).toContain('lifecycle.calculate');
+    expect((await client.listTools(undefined, { cacheMode: 'bypass' })).tools.map(tool => tool.name)).toContain('lifecycle_calculate');
   } finally { await client.close(); }
 });
 
@@ -91,9 +91,9 @@ test('removal confirms its impact, cancellation preserves registration, and a pe
     await expect(page.getByRole('status').filter({ hasText: 'Server removed.' })).toBeVisible();
     expect(mutations).toBe(1);
     expect((await page.request.get('/api/admin/servers/remove_lifecycle')).status()).toBe(404);
-    expect((await client.listTools(undefined, { cacheMode: 'bypass' })).tools.map(tool => tool.name)).not.toContain('remove_lifecycle.calculate');
-    await expect(client.callTool({ name: 'remove_lifecycle.calculate', arguments: { operation: 'multiply', a: 2, b: 3 } })).rejects.toBeInstanceOf(ProtocolError);
-    expect((await client.callTool({ name: 'calculator.calculate', arguments: { operation: 'multiply', a: 7, b: 8 } })).content).toEqual([{ type: 'text', text: '56' }]);
+    expect((await client.listTools(undefined, { cacheMode: 'bypass' })).tools.map(tool => tool.name)).not.toContain('remove_lifecycle_calculate');
+    await expect(client.callTool({ name: 'remove_lifecycle_calculate', arguments: { operation: 'multiply', a: 2, b: 3 } })).rejects.toBeInstanceOf(ProtocolError);
+    expect((await client.callTool({ name: 'calculator_calculate', arguments: { operation: 'multiply', a: 7, b: 8 } })).content).toEqual([{ type: 'text', text: '56' }]);
   } finally { await client.close(); }
 });
 
@@ -118,20 +118,20 @@ test('failed enable and refresh show actual outcomes, isolate cached calls, and 
     await expect(details).toContainText('No available tools.');
     await details.getByRole('button', { name: 'Refresh discovery', exact: true }).click();
     await expect(page.getByRole('status').filter({ hasText: 'Discovery refreshed.' })).toContainText('unreachable');
-    expect((await client.listTools(undefined, { cacheMode: 'bypass' })).tools.map(tool => tool.name)).not.toContain('recovery_lifecycle.calculate');
-    await expect(client.callTool({ name: 'recovery_lifecycle.calculate', arguments: { operation: 'multiply', a: 2, b: 3 } })).rejects.toBeInstanceOf(ProtocolError);
-    expect((await client.callTool({ name: 'calculator.calculate', arguments: { operation: 'multiply', a: 6, b: 7 } })).content).toEqual([{ type: 'text', text: '42' }]);
+    expect((await client.listTools(undefined, { cacheMode: 'bypass' })).tools.map(tool => tool.name)).not.toContain('recovery_lifecycle_calculate');
+    await expect(client.callTool({ name: 'recovery_lifecycle_calculate', arguments: { operation: 'multiply', a: 2, b: 3 } })).rejects.toBeInstanceOf(ProtocolError);
+    expect((await client.callTool({ name: 'calculator_calculate', arguments: { operation: 'multiply', a: 6, b: 7 } })).content).toEqual([{ type: 'text', text: '42' }]);
     await expect(details).toContainText('Upstream unavailable');
     expect(await page.content()).not.toContain('synthetic-browser-one');
     expect(await page.content()).not.toContain('private upstream diagnostic');
     await mode('changed');
     await details.getByRole('button', { name: 'Refresh discovery', exact: true }).click();
     await expect(details).toContainText('Runtime statusconnected');
-    await expect(details.getByRole('heading', { name: 'recovery_lifecycle.current', exact: true })).toBeVisible();
+    await expect(details.getByRole('heading', { name: 'recovery_lifecycle_current', exact: true })).toBeVisible();
     const catalog = (await client.listTools(undefined, { cacheMode: 'bypass' })).tools;
-    expect(catalog.find(tool => tool.name === 'recovery_lifecycle.current')?.inputSchema).toMatchObject({ properties: { timezone: { const: 'UTC' } } });
-    expect(catalog.map(tool => tool.name)).not.toContain('recovery_lifecycle.calculate');
-    expect((await client.callTool({ name: 'recovery_lifecycle.current', arguments: { timezone: 'UTC' } })).content).toEqual([{ type: 'text', text: 'Replacement clock' }]);
+    expect(catalog.find(tool => tool.name === 'recovery_lifecycle_current')?.inputSchema).toMatchObject({ properties: { timezone: { const: 'UTC' } } });
+    expect(catalog.map(tool => tool.name)).not.toContain('recovery_lifecycle_calculate');
+    expect((await client.callTool({ name: 'recovery_lifecycle_current', arguments: { timezone: 'UTC' } })).content).toEqual([{ type: 'text', text: 'Replacement clock' }]);
   } finally { await mode('valid'); await client.close(); }
 });
 

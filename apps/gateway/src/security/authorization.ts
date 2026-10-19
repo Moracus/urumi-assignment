@@ -18,11 +18,11 @@ export function authorizeTool(
   }
 
   const memberAllowedTools = new Set([
-    "woocommerce.list_products",
-    "woocommerce.list_orders",
-    "woocommerce.get_order",
-    "calculator.calculate",
-    "time.current",
+    "woocommerce_list_products",
+    "woocommerce_list_orders",
+    "woocommerce_get_order",
+    "calculator_calculate",
+    "time_current",
   ]);
 
   if (!memberAllowedTools.has(toolName)) {

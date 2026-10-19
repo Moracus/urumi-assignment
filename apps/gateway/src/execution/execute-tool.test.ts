@@ -17,12 +17,12 @@ test("executes an authorized calculator tool", async () => {
   const dependencies: ExecutionDependencies = {
     resolver: {
       async resolve(publicToolName) {
-        if (publicToolName !== "calculator.calculate") {
+        if (publicToolName !== "calculator_calculate") {
           return null;
         }
 
         return {
-          publicName: "calculator.calculate",
+          publicName: "calculator_calculate",
           upstreamName: "calculator",
           upstreamToolName: "calculate",
         };
@@ -60,7 +60,7 @@ test("executes an authorized calculator tool", async () => {
         keyId: "key-1",
       },
 
-      toolName: "calculator.calculate",
+      toolName: "calculator_calculate",
 
       arguments: {
         operation: "add",
@@ -81,7 +81,7 @@ test("executes an authorized calculator tool", async () => {
 
   assert.equal(
     records[0].toolName,
-    "calculator.calculate",
+    "calculator_calculate",
   );
 
   assert.equal(
@@ -99,7 +99,7 @@ test("rejects unauthorized member tool calls", async () => {
     resolver: {
       async resolve() {
         return {
-          publicName: "woocommerce.create_product",
+          publicName: "woocommerce_create_product",
           upstreamName: "woocommerce",
           upstreamToolName: "create_product",
         };
@@ -132,7 +132,7 @@ test("rejects unauthorized member tool calls", async () => {
           keyId: "key-2",
         },
 
-        toolName: "woocommerce.create_product",
+        toolName: "woocommerce_create_product",
 
         arguments: {
           name: "Test Product",

@@ -25,7 +25,7 @@ test('one continuing administrator client follows dashboard registration, creden
     requestInit: { headers: { Authorization: `Bearer ${rawKey}` } },
   }));
   try {
-    expect((await client.listTools(undefined, { cacheMode: 'bypass' })).tools.map(tool => tool.name)).not.toContain('credential_edit.calculate');
+    expect((await client.listTools(undefined, { cacheMode: 'bypass' })).tools.map(tool => tool.name)).not.toContain('credential_edit_calculate');
     await page.getByRole('button', { name: 'Register server', exact: true }).click();
     await page.getByLabel('Server identifier', { exact: true }).fill('credential_edit');
     await page.getByLabel('Display name', { exact: true }).fill('Authenticated addition');
@@ -37,9 +37,9 @@ test('one continuing administrator client follows dashboard registration, creden
     await page.getByRole('button', { name: 'Save server', exact: true }).click();
     const details = page.getByRole('region', { name: 'Server details' });
     await expect(details).toContainText('Runtime statusconnected');
-    const original = (await client.listTools(undefined, { cacheMode: 'bypass' })).tools.find(tool => tool.name === 'credential_edit.calculate');
+    const original = (await client.listTools(undefined, { cacheMode: 'bypass' })).tools.find(tool => tool.name === 'credential_edit_calculate');
     expect(original?.inputSchema).toMatchObject({ required: ['operation', 'a', 'b'], properties: { operation: { const: 'multiply' } } });
-    expect((await client.callTool({ name: 'credential_edit.calculate', arguments: { operation: 'multiply', a: 6, b: 7 } })).content).toEqual([{ type: 'text', text: '42' }]);
+    expect((await client.callTool({ name: 'credential_edit_calculate', arguments: { operation: 'multiply', a: 6, b: 7 } })).content).toEqual([{ type: 'text', text: '42' }]);
     await page.getByRole('button', { name: 'Edit server', exact: true }).click();
     expect(await page.content()).not.toContain('browser-private-reference');
     await page.getByLabel('Display name', { exact: true }).fill('Credentials preserved');
@@ -48,7 +48,7 @@ test('one continuing administrator client follows dashboard registration, creden
     await page.getByRole('button', { name: 'Save server', exact: true }).click();
     expect((await preserved).postDataJSON()).not.toHaveProperty('authentication');
     await expect(details).toContainText('Runtime statusconnected');
-    expect((await client.callTool({ name: 'credential_edit.calculate', arguments: { operation: 'multiply', a: 3, b: 4 } })).content).toEqual([{ type: 'text', text: '12' }]);
+    expect((await client.callTool({ name: 'credential_edit_calculate', arguments: { operation: 'multiply', a: 3, b: 4 } })).content).toEqual([{ type: 'text', text: '12' }]);
     await page.getByRole('button', { name: 'Edit server', exact: true }).click();
     await page.getByLabel('Replace authentication').check();
     await page.getByLabel('Authentication mode').selectOption('header');
@@ -61,31 +61,31 @@ test('one continuing administrator client follows dashboard registration, creden
     await expect(details).toContainText('Authentication type: header');
     await expect(details).toContainText('Runtime statusconnected');
     const names = (await client.listTools(undefined, { cacheMode: 'bypass' })).tools.map(tool => tool.name);
-    expect(names).toContain('credential_edit.current');
-    expect(names).not.toContain('credential_edit.calculate');
-    await expect(client.callTool({ name: 'credential_edit.calculate', arguments: { operation: 'multiply', a: 1, b: 2 } })).rejects.toBeInstanceOf(ProtocolError);
-    expect((await client.callTool({ name: 'credential_edit.current', arguments: { timezone: 'UTC' } })).content).toEqual([{ type: 'text', text: 'Replacement clock' }]);
-    expect((await client.callTool({ name: 'calculator.calculate', arguments: { operation: 'multiply', a: 7, b: 8 } })).content).toEqual([{ type: 'text', text: '56' }]);
+    expect(names).toContain('credential_edit_current');
+    expect(names).not.toContain('credential_edit_calculate');
+    await expect(client.callTool({ name: 'credential_edit_calculate', arguments: { operation: 'multiply', a: 1, b: 2 } })).rejects.toBeInstanceOf(ProtocolError);
+    expect((await client.callTool({ name: 'credential_edit_current', arguments: { timezone: 'UTC' } })).content).toEqual([{ type: 'text', text: 'Replacement clock' }]);
+    expect((await client.callTool({ name: 'calculator_calculate', arguments: { operation: 'multiply', a: 7, b: 8 } })).content).toEqual([{ type: 'text', text: '56' }]);
     expect(JSON.stringify(await (await page.request.get('/api/admin/servers/credential_edit')).json())).not.toContain('browser-replacement-reference');
     expect(await page.content()).not.toContain('synthetic-browser');
     expect(await page.evaluate(() => [Object.keys(localStorage), Object.keys(sessionStorage)])).toEqual([[], []]);
     await details.getByRole('button', { name: 'Disable server', exact: true }).click();
     await page.getByRole('button', { name: 'Confirm disable', exact: true }).click();
     await expect(details).toContainText('Runtime statusdisabled');
-    expect((await client.listTools(undefined, { cacheMode: 'bypass' })).tools.map(tool => tool.name)).not.toContain('credential_edit.current');
-    await expect(client.callTool({ name: 'credential_edit.current', arguments: { timezone: 'UTC' } })).rejects.toBeInstanceOf(ProtocolError);
+    expect((await client.listTools(undefined, { cacheMode: 'bypass' })).tools.map(tool => tool.name)).not.toContain('credential_edit_current');
+    await expect(client.callTool({ name: 'credential_edit_current', arguments: { timezone: 'UTC' } })).rejects.toBeInstanceOf(ProtocolError);
     await details.getByRole('button', { name: 'Enable server', exact: true }).click();
     await expect(details).toContainText('Runtime statusconnected');
     await details.getByRole('button', { name: 'Refresh discovery', exact: true }).click();
     await expect(page.getByRole('status').filter({ hasText: 'Discovery refreshed.' })).toContainText('connected');
-    expect((await client.listTools(undefined, { cacheMode: 'bypass' })).tools.map(tool => tool.name)).toContain('credential_edit.current');
-    expect((await client.callTool({ name: 'credential_edit.current', arguments: { timezone: 'UTC' } })).content).toEqual([{ type: 'text', text: 'Replacement clock' }]);
+    expect((await client.listTools(undefined, { cacheMode: 'bypass' })).tools.map(tool => tool.name)).toContain('credential_edit_current');
+    expect((await client.callTool({ name: 'credential_edit_current', arguments: { timezone: 'UTC' } })).content).toEqual([{ type: 'text', text: 'Replacement clock' }]);
     await details.getByRole('button', { name: 'Remove server', exact: true }).click();
     await page.getByRole('button', { name: 'Confirm remove', exact: true }).click();
     await expect(details).toHaveCount(0);
-    expect((await client.listTools(undefined, { cacheMode: 'bypass' })).tools.map(tool => tool.name)).not.toContain('credential_edit.current');
-    await expect(client.callTool({ name: 'credential_edit.current', arguments: { timezone: 'UTC' } })).rejects.toBeInstanceOf(ProtocolError);
-    expect((await client.callTool({ name: 'calculator.calculate', arguments: { operation: 'multiply', a: 7, b: 8 } })).content).toEqual([{ type: 'text', text: '56' }]);
+    expect((await client.listTools(undefined, { cacheMode: 'bypass' })).tools.map(tool => tool.name)).not.toContain('credential_edit_current');
+    await expect(client.callTool({ name: 'credential_edit_current', arguments: { timezone: 'UTC' } })).rejects.toBeInstanceOf(ProtocolError);
+    expect((await client.callTool({ name: 'calculator_calculate', arguments: { operation: 'multiply', a: 7, b: 8 } })).content).toEqual([{ type: 'text', text: '56' }]);
   } finally { await client.close(); }
 });
 
@@ -116,7 +116,7 @@ test('registers and edits a stable namespace, and saves failed discovery for rec
   await page.getByLabel('Endpoint', { exact: true }).fill(`${origin}/mcp/browser_added`);
   await page.getByRole('button', { name: 'Save server', exact: true }).click();
   await expect(row).toContainText('connected');
-  await expect(page.getByRole('heading', { name: 'browser_added.calculate', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'browser_added_calculate', exact: true })).toBeVisible();
 });
 
 test('forms reject invalid syntax and backend destination or reference denials remain recoverable', async ({ page }) => {

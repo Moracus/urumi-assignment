@@ -1,5 +1,9 @@
 # Day 4 operator walkthrough and Day 5 handoff (#37)
 
+Historical naming: dotted tool examples below predate the public-name migration.
+Use the current [underscore names and verification guide](../operations/tool-name-migration.md)
+when running this walkthrough against the updated gateway.
+
 Use the execution record (historical evidence file is not included in this checkout) for actual results and capability
 status. This walkthrough is reproducible guidance, not a claim that all its steps
 passed. Kind v0.24+ includes NetworkPolicy support; identify the installed image

@@ -12,7 +12,7 @@ Have an eligible Urumi administrator, a separate member and WordPress administra
 
 1. Log into the Urumi dashboard as an administrator and open Chat.
 2. Send: “Create one simple product named Urumi Demo Mug 2026-10-17 priced at 12.50 with explicit status=publish.” Use a unique name for each deliberate demonstration.
-3. Confirm the call table shows `woocommerce.create_product`, a successful outcome and a final answer. Record the returned product ID and permalink. If the request fails or disconnects, inspect WooCommerce Products and tool history before resubmitting: the write may already have completed.
+3. Confirm the call table shows `woocommerce_create_product`, a successful outcome and a final answer. Record the returned product ID and permalink. If the request fails or disconnects, inspect WooCommerce Products and tool history before resubmitting: the write may already have completed.
 4. In WordPress Products, verify the exact name, regular price and Published status. Open the permalink in a signed-out browser and verify the name, price and Add to cart control. Check catalog visibility, stock and cache settings if the published product is absent from the shop listing. Taxes or currency formatting can affect the displayed price; verify the regular price separately in admin.
 5. As the Urumi member, request a different product creation. Confirm write access is denied and no product is created. Members retain order/product reads, calculator and time access. Inspect the administrator tool history for session attribution and the rejected or denied outcome; the provider may decline the request without proposing a call, in which case no execution row is expected.
 
@@ -45,6 +45,6 @@ Record environment/image revisions, time, query timezone, product/order IDs, vis
 - Focused Playwright chat/key run: all 17 matching browser tests passed (including administrator-key tests matched by the filename filter).
 - Final `pnpm test:workflow`: workspace typecheck/build, 3 date tests, all 174 gateway tests and all 64 browser tests passed. This runner includes real disposable MongoDB outage/transaction tests and removes its containers afterward.
 
-An initial full run passed all gateway tests and 63 of 64 browser tests; one existing member-key workflow received an error from `time.current`. Neither the focused rerun nor the final full run reproduced it. The assertion now checks the complete expected clock result so any recurrence includes useful response diagnostics. No tool retry was added.
+An initial full run passed all gateway tests and 63 of 64 browser tests; one existing member-key workflow received an error from `time_current`. Neither the focused rerun nor the final full run reproduced it. The assertion now checks the complete expected clock result so any recurrence includes useful response diagnostics. No tool retry was added.
 
 Review against starting commit `2baa89e`: Standards found no violations; Spec found one historical split-date boundary bug, fixed with regression cases for both affected Casey and Goose Bay dates and rejected before REST I/O. Both follow-up reviews have zero unresolved findings. Live commerce/provider/deployment checks remain unexecuted operator steps.

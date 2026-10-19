@@ -108,14 +108,14 @@ test('commerce chat queries a timezone day through the real adapter and pairs a 
   assert.deepEqual(f.commerce.errors, []);
   assert.equal(result.answer, 'Two orders in the selected day; 6 times 7 is 42.');
   assert.deepEqual(result.calls.map(call => [call.id, call.toolName, call.outcome]), [
-    ['orders-day', 'woocommerce.list_orders', 'success'], ['multiply', 'calculator.calculate', 'success'],
+    ['orders-day', 'woocommerce_list_orders', 'success'], ['multiply', 'calculator_calculate', 'success'],
   ]);
   const request = f.commerce.requests[0];
   assert.equal(request.query.after, '2026-03-08T04:59:59Z');
   assert.equal(request.query.before, '2026-03-09T04:00:00Z');
   assert.equal(request.query.dates_are_gmt, 'true');
   const audit = (await f.gateway.inject({ url: '/api/admin/audit', headers: f.headers })).json().records;
-  assert.deepEqual(audit.map(row => row.toolName).sort(), ['calculator.calculate', 'woocommerce.list_orders']);
+  assert.deepEqual(audit.map(row => row.toolName).sort(), ['calculator_calculate', 'woocommerce_list_orders']);
   assert.ok(audit.every(row => row.authenticationOrigin === 'dashboard_session' && row.keyId === null && row.outcome === 'success'));
 });
 
@@ -128,7 +128,7 @@ test('administrator commerce chat propagates published product fields while memb
     if (!results.length) {
       if (member) {
         assert.equal(product, undefined, 'members never discover the write tool');
-        return calls([['forged-write', 'woocommerce.create_product', { name: 'Forbidden Mug', regular_price: '99.00', status: 'publish' }]]);
+        return calls([['forged-write', 'woocommerce_create_product', { name: 'Forbidden Mug', regular_price: '99.00', status: 'publish' }]]);
       }
       assert.deepEqual(product.function.parameters.properties.status.enum, ['draft', 'publish']);
       return calls([['create-mug', product.function.name, { name: 'Demo Mug', regular_price: '12.50', ...(draft ? {} : { status: 'publish' }) }]]);
@@ -146,7 +146,7 @@ test('administrator commerce chat propagates published product fields while memb
   });
   const published = await f.chat('Create Demo Mug at 12.50 with explicit status=publish');
   assert.equal(published.answer, 'Demo Mug published at 12.50.');
-  assert.equal(published.calls[0].toolName, 'woocommerce.create_product');
+  assert.equal(published.calls[0].toolName, 'woocommerce_create_product');
   assert.equal(published.calls[0].outcome, 'success');
   assert.deepEqual(f.commerce.requests[0].body, { name: 'Demo Mug', type: 'simple', regular_price: '12.50', description: '', status: 'publish' });
   draft = true;
@@ -163,15 +163,15 @@ test('administrator commerce chat propagates published product fields while memb
   await client.connect(new StreamableHTTPClientTransport(new URL(`${f.address}/mcp`), {
     requestInit: { headers: { authorization: `Bearer ${issued.json().rawKey}` } },
   }));
-  assert.ok(!(await client.listTools()).tools.some(tool => tool.name === 'woocommerce.create_product'));
-  await client.callTool({ name: 'woocommerce.create_product', arguments: { name: 'Forbidden Mug', regular_price: '99.00', status: 'publish' } }).then(
+  assert.ok(!(await client.listTools()).tools.some(tool => tool.name === 'woocommerce_create_product'));
+  await client.callTool({ name: 'woocommerce_create_product', arguments: { name: 'Forbidden Mug', regular_price: '99.00', status: 'publish' } }).then(
     result => assert.equal(result.isError, true), error => assert.equal(error.name, 'ProtocolError'),
   );
   assert.equal(f.commerce.products.length, 2, 'denied member requests have no commerce side effect');
   assert.deepEqual(f.commerce.errors, []);
   const rows = (await f.gateway.inject({ url: '/api/admin/audit', headers: f.headers })).json().records;
-  assert.equal(rows.filter(row => row.toolName === 'woocommerce.create_product' && row.outcome === 'success').length, 2);
-  assert.ok(rows.some(row => row.toolName === 'woocommerce.create_product' && row.outcome === 'unauthorized' && row.authenticationOrigin === 'gateway_api_key'));
+  assert.equal(rows.filter(row => row.toolName === 'woocommerce_create_product' && row.outcome === 'success').length, 2);
+  assert.ok(rows.some(row => row.toolName === 'woocommerce_create_product' && row.outcome === 'unauthorized' && row.authenticationOrigin === 'gateway_api_key'));
 });
 
 test('commerce date errors and an unavailable server retain paired feedback and healthy upstream execution', async t => {
@@ -265,21 +265,21 @@ test('server withdrawal blocks stale MCP and provider calls while healthy commer
       await client.connect(new StreamableHTTPClientTransport(new URL(`${f.address}/mcp`), {
         requestInit: { headers: { authorization: `Bearer ${issued.json().rawKey}` } },
       }));
-      assert.ok((await client.listTools()).tools.some(tool => tool.name === 'calculator.calculate'));
+      assert.ok((await client.listTools()).tools.some(tool => tool.name === 'calculator_calculate'));
       const result = await f.chat('Calculate and get orders while the server is withdrawn');
       assert.deepEqual(result.calls.map(call => [call.toolName, call.outcome]), [
-        ['calculator.calculate', 'rejected'], ['woocommerce.list_orders', 'success'],
+        ['calculator_calculate', 'rejected'], ['woocommerce_list_orders', 'success'],
       ]);
-      assert.ok(!(await client.listTools(undefined, { cacheMode: 'bypass' })).tools.some(tool => tool.name === 'calculator.calculate'));
-      await assert.rejects(client.callTool({ name: 'calculator.calculate', arguments: { a: 6, b: 7 } }), { name: 'ProtocolError' });
-      assert.notEqual((await client.callTool({ name: 'woocommerce.list_orders', arguments: {} })).isError, true);
+      assert.ok(!(await client.listTools(undefined, { cacheMode: 'bypass' })).tools.some(tool => tool.name === 'calculator_calculate'));
+      await assert.rejects(client.callTool({ name: 'calculator_calculate', arguments: { a: 6, b: 7 } }), { name: 'ProtocolError' });
+      assert.notEqual((await client.callTool({ name: 'woocommerce_list_orders', arguments: {} })).isError, true);
       const rows = (await f.gateway.inject({ url: '/api/admin/audit', headers: f.headers })).json().records;
-      assert.ok(rows.some(row => row.toolName === 'calculator.calculate' && row.authenticationOrigin === 'dashboard_session' && row.outcome === 'rejected'));
-      assert.ok(rows.some(row => row.toolName === 'calculator.calculate' && row.authenticationOrigin === 'gateway_api_key' && row.outcome === 'not_found'));
+      assert.ok(rows.some(row => row.toolName === 'calculator_calculate' && row.authenticationOrigin === 'dashboard_session' && row.outcome === 'rejected'));
+      assert.ok(rows.some(row => row.toolName === 'calculator_calculate' && row.authenticationOrigin === 'gateway_api_key' && row.outcome === 'not_found'));
       if (action === 'disable') {
         assert.equal((await f.gateway.inject({ method: 'POST', url: '/api/admin/servers/calculator/enable', headers: f.headers })).statusCode, 200);
-        assert.ok((await client.listTools(undefined, { cacheMode: 'bypass' })).tools.some(tool => tool.name === 'calculator.calculate'));
-        assert.deepEqual((await client.callTool({ name: 'calculator.calculate', arguments: { a: 6, b: 7 } })).content, [{ type: 'text', text: '42' }]);
+        assert.ok((await client.listTools(undefined, { cacheMode: 'bypass' })).tools.some(tool => tool.name === 'calculator_calculate'));
+        assert.deepEqual((await client.callTool({ name: 'calculator_calculate', arguments: { a: 6, b: 7 } })).content, [{ type: 'text', text: '42' }]);
       } else assert.equal((await f.gateway.inject({ url: '/api/admin/servers/calculator', headers: f.headers })).statusCode, 404);
       const serialized = JSON.stringify({ result, rows });
       for (const secret of [issued.json().rawKey, 'synthetic-provider-secret', 'fixture-consumer', 'fixture-secret']) assert.ok(!serialized.includes(secret));
@@ -320,18 +320,18 @@ test('chat detects a transport outage within bounds, isolates healthy tools and 
   const status = (await f.gateway.inject({ url: '/api/admin/servers/calculator', headers: f.headers })).json().server;
   assert.equal(status.status, 'unreachable');
   assert.equal(status.lastError, 'Upstream unavailable');
-  assert.ok(!(await client.listTools(undefined, { cacheMode: 'bypass' })).tools.some(tool => tool.name === 'calculator.calculate'));
-  await assert.rejects(client.callTool({ name: 'calculator.calculate', arguments: { a: 6, b: 7 } }), { name: 'ProtocolError' });
-  assert.notEqual((await client.callTool({ name: 'woocommerce.list_orders', arguments: {} })).isError, true);
+  assert.ok(!(await client.listTools(undefined, { cacheMode: 'bypass' })).tools.some(tool => tool.name === 'calculator_calculate'));
+  await assert.rejects(client.callTool({ name: 'calculator_calculate', arguments: { a: 6, b: 7 } }), { name: 'ProtocolError' });
+  assert.notEqual((await client.callTool({ name: 'woocommerce_list_orders', arguments: {} })).isError, true);
   assert.equal((await f.gateway.inject({ url: '/health/ready' })).statusCode, 200);
   offline = false;
   f.setCalculatorOffline(false);
   const refreshed = await f.gateway.inject({ method: 'POST', url: '/api/admin/servers/calculator/refresh', headers: f.headers });
   assert.equal(refreshed.json().server.status, 'connected');
-  assert.deepEqual((await client.callTool({ name: 'calculator.calculate', arguments: { a: 6, b: 7 } })).content, [{ type: 'text', text: '42' }]);
+  assert.deepEqual((await client.callTool({ name: 'calculator_calculate', arguments: { a: 6, b: 7 } })).content, [{ type: 'text', text: '42' }]);
   assert.deepEqual((await f.chat('Calculate and list orders after recovery')).calls.map(call => call.outcome), ['success', 'success']);
   const records = (await f.gateway.inject({ url: '/api/admin/audit', headers: f.headers })).json().records;
-  assert.ok(records.some(row => row.toolName === 'calculator.calculate' && row.outcome === 'upstream_error' && row.authenticationOrigin === 'dashboard_session'));
+  assert.ok(records.some(row => row.toolName === 'calculator_calculate' && row.outcome === 'upstream_error' && row.authenticationOrigin === 'dashboard_session'));
   const serialized = JSON.stringify({ failed, status, records });
   for (const secret of [issued.json().rawKey, 'synthetic-provider-secret', 'fixture-consumer', 'fixture-secret']) assert.ok(!serialized.includes(secret));
 });

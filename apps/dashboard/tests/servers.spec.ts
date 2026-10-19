@@ -117,7 +117,7 @@ test('detail failures retry, pending refresh is bounded in the UI, and logout di
   await expect(details.getByRole('alert')).toHaveText('Service unavailable. Try again later.');
   await page.unroute('**/api/admin/servers/calculator/tools');
   await details.getByRole('button', { name: 'Retry details', exact: true }).click();
-  await expect(details.getByRole('heading', { name: 'calculator.calculate', exact: true })).toBeVisible();
+  await expect(details.getByRole('heading', { name: 'calculator_calculate', exact: true })).toBeVisible();
   let release!: () => void;
   const gate = new Promise<void>(resolve => { release = resolve; });
   await page.route('**/api/admin/servers/calculator/refresh', async route => {
