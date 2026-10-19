@@ -10,20 +10,51 @@ See [README](../../README.md) for setup and validation commands.
 
 ## Component topology
 
-```mermaid
-flowchart TB
-    Client[MCP client] -->|Bearer credential /mcp| Ingress[Ingress controller]
-    Browser[Storefront browser] --> Ingress
-    Ingress -->|/mcp port 3000| Gateway[MCP gateway]
-    Ingress -->|/ port 80| WordPress[WordPress + WooCommerce]
-    Gateway -->|Streamable HTTP 3001| Woo[WooCommerce MCP]
-    Gateway -->|Streamable HTTP 3002| Calc[Calculator MCP]
-    Gateway -->|Streamable HTTP 3003| Time[Time MCP]
-    Woo -->|Signed REST requests port 80| WordPress
-    WordPress -->|SQL port 3306| DB[MariaDB]
-    WordPress --- WPVolume[WordPress PVC]
-    DB --- DBVolume[MariaDB PVC]
-    Gateway --> Audit[MongoDB audit history]
+```
+                    USERS
+                      |
+          +-----------+-----------+
+          |                       |
+          v                       v
+    React Dashboard         Cursor / MCP Client
+          |                       |
+          | Session Cookie        | Bearer API Key
+          |                       |
+          v                       |
+    Dashboard API                  |
+          |                       |
+          +-----------+-----------+
+                      |
+                      v
+              MCP GATEWAY
+              (Fastify)
+                      |
+          +-----------+-----------+
+          |                       |
+    Authentication          MCP Registry
+    Authorization                 |
+    Audit Logging                |
+          |                       |
+          +-----------+-----------+
+                      |
+            Tool Aggregation
+                      |
+        +-------------+-------------+
+        |             |             |
+        v             v             v
+    WooCommerce   Calculator       Time
+    MCP Server    MCP Server    MCP Server
+        |
+        | WooCommerce REST API
+        v
+  WordPress + WooCommerce
+        |
+        v
+      MariaDB
+
+    MongoDB <---- Gateway
+    (Identity, sessions,
+     registrations, audits)
 ```
 
 The controller is installed separately from the application chart. Internal MCP endpoints and the database have ClusterIP Services and no Ingress templates. Local values select Traefik; the chart's base ingress class is `nginx`, so deployments should explicitly choose the appropriate values file and controller namespace.
