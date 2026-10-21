@@ -128,7 +128,8 @@ test('loading and later-page failures never show partial totals, and retry handl
   await page.route('**/api/admin/servers', route => route.fulfill({ json: { servers: [{ serverId: 'unsafe', toolCount: -1 }] } }));
   await page.getByRole('button', { name: 'Refresh summary', exact: true }).click();
   await expect(page.getByRole('alert')).toHaveText('Service returned an invalid response. Try again later.');
-  await expect(page.getByRole('region', { name: 'Administrator overview' })).toHaveCount(0);
+  await expect(page.getByRole('region', { name: 'Administrator overview' })).toBeVisible();
+  await expect(page.getByRole('status').filter({ hasText: 'Stale data' })).toBeVisible();
   await page.unroute('**/api/admin/servers'); await page.unroute('**/api/admin/users?**');
   await page.getByRole('button', { name: 'Retry summary', exact: true }).click();
   await expect(page.getByRole('region', { name: 'Administrator overview' })).toBeVisible();
@@ -142,13 +143,15 @@ test('member summary failures do not misreport zero active keys, and malformed m
   await page.route('**/api/keys?**', route => route.fulfill({ status: 503, json: { error: 'private upstream Secret' } }));
   await page.getByRole('button', { name: 'Refresh summary', exact: true }).click();
   await expect(page.getByRole('alert')).toHaveText('Service unavailable. Try again later.');
-  await expect(summary).toHaveCount(0);
+  await expect(summary).toBeVisible();
+  await expect(page.getByRole('status').filter({ hasText: 'Stale data' })).toBeVisible();
   expect(await page.content()).not.toContain('private upstream Secret');
   await page.unroute('**/api/keys?**');
   await page.route('**/api/keys?**', route => route.fulfill({ json: { page: 1, limit: 10, keys: [{ id: '000000000000000000000001' }] } }));
   await page.getByRole('button', { name: 'Retry summary', exact: true }).click();
   await expect(page.getByRole('alert')).toHaveText('Service returned an invalid response. Try again later.');
-  await expect(summary).toHaveCount(0);
+  await expect(summary).toBeVisible();
+  await expect(page.getByRole('status').filter({ hasText: 'Stale data' })).toBeVisible();
   await page.unroute('**/api/keys?**');
   await page.getByRole('button', { name: 'Retry summary', exact: true }).click();
   await expect(summary).toContainText('No active API keys.');
@@ -173,7 +176,7 @@ test('logout and account replacement discard delayed summary pages, and expiry c
   });
   await page.getByRole('button', { name: 'Refresh summary', exact: true }).click();
   await received;
-  await expect(page.getByRole('region', { name: 'Administrator overview' })).toHaveCount(0);
+  await expect(page.getByRole('status').filter({ hasText: 'Stale data' })).toBeVisible();
   await page.getByRole('button', { name: 'Log out', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Log in', exact: true })).toBeVisible();
   const delivered = page.waitForResponse(response => new URL(response.url()).searchParams.get('page') === '2');
@@ -208,9 +211,20 @@ test('a backend role change replaces administrator totals with the member overvi
     await page.evaluate(() => window.dispatchEvent(new Event('focus')));
     await expect(page.getByRole('region', { name: 'Administrator overview' })).toBeVisible();
     await expect(page.getByRole('region', { name: 'Member overview' })).toHaveCount(0);
-    expect((await admin.patch(`/api/admin/users/${userId}`, { headers: adminHeaders, data: { role: 'member' } })).status()).toBe(200);
-    // The old admin view must handle backend rejection and revalidate, without trusting its stale role.
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let received!: () => void;
+    const started = new Promise<void>(resolve => { received = resolve; });
+    await page.route('**/api/admin/servers', async route => {
+      const response = await route.fetch(); received(); await gate; await route.fulfill({ response });
+    });
     await page.getByRole('button', { name: 'Refresh summary', exact: true }).click();
+    await started;
+    expect((await admin.patch(`/api/admin/users/${userId}`, { headers: adminHeaders, data: { role: 'member' } })).status()).toBe(200);
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    await expect(page.getByRole('region', { name: 'Member overview' })).toBeVisible();
+    const delivered = page.waitForResponse(response => response.url().endsWith('/api/admin/servers'));
+    release(); await delivered;
     await expect(page.getByRole('region', { name: 'Member overview' })).toContainText('Active API keys0');
     await expect(page.getByRole('region', { name: 'Administrator overview' })).toHaveCount(0);
     expect((await page.request.get('/api/admin/users')).status()).toBe(403);

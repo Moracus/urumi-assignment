@@ -1,3 +1,4 @@
+import { Dialog } from './ui.js';
 import { useEffect, useState } from 'react';
 import { api, ApiError } from './api.js';
 import { ServerForm, type ServerInput } from './server-form.js';
@@ -122,22 +123,23 @@ function ServerDetails({ id, close, changed, edit, busy }: { id: string; close: 
       <button disabled={pending || !!confirmation || !data.server.enabled} onClick={() => void act('refresh')}>Refresh discovery</button>
       {!data.server.enabled && <p>Discovery refresh requires an enabled registration.</p>}
       {data.server.enabled
-        ? <button disabled={pending || !!confirmation} onClick={() => { setActionError(''); setConfirmation('disable'); }}>Disable server</button>
+        ? <button disabled={pending} onClick={() => { setActionError(''); setConfirmation('disable'); }}>Disable server</button>
         : <button disabled={pending || !!confirmation} onClick={() => void act('enable')}>Enable server</button>}
-      <button disabled={pending || !!confirmation} onClick={() => { setActionError(''); setConfirmation('remove'); }}>Remove server</button>
-      {confirmation && <div role="dialog" aria-modal="true" aria-label={`${confirmation === 'disable' ? 'Disable' : 'Remove'} server confirmation`}>
+      <button disabled={pending} onClick={() => { setActionError(''); setConfirmation('remove'); }}>Remove server</button>
+      {confirmation && <Dialog label={`${confirmation === 'disable' ? 'Disable' : 'Remove'} server confirmation`} pending={pending} close={() => setConfirmation(null)}>
         <p>{confirmation === 'disable' ? `Disable ${id}? Its tools will become unavailable to MCP clients until enabled again.`
           : `Remove ${id}? Its tools will become unavailable to MCP clients. This unregisters the configuration and closes connections. Kubernetes Secrets will not be deleted.`}</p>
         <button disabled={pending} onClick={() => void act(confirmation)}>Confirm {confirmation}</button>
-        <button disabled={pending} onClick={() => setConfirmation(null)}>Cancel</button>
-      </div>}
+        {actionError && <p role="alert">{actionError}</p>}
+        <p>Refresh details to check the current state before retrying.</p>
+      </Dialog>}
       <h3>Available tools</h3>
       {data.catalog.length === 0 ? <p>No available tools.</p> : data.catalog.map(tool => <section key={tool.name} aria-label={tool.name}>
         <h4>{tool.name}</h4><p className="upstream-description">{tool.description ?? 'No description.'}</p>
         <pre className="tool-schema" aria-label={`Input schema for ${tool.name}`} tabIndex={0}>{JSON.stringify(tool.inputSchema, null, 2)}</pre>
       </section>)}
     </>}
-    {pending && <p role="status">Updating server…</p>}{actionError && <><p role="alert">{actionError}</p><p>Refresh details to check the current state before retrying.</p></>}
+    {pending && <p role="status">Updating server…</p>}{actionError && !confirmation && <><p role="alert">{actionError}</p><p>Refresh details to check the current state before retrying.</p></>}
   </section>;
 }
 export function Servers() {
@@ -173,7 +175,7 @@ export function Servers() {
     {editor && <ServerForm initial={editor.initial} save={save} close={() => setEditor(null)} />}
     {loading ? <p role="status">Loading servers…</p> : error ? <><p role="alert">{error}</p>
       <button disabled={pending} onClick={() => setRevision(value => value + 1)}>Retry servers</button></>
-      : servers.length === 0 ? <p>No registered servers.</p> : <div className="table-scroll"><table>
+      : servers.length === 0 ? <p>No registered servers.</p> : <div className="table-scroll" role="region" aria-label="Registered servers" tabIndex={0}><table>
         <thead><tr><th>Identifier</th><th>Name</th><th>Configured state</th><th>Runtime status</th><th>Available tools</th><th>Details</th></tr></thead>
         <tbody>{servers.map(server => <tr key={server.serverId}><td>{server.serverId}</td><td>{server.displayName}</td>
           <td>{server.enabled ? 'Enabled' : 'Disabled'}</td><td>{server.status}</td><td>{server.toolCount}</td>

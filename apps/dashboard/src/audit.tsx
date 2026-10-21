@@ -57,7 +57,7 @@ export function ToolHistory() {
     <button disabled={loading} onClick={() => setRevision(value => value + 1)}>Refresh history</button>
     {loading ? <p role="status">Loading tool history…</p> : error ? <><p role="alert">{error}</p>
       <button onClick={() => setRevision(value => value + 1)}>Retry history</button></>
-      : rows.length === 0 ? <p>No tool calls on this page.</p> : <div className="table-scroll"><table>
+      : rows.length === 0 ? <p>No tool calls on this page.</p> : <div className="table-scroll" role="region" aria-label="Tool history" tabIndex={0}><table>
         <thead><tr>{['User', 'Server', 'Tool', 'Time', 'Duration', 'Outcome'].map(title => <th key={title}>{title}</th>)}</tr></thead>
         <tbody>{rows.map(row => <tr key={row.id}>
           <td title={row.userId ?? undefined}>{row.userEmail ?? row.userId ?? 'Unauthenticated'}</td>

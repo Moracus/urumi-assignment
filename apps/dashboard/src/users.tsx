@@ -1,3 +1,4 @@
+import { Dialog } from './ui.js';
 import { useEffect, useState, type FormEvent } from 'react';
 import { api, ApiError, type DashboardUser } from './api.js';
 import { UserKeys } from './keys.js';
@@ -82,14 +83,14 @@ function UserDetails({ id, close, changed }: { id: string; close: () => void; ch
       {account.status === 'disabled'
         ? <><p>Re-enabling allows fresh login and new keys. Old sessions and keys remain invalid.</p>
           <button disabled={pending} onClick={() => void change({ status: 'active' })}>Re-enable user</button></>
-        : <button disabled={pending || confirmDisable} onClick={() => { setConfirmDisable(true); setActionError(''); setNotice(''); }}>Disable user</button>}
-      {confirmDisable && <div role="dialog" aria-modal="true" aria-label="Disable user confirmation">
+        : <button disabled={pending} onClick={() => { setConfirmDisable(true); setActionError(''); setNotice(''); }}>Disable user</button>}
+      {confirmDisable && <Dialog label="Disable user confirmation" pending={pending} close={() => setConfirmDisable(false)}>
         <p>Disable {account.email}? Existing dashboard sessions and gateway API keys will be permanently invalidated, even after re-enabling.</p>
         <button disabled={pending} onClick={() => void change({ status: 'disabled' })}>Confirm disable</button>
-        <button disabled={pending} onClick={() => setConfirmDisable(false)}>Cancel</button>
-      </div>}
+        {actionError && <p role="alert">{actionError}</p>}
+      </Dialog>}
       {pending && <p role="status">Updating user access…</p>}
-      {actionError && <p role="alert">{actionError}</p>}{notice && <p role="status">{notice}</p>}
+      {actionError && !confirmDisable && <p role="alert">{actionError}</p>}{notice && <p role="status">{notice}</p>}
       <fieldset disabled={pending} aria-label="User key management"><UserKeys owner={account} /></fieldset>
     </>}
   </section>;
@@ -158,7 +159,7 @@ export function Users() {
     <button disabled={loading || pending} onClick={() => { setLoading(true); setRevision(value => value + 1); }}>Refresh users</button>
     {loading ? <p role="status">Loading users…</p> : listError ? <><p role="alert">{listError}</p>
       <button onClick={() => { setLoading(true); setRevision(value => value + 1); }}>Retry users</button></>
-      : users.length === 0 ? <p>No users on this page.</p> : <div className="table-scroll"><table>
+      : users.length === 0 ? <p>No users on this page.</p> : <div className="table-scroll" role="region" aria-label="User accounts" tabIndex={0}><table>
         <thead><tr>{['Email', 'Role', 'Status', 'Password replacement', 'Action'].map(label => <th key={label}>{label}</th>)}</tr></thead>
         <tbody>{users.map(account => <tr key={account.id}><td>{account.email}</td><td>{account.role}</td><td>{account.status}</td>
           <td>{account.requiredPasswordChange ? 'Required' : 'Complete'}</td>

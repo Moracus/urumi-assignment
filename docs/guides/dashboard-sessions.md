@@ -310,3 +310,7 @@ To demonstrate, create more than ten users as an administrator and inspect Dashb
 Use the [existing local setup and browser test commands](#browser-dashboard-25); target this feature with `pnpm --filter @urumi/dashboard test:browser overview.spec.ts`. No new dependency, backend contract, environment variable, Helm resource, Secret or PVC change is required. Rebuild the dashboard with `pnpm --filter @urumi/dashboard build` and serve it using the existing development setup. Production dashboard packaging and Kubernetes deployment remain separate work; browser validation does not verify a live cluster.
 
 Validation executed for #33 on 2026-10-16: `pnpm typecheck`, `pnpm build`, and `git diff --check` passed. The final complete browser suite (`MONGODB_TEST_URI=… pnpm --filter @urumi/dashboard test:browser`) passed all 54 tests after making existing authentication locators precise for the additional overview links/status. `pnpm --filter @urumi/gateway test:integration` passed all 132 tests with no skips using the disposable replica-set/standalone fixture. Standards and specification reviews reported no findings. Helm and live Kubernetes checks were not run; this ticket changes no deployment resources.
+
+## Responsive console (#48)
+
+The shared sidebar/mobile navigation, accessible confirmations, UI tokens and stale-read conventions are documented in [Shared dashboard UI](dashboard-ui.md). Existing account access and session-generation rules continue to apply.

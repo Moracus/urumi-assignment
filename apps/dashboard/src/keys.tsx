@@ -1,3 +1,4 @@
+import { Dialog } from './ui.js';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { flushSync } from 'react-dom';
 import { api, ApiError, type DashboardUser } from './api.js';
@@ -71,7 +72,7 @@ export function ConnectionInstructions() {
   return <section><h2>Connect an MCP client</h2>
     {loading ? <p role="status">Loading connection configuration…</p> : url ? <><p>Public MCP URL: <code>{url}</code></p>
       <p>Use the MCP TypeScript SDK v2 with Streamable HTTP. Install <code>@modelcontextprotocol/client@^2.0.0</code> in a Node.js project and run:</p>
-      <pre>{`import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
+      <pre aria-label="MCP client connection example" tabIndex={0}>{`import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 const client = new Client({ name: 'urumi-client', version: '1.0.0' });
 await client.connect(new StreamableHTTPClientTransport(new URL(${JSON.stringify(url)}), {
   requestInit: { headers: { Authorization: 'Bearer <YOUR_GATEWAY_API_KEY>' } },
@@ -170,7 +171,7 @@ function KeyManagement({ owner }: { owner?: DashboardUser }) {
   return <section aria-label={owner ? 'Selected user API keys' : undefined}>
     {owner ? <><h3>API keys for {owner.email}</h3><p>Owner: {owner.email} ({owner.id}). Revoked records remain visible.</p></>
       : <><h1>Personal API keys</h1><p>Manage keys belonging to your account. Revoked records remain visible.</p></>}
-    {error && <p role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}
+    {error && !confirm && <p role="alert">{error}</p>}{notice && <p role="status">{notice}</p>}
     {issued ? <section aria-label="One-time key creation"><h2>Save your new key</h2>
       {owner && <p>This key belongs to {owner.email} ({owner.id}). Share it privately with this user.</p>}
       <p>Save this key now. It cannot be recovered after dismissal.</p>
@@ -182,20 +183,20 @@ function KeyManagement({ owner }: { owner?: DashboardUser }) {
       <label>Key name<input name="name" maxLength={100} required disabled={pending} /></label>
       <button disabled={pending}>{pending ? 'Creating key…' : 'Create key'}</button>
     </form>}
-    {confirm && <section role="dialog" aria-modal="false" aria-label="Confirm revocation">
+    {confirm && <Dialog label="Confirm revocation" pending={pending} close={() => setConfirm(null)}>
       <p>Revoke {confirm.name ?? 'Unnamed key'} ({confirm.prefix}){owner ? ` belonging to ${owner.email} (${owner.id})` : ''}? Its MCP access will end on the next request.</p>
       <button disabled={pending} onClick={() => void revoke()}>{pending ? 'Revoking…' : 'Confirm revoke'}</button>
-      <button disabled={pending} onClick={() => setConfirm(null)}>Cancel</button>
-    </section>}
+      {error && <p role="alert">{error}</p>}
+    </Dialog>}
     <h2>{owner ? 'User key metadata' : 'Your key metadata'}</h2>
     <button disabled={loading || pending} onClick={() => setRevision(value => value + 1)}>Refresh metadata</button>
     {loading ? <p role="status">Loading keys…</p> : listError ? <><p role="alert">{listError}</p>
       <button onClick={() => setRevision(value => value + 1)}>Retry keys</button></>
-      : keys.length === 0 ? <p>No keys on this page.</p> : <div className="table-scroll"><table>
+      : keys.length === 0 ? <p>No keys on this page.</p> : <div className="table-scroll" role="region" aria-label="API key metadata" tabIndex={0}><table>
         <thead><tr>{['Identifier', 'Name', 'Prefix', 'Created', 'Last used', 'Revoked', 'Action'].map(label => <th key={label}>{label}</th>)}</tr></thead>
         <tbody>{keys.map(key => <tr key={key.id}><td>{key.id}</td><td>{key.name ?? 'Unnamed key'}</td><td>{key.prefix}</td>
           <td>{date(key.createdAt)}</td><td>{date(key.lastUsedAt)}</td><td>{date(key.revokedAt)}</td>
-          <td>{key.revokedAt ? 'Revoked' : <button disabled={pending || !!confirm} onClick={() => { setConfirm(key); setError(''); }}>Revoke {key.name ?? key.prefix}</button>}</td>
+          <td>{key.revokedAt ? 'Revoked' : <button disabled={pending} onClick={() => { setConfirm(key); setError(''); }}>Revoke {key.name ?? key.prefix}</button>}</td>
         </tr>)}</tbody></table></div>}
     <div className="pagination" aria-label="Key pages">
       <button disabled={page === 1 || loading || pending || !!confirm} onClick={() => setPage(value => value - 1)}>Previous page</button>

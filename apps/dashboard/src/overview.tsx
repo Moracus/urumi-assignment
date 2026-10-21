@@ -1,3 +1,4 @@
+import { ReadState } from './ui.js';
 import { useEffect, useState } from 'react';
 import { api, ApiError, type DashboardUser } from './api.js';
 import { ConnectionInstructions } from './keys.js';
@@ -61,7 +62,7 @@ export function Overview({ role }: { role: DashboardUser['role'] }) {
   const [revision, setRevision] = useState(0);
   useEffect(() => {
     const controller = new AbortController();
-    setData(null); setError(''); setLoading(true);
+    setError(''); setLoading(true);
     void loadSummary(role, controller.signal)
       .then(value => { if (!controller.signal.aborted) { setData(value); setLoading(false); } })
       .catch(error => {
@@ -74,8 +75,9 @@ export function Overview({ role }: { role: DashboardUser['role'] }) {
   }, [role, revision]);
   return <section><h1>Dashboard</h1>
     <button disabled={loading} onClick={() => setRevision(value => value + 1)}>Refresh summary</button>
-    {loading ? <p role="status">Loading summary…</p> : error ? <><p role="alert">{error}</p>
-      <button onClick={() => setRevision(value => value + 1)}>Retry summary</button></> : data?.role === 'admin' ? <section aria-label="Administrator overview">
+    {error && <button disabled={loading} onClick={() => setRevision(value => value + 1)}>Retry summary</button>}
+    <ReadState loading={loading} error={error} hasData={data !== null}>
+    {data?.role === 'admin' ? <section aria-label="Administrator overview">
       <h2>Administrator overview</h2>
       <dl><dt>Registered servers</dt><dd>{data.servers}</dd><dt>Available tools</dt><dd>{data.tools}</dd><dt>Users</dt><dd>{data.users}</dd></dl>
       {data.servers === 0 && <p>No registered servers.</p>}{data.tools === 0 && <p>No available tools.</p>}
@@ -88,5 +90,6 @@ export function Overview({ role }: { role: DashboardUser['role'] }) {
       <p>Counts include all pages. Refresh to see current changes.</p>
       <p><a href="/keys">Manage API keys</a></p><ConnectionInstructions />
     </section>}
+    </ReadState>
   </section>;
 }

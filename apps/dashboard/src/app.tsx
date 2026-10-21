@@ -1,4 +1,4 @@
-import { useEffect, useState, useSyncExternalStore, type FormEvent } from 'react';
+import { useEffect, useRef, useState, useSyncExternalStore, type FormEvent } from 'react';
 import { api, type DashboardUser } from './api.js';
 import { PersonalKeys } from './keys.js';
 import { Users } from './users.js';
@@ -6,6 +6,7 @@ import { Servers } from './servers.js';
 import { ToolHistory } from './audit.js';
 import { Overview } from './overview.js';
 import { Chat } from './chat.js';
+import { StatusBadge } from './ui.js';
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : 'The request failed. Try again.';
@@ -63,6 +64,8 @@ function PasswordReplacement() {
 function ProtectedDashboard({ user, path }: { user: DashboardUser; path: string }) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
+  const [navigationOpen, setNavigationOpen] = useState(false);
+  const menu = useRef<HTMLButtonElement>(null);
   const restricted = user.requiredPasswordChange;
   const adminPage = path.startsWith('/admin/');
   const allowed = !adminPage || user.role === 'admin';
@@ -75,11 +78,16 @@ function ProtectedDashboard({ user, path }: { user: DashboardUser; path: string 
     catch (error) { setError(`Logout was not confirmed. ${errorMessage(error)}`); }
     finally { setPending(false); }
   }
-  return <>
-    <nav aria-label="Account and pages">
-      <p>{user.email} · {user.role}</p>
-      <p>Current page: {title}</p>
-      {!restricted && <div className="links">
+  return <div className="console">
+    <nav className="sidebar" aria-label="Account and pages" onKeyDown={event => {
+      if (event.key === 'Escape' && navigationOpen) { setNavigationOpen(false); menu.current?.focus(); }
+    }}>
+      <a className="brand" href="/dashboard">Urumi <span>MCP Gateway</span></a>
+      <p className="account-email">{user.email}</p><StatusBadge>{user.role}</StatusBadge>
+      <p className="current-page">Current page: {title}</p>
+      {!restricted && <button ref={menu} className="navigation-toggle secondary" aria-expanded={navigationOpen}
+        aria-controls="page-navigation" onClick={() => setNavigationOpen(value => !value)}>Navigation</button>}
+      {!restricted && <div id="page-navigation" className={`links ${navigationOpen ? 'is-open' : ''}`}>
         <a href="/dashboard" aria-current={path === '/dashboard' ? 'page' : undefined}>Dashboard</a>
         <a href="/chat" aria-current={path === '/chat' ? 'page' : undefined}>Chat</a>
         <a href="/keys" aria-current={path === '/keys' ? 'page' : undefined}>API keys</a>
@@ -91,6 +99,7 @@ function ProtectedDashboard({ user, path }: { user: DashboardUser; path: string 
       </div>}
       <button onClick={logout} disabled={pending}>{pending ? 'Logging out…' : 'Log out'}</button>
     </nav>
+    <main id="main-content" tabIndex={-1}><header className="page-header"><span>Operations console</span><p>{title}</p></header>
     {error && <p role="alert">{error}</p>}
     {restricted ? <PasswordReplacement /> : path === '/keys' ? <PersonalKeys />
       : path === '/dashboard' ? <Overview role={user.role} />
@@ -101,7 +110,8 @@ function ProtectedDashboard({ user, path }: { user: DashboardUser; path: string 
         : titles[path] ? <p>{title} management will be available in a subsequent dashboard update.</p>
         : <a href="/dashboard">Return to dashboard</a>}
     </section>}
-  </>;
+    </main>
+  </div>;
 }
 export function App() {
   const state = useSyncExternalStore(api.subscribe, api.getSnapshot);
@@ -125,10 +135,10 @@ export function App() {
       : '/login';
     if (target !== path) { history.replaceState(null, '', target); setPath(target); }
   }, [state.checking, state.session, path]);
-  return <main><header>Urumi MCP Gateway</header>
+  return <><a className="skip-link" href="#main-content">Skip to content</a>
     {state.notice && <p role="status">{state.notice}</p>}
-    {state.checking ? <p role="status">Checking session…</p> : state.session
+    {state.checking ? <main id="main-content" className="auth-card"><p role="status">Checking session…</p></main> : state.session
       ? <ProtectedDashboard key={state.generation} user={state.session.user} path={path} />
-      : <><Login /><button className="secondary" onClick={() => void api.refresh()}>Retry session check</button></>}
-  </main>;
+      : <main id="main-content" className="auth-card"><header className="brand">Urumi <span>MCP Gateway</span></header><Login /><button className="secondary" onClick={() => void api.refresh()}>Retry session check</button></main>}
+  </>;
 }
