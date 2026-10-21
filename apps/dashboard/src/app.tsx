@@ -137,8 +137,8 @@ export function App() {
   }, [state.checking, state.session, path]);
   return <><a className="skip-link" href="#main-content">Skip to content</a>
     {state.notice && <p role="status">{state.notice}</p>}
-    {state.checking ? <main id="main-content" className="auth-card"><p role="status">Checking session…</p></main> : state.session
+    {state.checking ? <main id="main-content" tabIndex={-1} className="auth-card"><p role="status">Checking session…</p></main> : state.session
       ? <ProtectedDashboard key={state.generation} user={state.session.user} path={path} />
-      : <main id="main-content" className="auth-card"><header className="brand">Urumi <span>MCP Gateway</span></header><Login /><button className="secondary" onClick={() => void api.refresh()}>Retry session check</button></main>}
+      : <main id="main-content" tabIndex={-1} className="auth-card"><header className="brand">Urumi <span>MCP Gateway</span></header><Login /><button className="secondary" onClick={() => void api.refresh()}>Retry session check</button></main>}
   </>;
 }

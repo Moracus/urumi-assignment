@@ -37,14 +37,19 @@ for (const width of [360, 768, 1440]) {
     await expect(page.getByRole('heading', { name: 'Log in', exact: true })).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath(`login-${width}.png`), fullPage: true });
     await signIn(page);
-    for (const path of ['/dashboard', '/admin/users', '/admin/servers', '/keys']) {
+    for (const path of ['/dashboard', '/admin/users', '/admin/servers', '/keys', '/admin/audit', '/chat']) {
       await page.goto(path);
       await expect(page.getByRole('main')).toBeVisible();
       await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
-      await expect(page.getByText(/Loading (users|servers|keys|summary)…/)).toHaveCount(0);
+      await expect(page.getByText(/Loading (users|servers|keys|summary|tool history)…/)).toHaveCount(0);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
       await page.screenshot({ path: testInfo.outputPath(`${path.replaceAll('/', '-')}-${width}.png`), fullPage: true });
     }
+    await page.getByLabel('Prompt', { exact: true }).fill('Multiply 6 by 7 and get the time in UTC');
+    await page.getByRole('button', { name: 'Send prompt' }).click();
+    await expect(page.getByRole('region', { name: 'Chat tool calls' })).toContainText('calculator_calculate');
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath(`chat-result-${width}.png`), fullPage: true });
     await page.goto('/admin/servers');
     await page.getByRole('button', { name: 'Inspect calculator', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'calculator_calculate', exact: true })).toBeVisible();

@@ -64,8 +64,8 @@ export function Chat() {
     {pending && <p role="status">Waiting for the provider and tools. Avoid resubmitting this prompt.</p>}
     {error && <p role="alert">{error}</p>}
     {result && <>
-      {result.calls.length > 0 ? <table><caption>Tool calls</caption><thead><tr><th>Call ID</th><th>Tool</th><th>Outcome</th></tr></thead>
-        <tbody>{result.calls.map(call => <tr key={call.id}><td>{call.id}</td><td>{call.toolName ?? 'Unknown tool'}</td><td>{call.outcome}</td></tr>)}</tbody></table>
+      {result.calls.length > 0 ? <div className="table-scroll" role="region" aria-label="Chat tool calls" tabIndex={0}><table><caption>Tool calls</caption><thead><tr><th>Call ID</th><th>Tool</th><th>Outcome</th></tr></thead>
+        <tbody>{result.calls.map(call => <tr key={call.id}><td>{call.id}</td><td>{call.toolName ?? 'Unknown tool'}</td><td>{call.outcome}</td></tr>)}</tbody></table></div>
         : <p>No tools executed.</p>}
       {result.answer && <p aria-label="Final answer" style={{ whiteSpace: 'pre-wrap' }}>{result.answer}</p>}
     </>}

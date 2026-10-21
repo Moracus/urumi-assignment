@@ -76,7 +76,13 @@ test('access actions prevent duplicate submissions and show safe validation, fai
   await page.getByRole('button', { name: 'Confirm disable', exact: true }).click();
   await started;
   await expect(page.getByRole('button', { name: 'Cancel', exact: true })).toBeDisabled();
-  await page.getByRole('button', { name: 'Log out', exact: true }).click();
+  // A pending modal makes background controls inert. End the real session
+  // through its HTTP boundary and revalidate, as with another device's logout.
+  const { csrfToken } = await (await page.request.get('/api/auth/me')).json();
+  expect((await page.request.post('/api/auth/logout', {
+    headers: { Origin: 'http://localhost:5174', 'X-CSRF-Token': csrfToken },
+  })).status()).toBe(204);
+  await page.evaluate(() => window.dispatchEvent(new Event('focus')));
   await expect(page.getByRole('heading', { name: 'Log in', exact: true })).toBeVisible();
   const completed = page.waitForResponse(response => response.request().method() === 'PATCH');
   finish(); await completed;

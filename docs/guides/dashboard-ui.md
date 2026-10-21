@@ -23,6 +23,16 @@ pnpm test:workflow
 git diff --check
 ```
 
-`tests/shell.spec.ts` uses real gateway sessions and the disposable MongoDB harness. It captures login, overview, users, servers, keys, server editing, confirmation and required-password screenshots at 360px, 768px and 1440px, with page overflow assertions. Browser tests also exercise mobile keyboard navigation, direct nested loading, pending-dialog Escape protection, keyboard containment, focus restoration and stale summaries. Extended overview coverage delivers an administrator read after server-side demotion and verifies that protected data stays cleared; existing account replacement/logout coverage remains in place.
+`tests/shell.spec.ts` uses real gateway sessions and the disposable MongoDB harness. It captures login, overview, users, servers, keys, history, chat (including controlled tool-call results), server editing, confirmation and required-password screenshots at 360px, 768px and 1440px, with page overflow assertions. Browser tests also exercise mobile keyboard navigation, direct nested loading, pending-dialog Escape protection, keyboard containment, focus restoration and stale summaries. Extended overview coverage delivers an administrator read after server-side demotion and verifies that protected data stays cleared; existing account replacement/logout coverage remains in place.
 
 Screenshots are generated under `apps/dashboard/test-results/shell-shell-and-account-pages-fit-{width}px/`. Representative reviewed evidence is retained in [dashboard-ui evidence](../evidence/dashboard-ui-48/). These are controlled fixtures, not live Kubernetes evidence. Helm validation is unnecessary because no deployment manifests change.
+
+### Final results (2026-10-21)
+
+`pnpm test:workflow` passed workspace typechecks/builds, all 3 WooCommerce service tests, all 190 gateway tests (zero skips), and all 85 Playwright tests. The runner stopped and removed its disposable database containers afterward. Dashboard typecheck/build and `git diff --check` also passed after the review fix. Full run log: `/private/tmp/urumi-48-workflow.log` (local artifact).
+
+Standards review found no actionable violations. Spec review found that the shared minimum table width could overflow Chat on mobile; Chat now uses the same labeled local scroll region, and the browser tests exercise an actual tool-call result at all three widths. Follow-up review found no remaining issues.
+
+Visually inspected final screenshots: [360px console](../evidence/dashboard-ui-48/dashboard-360.png), [768px console](../evidence/dashboard-ui-48/dashboard-768.png), [1440px console](../evidence/dashboard-ui-48/dashboard-1440.png), [mobile modal](../evidence/dashboard-ui-48/dialog-360.png), [mobile chat result](../evidence/dashboard-ui-48/chat-result-360.png), and [mobile server form](../evidence/dashboard-ui-48/server-form-360.png). The evidence directory also retains login/password-replacement and tablet/desktop modal screenshots. The full generated screenshot set remains in the Playwright output paths above.
+
+No known outstanding #48 behavior issues. This slice applies stale-read retention to the overview; other pages keep their existing refresh behavior. No live Kubernetes checks, deployment, migration or Helm validation was performed or required.
