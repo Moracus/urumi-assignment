@@ -29,6 +29,7 @@ import {
   McpUpstreamInvoker,
 } from "./tools/invoker.js";
 
+import { registerObservabilityRoutes } from "./audit/observability.js";
 import { registerAuditRoutes } from "./audit/routes.js";
 import { registerChatRoutes, chatConfig, type ChatConfig } from "./chat/routes.js";
 
@@ -84,6 +85,7 @@ export async function createGatewayApp(options: GatewayAppOptions = {}) {
 
     for (const server of registrations) {
       registry.register({ name: server.serverId, url: server.url, enabled: server.enabled,
+        registrationId: server.registrationId,
         authentication: server.authentication, configurationRevision: server.configurationRevision });
     }
 
@@ -147,6 +149,7 @@ export async function createGatewayApp(options: GatewayAppOptions = {}) {
     const management = new UpstreamManagement(identityStorage.upstreamRegistrations, registry, policy, credentials);
     await registerDashboardRoutes(app, identityStorage, dashboard, admin => {
       registerAuditRoutes(admin, identityStorage.audit);
+      registerObservabilityRoutes(admin, identityStorage.audit, identityStorage.upstreamRegistrations, registry);
       registerServerInspectionRoutes(admin, identityStorage.upstreamRegistrations, registry, policy, management);
     }, (routes, authenticate) => {
       registerChatRoutes(routes, async request => {

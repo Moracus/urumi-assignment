@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { DashboardAuthError } from "../identity/dashboard-sessions.js";
-import type { RegistrationStorage, UpstreamRegistration } from "./registrations.js";
+import type { RegistrationStorage, StoredRegistration } from "./registrations.js";
 import type { UpstreamRegistry } from "./registry.js";
 import type { UpstreamManagement } from "./management.js";
 import type { DestinationPolicy } from "./destination-policy.js";
@@ -11,14 +11,15 @@ export function registerServerInspectionRoutes(
   policy: DestinationPolicy, management: UpstreamManagement,
 ) {
   const aggregator = new ToolAggregator(registry);
-  function observed(server: UpstreamRegistration) {
+  function observed(server: StoredRegistration) {
     const state = registry.getState(server.serverId);
-    return state?.config.configurationRevision === server.configurationRevision ? state : undefined;
+    return state?.config.registrationId === server.registrationId
+      && state.config.configurationRevision === server.configurationRevision ? state : undefined;
   }
-  function summary(server: UpstreamRegistration) {
+  function summary(server: StoredRegistration) {
     const state = observed(server);
     return {
-      serverId: server.serverId, displayName: server.displayName, enabled: server.enabled,
+      registrationId: server.registrationId, serverId: server.serverId, displayName: server.displayName, enabled: server.enabled,
       configurationRevision: server.configurationRevision, createdAt: server.createdAt, updatedAt: server.updatedAt,
       status: !server.enabled ? "disabled" : state?.status ?? "disconnected",
       toolCount: server.enabled && state?.status === "connected"
@@ -29,7 +30,7 @@ export function registerServerInspectionRoutes(
       lastError: state?.lastError ? "Upstream unavailable" : null,
     };
   }
-  function detail(server: UpstreamRegistration) {
+  function detail(server: StoredRegistration) {
     return {
       ...summary(server), url: server.url, transport: server.transport,
       authentication: { type: server.authentication.type, referenceConfigured: server.authentication.type !== "none" },

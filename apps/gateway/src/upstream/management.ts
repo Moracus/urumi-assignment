@@ -1,6 +1,6 @@
 import type { UpstreamCredentials } from "./credentials.js";
 import { DashboardAuthError } from "../identity/dashboard-sessions.js";
-import { createRegistrationInput, editRegistrationInput, type RegistrationStorage, type UpstreamRegistration } from "./registrations.js";
+import { createRegistrationInput, editRegistrationInput, type RegistrationStorage, type StoredRegistration } from "./registrations.js";
 import type { DestinationPolicy } from "./destination-policy.js";
 import type { UpstreamRegistry } from "./registry.js";
 
@@ -25,7 +25,7 @@ export class UpstreamManagement {
     }
   }
 
-  async edit(serverId: string, input: unknown): Promise<UpstreamRegistration> {
+  async edit(serverId: string, input: unknown): Promise<StoredRegistration> {
     let parsed;
     try {
       parsed = editRegistrationInput.parse(input);
@@ -35,7 +35,7 @@ export class UpstreamManagement {
       throw new DashboardAuthError(400, "Invalid server configuration");
     }
     return this.serialize(serverId, async () => {
-      let server: UpstreamRegistration | null;
+      let server: StoredRegistration | null;
       try {
         server = await this.storage.edit(serverId, parsed);
       } catch (error) {
@@ -46,12 +46,13 @@ export class UpstreamManagement {
       }
       if (!server) throw new DashboardAuthError(404, "Server not found");
       await this.registry.reconfigure({ name: server.serverId, url: server.url, enabled: server.enabled,
+        registrationId: server.registrationId,
         authentication: server.authentication, configurationRevision: server.configurationRevision });
       return server;
     });
   }
 
-  async setEnabled(serverId: string, enabled: boolean): Promise<UpstreamRegistration> {
+  async setEnabled(serverId: string, enabled: boolean): Promise<StoredRegistration> {
     return this.serialize(serverId, async () => {
       // Desired state precedes connection or the disable acknowledgement.
       const server = await this.storage.setEnabled(serverId, enabled);
@@ -62,7 +63,7 @@ export class UpstreamManagement {
     });
   }
 
-  async refresh(serverId: string): Promise<UpstreamRegistration> {
+  async refresh(serverId: string): Promise<StoredRegistration> {
     return this.serialize(serverId, async () => {
       const server = (await this.storage.list(this.policy)).find(server => server.serverId === serverId);
       if (!server) throw new DashboardAuthError(404, "Server not found");
@@ -88,7 +89,7 @@ export class UpstreamManagement {
     });
   }
 
-  async create(input: unknown): Promise<UpstreamRegistration> {
+  async create(input: unknown): Promise<StoredRegistration> {
     let parsed;
     try {
       parsed = createRegistrationInput.parse(input);
@@ -98,7 +99,7 @@ export class UpstreamManagement {
       throw new DashboardAuthError(400, "Invalid server configuration");
     }
     return this.serialize(parsed.serverId, async () => {
-      let server: UpstreamRegistration;
+      let server: StoredRegistration;
       try {
         // Unique indexes arbitrate concurrent identifiers and canonical endpoints.
         server = await this.storage.create(parsed);
@@ -109,6 +110,7 @@ export class UpstreamManagement {
         throw error;
       }
       this.registry.register({ name: server.serverId, url: server.url, enabled: server.enabled,
+        registrationId: server.registrationId,
         authentication: server.authentication, configurationRevision: server.configurationRevision });
       // Connection failure is an observed outcome, not a rollback of desired state.
       await this.registry.connect(server.serverId);

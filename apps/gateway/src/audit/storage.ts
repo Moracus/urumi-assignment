@@ -27,6 +27,7 @@ const auditSchema = new Schema<AuditRecord>({
     "upstream_error", "upstream_unavailable", "upstream_timeout"] },
 }, { strict: "throw", bufferCommands: false, versionKey: false });
 auditSchema.index({ timestamp: -1, _id: -1 });
+auditSchema.index({ upstreamId: 1, timestamp: -1 });
 auditSchema.index({ attemptId: 1 }, { unique: true });
 
 export async function createAuditStorage(connection: Connection) {
@@ -41,6 +42,18 @@ export async function createAuditStorage(connection: Connection) {
         keyId: record.authenticationOrigin === "gateway_api_key" ? record.keyId : null,
         upstreamId: record.upstreamId, upstreamName: record.upstreamName, upstreamDisplayName: record.upstreamDisplayName,
         toolName: record.toolName, timestamp: record.timestamp, durationMs: record.durationMs, outcome: record.outcome });
+    },
+    async aggregateWindow(from: string, to: string, upstreamId?: string) {
+      // Group in MongoDB before imposing a response cap; no raw audit pages are loaded.
+      return records.aggregate<{
+        _id: { upstreamId: string | null; name: string | null; displayName: string | null; outcome: string };
+        count: number;
+      }>([
+        { $match: { timestamp: { $gte: from, $lt: to }, ...(upstreamId ? { upstreamId } : {}) } },
+        { $group: { _id: { upstreamId: { $ifNull: ["$upstreamId", null] }, name: { $ifNull: ["$upstreamName", null] },
+          displayName: { $ifNull: ["$upstreamDisplayName", null] }, outcome: "$outcome" }, count: { $sum: 1 } } },
+        { $limit: 4501 },
+      ]).option({ maxTimeMS: 5000, allowDiskUse: false });
     },
     async page(page: number, limit: number, filters: AuditFilters = {}) {
       const query: QueryFilter<AuditRecord> = {};
@@ -59,5 +72,5 @@ export async function createAuditStorage(connection: Connection) {
         toolName: row.toolName, timestamp: row.timestamp, durationMs: row.durationMs, outcome: row.outcome,
       })), page, limit, hasMore: rows.length > limit };
     },
-  } satisfies AuditLogger & { page(page: number, limit: number, filters?: AuditFilters): Promise<unknown> };
+  } satisfies AuditLogger & Record<string, unknown>;
 }

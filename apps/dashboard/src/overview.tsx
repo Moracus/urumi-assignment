@@ -84,7 +84,7 @@ export function Overview({ role }: { role: DashboardUser['role'] }) {
       {data.servers === 0 && <p>No registered servers.</p>}{data.tools === 0 && <p>No available tools.</p>}
       {data.users === 0 && <p>No users.</p>}
       <p>Counts include all pages. Refresh to see current changes.</p>
-      <div className="overview-actions"><a href="/admin/servers">Manage servers</a><a href="/admin/users">Manage users</a><a href="/keys">Manage API keys</a><a href="/admin/audit">Review tool history</a><a href="/chat">Open chat</a></div>
+      <div className="overview-actions"><a href="/admin/servers">Manage servers</a><a href="/admin/users">Manage users</a><a href="/keys">Manage API keys</a><a href="/admin/observability">Inspect observability</a><a href="/admin/audit">Review tool history</a><a href="/chat">Open chat</a></div>
     </section> : data?.role === 'member' && <section aria-label="Member overview">
       <h2>Member overview</h2><dl className="summary-cards"><div><dt>Active API keys</dt><dd>{data.activeKeys}</dd></div></dl>
       {data.activeKeys === 0 && <p>No active API keys.</p>}

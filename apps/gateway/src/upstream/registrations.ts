@@ -35,6 +35,7 @@ export const registrationInput = z.strictObject({
   updatedAt: z.date(),
 });
 export type UpstreamRegistration = z.infer<typeof registrationInput>;
+export type StoredRegistration = UpstreamRegistration & { registrationId: string };
 
 // Public creation cannot set revisions, timestamps or submit credentials.
 export const createRegistrationInput = registrationInput.pick({
@@ -77,31 +78,35 @@ export async function createRegistrationStorage(connection: Connection) {
   await migrations.createCollection();
   await registrations.createIndexes();
   return {
+    async observabilityRegistrations() {
+      return registrations.find().select({ _id: 1, serverId: 1, displayName: 1, enabled: 1, configurationRevision: 1 })
+        .limit(501).maxTimeMS(5000).lean();
+    },
     async auditAttribution(serverId: string) {
       const row = await registrations.findOne({ serverId }).select({ _id: 1, displayName: 1 }).lean();
       return row ? { id: row._id.toHexString(), displayName: row.displayName } : null;
     },
-    async create(input: CreateRegistrationInput): Promise<UpstreamRegistration> {
+    async create(input: CreateRegistrationInput): Promise<StoredRegistration> {
       const now = new Date();
       const desired = registrationInput.parse({ ...input, configurationRevision: 1, createdAt: now, updatedAt: now });
-      await registrations.create(desired);
-      return desired;
+      const document = await registrations.create(desired);
+      return { ...desired, registrationId: document._id.toHexString() };
     },
-    async edit(serverId: string, input: EditRegistrationInput): Promise<UpstreamRegistration | null> {
+    async edit(serverId: string, input: EditRegistrationInput): Promise<StoredRegistration | null> {
       const document = await registrations.findOneAndUpdate({ serverId }, {
         $set: { ...input, updatedAt: new Date() }, $inc: { configurationRevision: 1 },
       }, { returnDocument: "after", runValidators: true }).lean();
       if (!document) return null;
       const { _id, ...value } = document;
-      return registrationInput.parse(value);
+      return { ...registrationInput.parse(value), registrationId: _id.toHexString() };
     },
-    async setEnabled(serverId: string, enabled: boolean): Promise<UpstreamRegistration | null> {
+    async setEnabled(serverId: string, enabled: boolean): Promise<StoredRegistration | null> {
       const document = await registrations.findOneAndUpdate({ serverId }, {
         $set: { enabled, updatedAt: new Date() }, $inc: { configurationRevision: 1 },
       }, { returnDocument: "after", runValidators: true }).lean();
       if (!document) return null;
       const { _id, ...value } = document;
-      return registrationInput.parse(value);
+      return { ...registrationInput.parse(value), registrationId: _id.toHexString() };
     },
     async remove(serverId: string): Promise<void> {
       await registrations.deleteOne({ serverId });
@@ -131,14 +136,14 @@ export async function createRegistrationStorage(connection: Connection) {
         await migrations.updateOne({ _id: migrationId }, { $set: { completedAt: new Date() } }, { session });
       }, identityTransactionOptions);
     },
-    async list(policy: DestinationPolicy): Promise<UpstreamRegistration[]> {
+    async list(policy: DestinationPolicy): Promise<StoredRegistration[]> {
       const documents = await registrations.find().sort({ serverId: 1 }).lean();
       return documents.map(({ _id, ...value }) => {
         const registration = registrationInput.parse(value);
         // Reject noncanonical stored values rather than letting duplicate spellings evade the index.
         if (registration.url !== value.url) throw new Error("Invalid upstream configuration");
         policy.validate(registration.url);
-        return registration;
+        return { ...registration, registrationId: _id.toHexString() };
       });
     },
   };

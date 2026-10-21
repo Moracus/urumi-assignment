@@ -40,6 +40,8 @@ Readiness is unchanged: available MongoDB and at least one connected upstream ar
 
 ## Administrator API
 
+Server summaries and details include additive `registrationId`, the durable MongoDB identity for that registration instance. A removed-and-recreated server receives a new ID even with the same `serverId`. Current inspection and observability match runtime health by both registration ID and configuration revision. Use `registrationId` as the observability/history `upstreamId` filter.
+
 All endpoints require an eligible administrator **dashboard cookie session** and return `Cache-Control: no-store`. Gateway bearer keys do not grant access. Pending-password users, members, disabled accounts and revoked sessions retain existing session rules. GET requests require no CSRF token. Mutations require the existing exact trusted Origin and session-bound `X-CSRF-Token`.
 
 | Endpoint | Success response |

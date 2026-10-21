@@ -15,6 +15,7 @@ export interface UpstreamConfig {
 
   enabled: boolean;
   configurationRevision?: number;
+  registrationId?: string;
   authentication?: UpstreamRegistration["authentication"];
 }
 

@@ -80,6 +80,7 @@ test('bounded account pages reach real users beyond the first page and inspect a
     expect(created.status()).toBe(201); emails.push(email);
   }
   await page.getByRole('button', { name: 'Refresh users' }).click();
+  await expect(page.getByRole('button', { name: 'Refresh users' })).toBeEnabled();
   await expect(page.getByRole('row')).toHaveCount(11);
   const seen: string[] = [];
   let currentPage = 1;
