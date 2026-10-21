@@ -69,7 +69,7 @@ async function createMemberAndSignIn(page: Page, email: string, headers: Record<
   return { userId: user.id, requests, headers: { Origin: 'http://localhost:5174', 'X-CSRF-Token': me.csrfToken } };
 }
 
-test('member counts only their unrevoked keys across full pages and sees only public connection information', async ({ page }) => {
+test('member counts only their unrevoked keys across full pages and sees only public connection information', async ({ page }, testInfo) => {
   const adminHeaders = await openDashboard(page);
   expect((await page.request.post('/api/keys', { headers: adminHeaders, data: { name: 'Other owner key' } })).status()).toBe(201);
   const { headers, requests } = await createMemberAndSignIn(page, 'overview-member@example.com', adminHeaders);
@@ -89,6 +89,15 @@ test('member counts only their unrevoked keys across full pages and sees only pu
   await expect(summary).toContainText('Active API keys18');
   await expect(summary).toContainText('Public MCP URL: http://localhost:5174/mcp');
   await expect(summary.getByRole('link', { name: 'Manage API keys', exact: true })).toHaveAttribute('href', '/keys');
+  for (const width of [360, 768, 1440]) {
+    await page.setViewportSize({ width, height: 1000 });
+    await summary.getByRole('link', { name: 'Manage API keys', exact: true }).focus();
+    await expect(summary.getByRole('link', { name: 'Manage API keys', exact: true })).toBeFocused();
+    await summary.getByLabel('MCP client connection example').focus();
+    await expect(summary.getByLabel('MCP client connection example')).toBeFocused();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath(`member-overview-${width}.png`), fullPage: true });
+  }
   expect(requests.some(url => new URL(url).pathname.startsWith('/api/admin/'))).toBe(false);
   expect((await page.request.get('/api/admin/servers')).status()).toBe(403);
   expect((await page.request.get('/api/admin/users')).status()).toBe(403);

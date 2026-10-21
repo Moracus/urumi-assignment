@@ -74,21 +74,22 @@ export function Overview({ role }: { role: DashboardUser['role'] }) {
     return () => controller.abort();
   }, [role, revision]);
   return <section><h1>Dashboard</h1>
+    <p>{role === 'admin' ? 'Manage gateway access and inspect the tools available from registered servers.' : 'Manage your gateway credentials and connect to the tools permitted for your account.'}</p>
     <button disabled={loading} onClick={() => setRevision(value => value + 1)}>Refresh summary</button>
     {error && <button disabled={loading} onClick={() => setRevision(value => value + 1)}>Retry summary</button>}
     <ReadState loading={loading} error={error} hasData={data !== null}>
     {data?.role === 'admin' ? <section aria-label="Administrator overview">
       <h2>Administrator overview</h2>
-      <dl><dt>Registered servers</dt><dd>{data.servers}</dd><dt>Available tools</dt><dd>{data.tools}</dd><dt>Users</dt><dd>{data.users}</dd></dl>
+      <dl className="summary-cards"><div><dt>Registered servers</dt><dd>{data.servers}</dd></div><div><dt>Available tools</dt><dd>{data.tools}</dd></div><div><dt>Users</dt><dd>{data.users}</dd></div></dl>
       {data.servers === 0 && <p>No registered servers.</p>}{data.tools === 0 && <p>No available tools.</p>}
       {data.users === 0 && <p>No users.</p>}
       <p>Counts include all pages. Refresh to see current changes.</p>
-      <p><a href="/admin/servers">Manage servers</a> · <a href="/admin/users">Manage users</a></p>
+      <div className="overview-actions"><a href="/admin/servers">Manage servers</a><a href="/admin/users">Manage users</a><a href="/keys">Manage API keys</a><a href="/admin/audit">Review tool history</a><a href="/chat">Open chat</a></div>
     </section> : data?.role === 'member' && <section aria-label="Member overview">
-      <h2>Member overview</h2><dl><dt>Active API keys</dt><dd>{data.activeKeys}</dd></dl>
+      <h2>Member overview</h2><dl className="summary-cards"><div><dt>Active API keys</dt><dd>{data.activeKeys}</dd></div></dl>
       {data.activeKeys === 0 && <p>No active API keys.</p>}
       <p>Counts include all pages. Refresh to see current changes.</p>
-      <p><a href="/keys">Manage API keys</a></p><ConnectionInstructions />
+      <div className="overview-actions"><a href="/keys">Manage API keys</a><a href="/chat">Open chat</a></div><ConnectionInstructions />
     </section>}
     </ReadState>
   </section>;

@@ -20,6 +20,11 @@ test('connection instructions load runtime configuration and recover from a safe
   await page.unroute('**/runtime-config.json');
   await page.getByRole('button', { name: 'Retry connection configuration' }).click();
   await expect(page.getByText('Public MCP URL:')).toContainText('http://localhost:5174/mcp');
+  await page.route('**/runtime-config.json', route => route.fulfill({ json: { publicMcpUrl: 'https://public-gateway.example.test/mcp' } }));
+  await page.reload();
+  await expect(page.getByText('Public MCP URL:')).toContainText('https://public-gateway.example.test/mcp');
+  await expect(page.getByLabel('MCP client connection example')).toContainText('https://public-gateway.example.test/mcp');
+  expect(await page.getByLabel('MCP client connection example').textContent()).not.toContain('urumi-calculator-mcp');
 });
 
 for (const [name, config] of [

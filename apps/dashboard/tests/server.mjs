@@ -120,6 +120,7 @@ upstream.post('/provider/chat/completions', async (request, reply) => {
     return reply.code(500).send({ error: 'private synthetic-provider-secret' });
   }
   if (messages.some(message => message.role === 'tool')) {
+    if (prompt?.startsWith('Long answer ')) return final('long-answer-'.repeat(300) + '\nSecond line.');
     if (messages.some(message => message.role === 'user' && message.content === 'expire during chat')) {
       await storage.sessions.updateMany({}, { $set: { expiresAt: new Date(0) } });
     }
