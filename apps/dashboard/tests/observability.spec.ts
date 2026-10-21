@@ -17,10 +17,13 @@ test('real registration metrics, sortable rows, presets and safe stale reads', a
   await expect(page.getByRole('columnheader', { name: 'Average duration (ms)', exact: true })).toBeVisible();
   await expect(page.getByRole('columnheader', { name: 'Approximate p95 (ms)', exact: true })).toBeVisible();
   await expect(page.getByRole('columnheader', { name: 'Duration samples', exact: true })).toBeVisible();
-  await page.getByRole('button', { name: 'Show activity trend for calculator', exact: true }).click();
+  const report = await (await page.request.get('/api/admin/observability')).json();
+  const calculator = report.rows.find((row: { current: { name: string } | null }) => row.current?.name === 'calculator');
+  const calculatorRow = page.getByRole('row').filter({ hasText: calculator.upstreamId });
+  await calculatorRow.getByRole('button', { name: 'Show activity trend for calculator', exact: true }).click();
   await expect(page.getByRole('table', { name: 'Activity trend for calculator', exact: true })).toBeVisible();
   await expect(page.getByRole('columnheader', { name: 'Timeouts', exact: true }).last()).toBeVisible();
-  await page.getByRole('button', { name: 'Show activity trend for calculator', exact: true }).click();
+  await calculatorRow.getByRole('button', { name: 'Show activity trend for calculator', exact: true }).click();
   await expect(page.getByText('Effective window (UTC):', { exact: false })).toBeVisible();
   await page.getByRole('button', { name: 'Attributed attempts', exact: true }).click();
   await expect(page.getByRole('columnheader', { name: 'Attributed attempts' })).toHaveAttribute('aria-sort', 'ascending');

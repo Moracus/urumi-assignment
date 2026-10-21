@@ -16,6 +16,13 @@ function empty(kind: Row["kind"], upstreamId: string | null): Row {
     outcomes: { success: 0, tool_error: 0, upstream_error: 0, upstream_unavailable: 0, upstream_timeout: 0,
       rejected: 0, unauthorized: 0, not_found: 0, unauthenticated: 0 } };
 }
+function activityCounts(kind: Row["kind"], outcomes: Row["outcomes"]) {
+  // Legacy/unresolved records never enter a registration's denominator.
+  const failures = kind === "registration" ? outcomes.tool_error + outcomes.upstream_error
+    + outcomes.upstream_unavailable + outcomes.upstream_timeout : 0;
+  return { failures, attempts: kind === "registration" ? outcomes.success + failures : 0,
+    timeoutCount: outcomes.upstream_timeout };
+}
 export function registerObservabilityRoutes(admin: FastifyInstance, audit: Awaited<ReturnType<typeof createAuditStorage>>,
   registrations: RegistrationStorage, registry: UpstreamRegistry) {
   admin.get("/api/admin/observability", async request => {
@@ -62,13 +69,12 @@ export function registerObservabilityRoutes(admin: FastifyInstance, audit: Await
     const trendGroups = new Map(metrics.trends.map(group => [JSON.stringify([group._id.upstreamId ??
       JSON.stringify([group._id.name || group._id.displayName ? "legacy" : "unattributed", group._id.name, group._id.displayName]), group._id.bucket]), group.outcomes]));
     for (const [key, row] of rows) {
-      row.timeoutCount = row.outcomes.upstream_timeout;
+      Object.assign(row, activityCounts(row.kind, row.outcomes));
       row.trend = Array.from({ length: bucketCount }, (_, i) => {
         const start = firstBucket + i * bucketMs;
         const outcomes = trendGroups.get(JSON.stringify([key, start])) ?? empty(row.kind, row.upstreamId).outcomes;
-        const failures = row.kind === "registration" ? outcomes.tool_error + outcomes.upstream_error + outcomes.upstream_unavailable + outcomes.upstream_timeout : 0;
         return { from: new Date(Math.max(start, Date.parse(from))).toISOString(), to: new Date(Math.min(start + bucketMs, Date.parse(to))).toISOString(),
-          outcomes, failures, attempts: row.kind === "registration" ? outcomes.success + failures : 0, timeoutCount: outcomes.upstream_timeout };
+          outcomes, ...activityCounts(row.kind, outcomes) };
       });
       const duration = metrics.durations.find(d => d._id === row.upstreamId);
       if (duration) {
@@ -76,10 +82,6 @@ export function registerObservabilityRoutes(admin: FastifyInstance, audit: Await
         row.averageDurationMs = duration.averageDurationMs;
         row.p95DurationMs = duration.p95[0] ?? null;
       }
-      // Name-only/unresolved rows never enter a registration's denominator.
-      if (row.kind !== "registration") continue;
-      row.failures = row.outcomes.tool_error + row.outcomes.upstream_error + row.outcomes.upstream_unavailable + row.outcomes.upstream_timeout;
-      row.attempts = row.outcomes.success + row.failures;
       row.errorRate = row.attempts ? row.failures / row.attempts : null;
     }
     return observabilitySchema.parse({ from, to, generatedAt, bucket, percentileMethod: "approximate", rows: [...rows.values()].sort((a, b) =>
