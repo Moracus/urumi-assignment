@@ -1,6 +1,8 @@
 import { Dialog, ReadState, StatusBadge } from './ui.js';
 import { useEffect, useState } from 'react';
 import { api, ApiError } from './api.js';
+import { investigationLink, metricsWindow, useInvestigation } from './investigation.js';
+import type { Filters } from './audit-query.js';
 import { ServerForm, type ServerInput } from './server-form.js';
 
 const stages = { credentials: 'Credential resolution', connection: 'Connection / handshake', discovery: 'Tool discovery', invocation: 'Tool invocation' };
@@ -27,6 +29,7 @@ function diagnostic(value: unknown): Diagnostic | null {
   return { stage: value.stage, code: value.code, observedAt: value.observedAt };
 }
 interface ServerSummary {
+  registrationId: string;
   serverId: string;
   displayName: string;
   enabled: boolean;
@@ -51,14 +54,14 @@ function timestamp(value: unknown): value is string | null {
   return value === null || typeof value === 'string' && Number.isFinite(Date.parse(value));
 }
 function summary(value: unknown): ServerSummary {
-  if (!record(value) || typeof value.serverId !== 'string' || !/^[a-z][a-z0-9_-]*$/.test(value.serverId)
+  if (!record(value) || typeof value.registrationId !== 'string' || !/^[a-f0-9]{24}$/.test(value.registrationId) || typeof value.serverId !== 'string' || !/^[a-z][a-z0-9_-]*$/.test(value.serverId)
     || typeof value.displayName !== 'string' || typeof value.enabled !== 'boolean'
     || (value.status !== 'disconnected' && value.status !== 'connecting' && value.status !== 'connected'
       && value.status !== 'unreachable' && value.status !== 'disabled')
     || typeof value.toolCount !== 'number' || !Number.isSafeInteger(value.toolCount) || value.toolCount < 0
     || !timestamp(value.lastConnectedAt) || !timestamp(value.lastDiscoveredAt)
     || (value.lastError !== null && typeof value.lastError !== 'string')) return invalid();
-  return { serverId: value.serverId, displayName: value.displayName, enabled: value.enabled,
+  return { registrationId: value.registrationId, serverId: value.serverId, displayName: value.displayName, enabled: value.enabled,
     status: value.status, toolCount: value.toolCount, lastConnectedAt: value.lastConnectedAt,
     lastDiscoveredAt: value.lastDiscoveredAt, diagnostic: diagnostic(value.diagnostic), lastError: value.lastError ? 'Upstream unavailable' : null };
 }
@@ -106,7 +109,7 @@ function ServerState({ server }: { server: ServerSummary }) {
       </section>}
   </>;
 }
-function ServerDetails({ id, refreshVersion, close, changed, edit, busy }: { id: string; refreshVersion: number; close: () => void;
+function ServerDetails({ id, filters, refreshVersion, close, changed, edit, busy }: { id: string; filters: Filters; refreshVersion: number; close: () => void;
   changed: (notice: string, removed?: boolean) => void; edit: (server: ServerDetail) => void; busy: (value: boolean) => void }) {
   const [data, setData] = useState<{ server: ServerDetail; catalog: Tool[] } | null>(null);
   const [error, setError] = useState('');
@@ -121,11 +124,14 @@ function ServerDetails({ id, refreshVersion, close, changed, edit, busy }: { id:
     void Promise.all([
       api.request(`/api/admin/servers/${id}`, 'GET', undefined, value => detail(value, id)),
       api.request(`/api/admin/servers/${id}/tools`, 'GET', undefined, tools),
-    ]).then(([server, catalog]) => { if (active) setData({ server, catalog }); })
+    ]).then(([server, catalog]) => {
+      if (server.registrationId !== filters.upstreamId) throw new Error('This registration was removed or replaced. Return to its historical activity.');
+      if (active) setData({ server, catalog });
+    })
       .catch(error => { if (active) setError(message(error)); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [id, revision, refreshVersion]);
+  }, [id, filters.upstreamId, revision, refreshVersion]);
   async function act(action: 'enable' | 'disable' | 'refresh' | 'remove') {
     if (pending || loading || error) return;
     setPending(true); busy(true); setActionError('');
@@ -151,6 +157,10 @@ function ServerDetails({ id, refreshVersion, close, changed, edit, busy }: { id:
     <ReadState loading={loading} error={error} hasData={!!data} loadingMessage="Loading server details…">
     {data && <>
       <h3>{data.server.displayName}</h3><p>Identifier: {data.server.serverId}</p>
+      <p>Registration ID: {data.server.registrationId}</p>
+      <p>Investigation window: {filters.from} inclusive to {filters.to} exclusive.</p>
+      <p><a href={investigationLink('audit', filters)}>Registration tool history</a>{' '}
+        {metricsWindow(filters) && <a href={investigationLink('observability', filters)}>Registration observability</a>}</p>
       <p>Endpoint: {data.server.url}</p><p>Transport: {data.server.transport}</p>
       <ServerState server={data.server} />
       <p>Authentication type: {data.server.authentication.type}</p>
@@ -182,13 +192,14 @@ function ServerDetails({ id, refreshVersion, close, changed, edit, busy }: { id:
   </section>;
 }
 export function Servers() {
+  const view = useInvestigation();
   const [servers, setServers] = useState<ServerSummary[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [revision, setRevision] = useState(0);
   const [detailRevision, setDetailRevision] = useState(0);
-  const [selected, setSelected] = useState<string | null>(null);
+  const selected = servers.find(server => server.registrationId === view.filters.upstreamId)?.serverId ?? null;
   const [editor, setEditor] = useState<{ initial?: ServerDetail } | null>(null);
   const [notice, setNotice] = useState('');
   const [pending, setPending] = useState(false);
@@ -197,7 +208,7 @@ export function Servers() {
     try {
       const server = await api.request(editor?.initial ? `/api/admin/servers/${id}` : '/api/admin/servers',
         editor?.initial ? 'PATCH' : 'POST', input, value => detail(value, id));
-      setEditor(null); setSelected(id); setRevision(value => value + 1); setDetailRevision(value => value + 1);
+      setEditor(null); view.navigate({ ...view.filters, upstreamId: server.registrationId }); setRevision(value => value + 1); setDetailRevision(value => value + 1);
       setNotice(server.status === 'unreachable'
         ? 'Server saved. Discovery failed; the registration remains saved. Inspect the endpoint and authentication, then edit or refresh discovery to recover.'
         : `Server saved. Runtime status: ${server.status}.`);
@@ -223,12 +234,18 @@ export function Servers() {
         <thead><tr><th>Identifier</th><th>Name</th><th>Configured state</th><th>Runtime status</th><th>Available tools</th><th>Details</th></tr></thead>
         <tbody>{servers.map(server => <tr key={server.serverId}><td>{server.serverId}</td><td>{server.displayName}</td>
           <td><StatusBadge>{server.enabled ? 'Enabled' : 'Disabled'}</StatusBadge></td><td><StatusBadge>{server.status}</StatusBadge></td><td>{server.toolCount}</td>
-          <td><button disabled={pending || !!editor} aria-label={`Inspect ${server.serverId}`} onClick={() => setSelected(server.serverId)}>Inspect</button></td></tr>)}</tbody>
+          <td><button disabled={pending || !!editor} aria-label={`Inspect ${server.serverId}`} onClick={() => view.navigate({ ...view.filters, upstreamId: server.registrationId })}>Inspect</button></td></tr>)}</tbody>
       </table></div>
     </ReadState>
-    <div hidden={!!editor}>{selected && <ServerDetails key={selected} id={selected} refreshVersion={detailRevision} close={() => setSelected(null)}
+    {view.error && <><p role="alert">{view.error}</p><button onClick={view.reset}>Reset investigation</button></>}
+    {loaded && !loading && !error && !view.error && view.filters.upstreamId && !selected && <section aria-label="Historical registration">
+      <h2>Historical registration</h2><p>No current registration matches {view.filters.upstreamId}. It may have been removed. A reused public name does not identify this instance.</p>
+      <p><a href={investigationLink('audit', view.filters)}>Registration tool history</a>{' '}
+        {metricsWindow(view.filters) && <a href={investigationLink('observability', view.filters)}>Registration observability</a>}</p>
+    </section>}
+    <div hidden={!!editor}>{selected && !view.error && <ServerDetails key={view.filters.upstreamId} id={selected} filters={view.filters} refreshVersion={detailRevision} close={() => view.navigate({ ...view.filters, upstreamId: '' })}
       busy={setPending} changed={(notice, removed) => {
-        setNotice(notice); if (removed) setSelected(null); setRevision(value => value + 1);
+        setNotice(notice); if (removed) setLoaded(false); setRevision(value => value + 1);
       }} edit={server => { setNotice(''); setEditor({ initial: server }); }} />}</div>
   </section>;
 }

@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { api, ApiError } from './api.js';
+import { investigationLink, metricsWindow } from './investigation.js';
 import { ReadState } from './ui.js';
 import { outcomes, filterNames, parseHistory, historySearch, readHistoryLocation, type Filters } from './audit-query.js';
 
@@ -107,16 +108,21 @@ export function ToolHistory() {
     } catch (error) { setFilterError(error instanceof Error ? error.message : 'Invalid filters.'); }
   }
   function apply(event: FormEvent) { event.preventDefault(); navigate(draft, 1); }
-  const labels = { userId: 'User ID', upstreamId: 'Registration ID', toolName: 'Exact public tool', from: 'From (inclusive)', to: 'To (exclusive)' };
+  const labels = { activity: 'Metric population', userId: 'User ID', upstreamId: 'Registration ID', toolName: 'Exact public tool', from: 'From (inclusive)', to: 'To (exclusive)' };
   return <section><h1>Tool history</h1>
     <p>Tool attempts, newest first. History may be incomplete during storage outages. Pages are live views; new attempts can move rows between pages.</p>
     <form className="history-filters" onSubmit={apply} aria-label="History filters">
-      {filterNames.map(key => key === 'outcome' ? <label key={key}>Outcome<select aria-label="Outcome" value={draft.outcome} onChange={event => setDraft({ ...draft, outcome: event.target.value })}>
+      {filterNames.map(key => key === 'activity' ? <label key={key}>Metric population<select value={draft.activity} onChange={event => setDraft({ ...draft, activity: event.target.value })}><option value="">All recorded outcomes</option><option value="attempts">Attributed attempts</option><option value="failures">Attributed failures</option><option value="durations">Duration samples</option></select></label> : key === 'outcome' ? <label key={key}>Outcome<select aria-label="Outcome" value={draft.outcome} onChange={event => setDraft({ ...draft, outcome: event.target.value })}>
         <option value="">All outcomes</option>{outcomes.map(outcome => <option key={outcome}>{outcome}</option>)}
       </select></label> : <label key={key}>{labels[key]}<input value={draft[key]} onChange={event => setDraft({ ...draft, [key]: event.target.value })} /></label>)}
       <p>IDs must be 24 lowercase hexadecimal characters. Registration ID identifies one durable instance, including removed servers. Times require a timezone, for example 2026-10-17T05:30:00+05:30, and normalize to UTC.</p>
       <div><button>Apply filters</button><button type="button" onClick={() => navigate(parseHistory('').filters, 1)}>Clear filters</button></div>
     </form>
+    {!view.error && view.filters.upstreamId && <p>
+      {view.filters.from && view.filters.to && <a href={investigationLink('servers', view.filters)}>Inspect registration</a>}{' '}
+      {metricsWindow(view.filters) ? <a href={investigationLink('observability', view.filters)}>Registration observability</a>
+        : <span>Set both time bounds to a window of at most seven days to compare metrics.</span>}
+    </p>}
     {(filterError || view.error) && <p role="alert">{filterError || view.error}</p>}
     <button disabled={loading || !!view.error} onClick={() => setRevision(value => value + 1)}>Refresh history</button>
     {error && <button disabled={loading} onClick={() => setRevision(value => value + 1)}>Retry history</button>}

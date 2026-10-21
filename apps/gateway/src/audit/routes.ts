@@ -11,6 +11,7 @@ const queryInput = paginationInput.extend({
   upstreamId: z.string().regex(/^[a-f0-9]{24}$/).optional(),
   toolName: z.string().min(1).max(512).optional(),
   outcome: z.enum(["unauthenticated", "rejected", "success", "tool_error", "unauthorized", "not_found", "upstream_error", "upstream_unavailable", "upstream_timeout"]).optional(),
+  activity: z.enum(["attempts", "failures", "durations"]).optional(),
   from: time.optional(), to: time.optional(),
 }).refine(value => !value.from || !value.to || value.from < value.to);
 

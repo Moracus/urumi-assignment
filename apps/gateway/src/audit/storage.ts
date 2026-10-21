@@ -6,6 +6,7 @@ export interface AuditFilters {
   upstreamId?: string;
   toolName?: string;
   outcome?: AuditRecord["outcome"];
+  activity?: "attempts" | "failures" | "durations";
   from?: string;
   to?: string;
 }
@@ -94,7 +95,18 @@ export async function createAuditStorage(connection: Connection) {
       if (filters.userId) query.userId = filters.userId;
       if (filters.upstreamId) query.upstreamId = filters.upstreamId;
       if (filters.toolName) query.toolName = filters.toolName;
-      if (filters.outcome) query.outcome = filters.outcome;
+      const populations: Record<NonNullable<AuditFilters["activity"]>, AuditRecord["outcome"][]> = {
+        attempts: ["success", "tool_error", "upstream_error", "upstream_unavailable", "upstream_timeout"],
+        failures: ["tool_error", "upstream_error", "upstream_unavailable", "upstream_timeout"],
+        durations: ["success", "tool_error"],
+      };
+      if (filters.activity) {
+        const population = populations[filters.activity];
+        query.outcome = { $in: filters.outcome ? population.filter(outcome => outcome === filters.outcome) : population };
+        // Metric populations require durable attribution, just as the aggregate does.
+        if (!filters.upstreamId) query.upstreamId = { $type: "string" };
+        if (filters.activity === "durations") query.durationMs = { $gte: 0, $lte: Number.MAX_VALUE };
+      } else if (filters.outcome) query.outcome = filters.outcome;
       if (filters.from || filters.to) query.timestamp = {
         ...(filters.from ? { $gte: filters.from } : {}), ...(filters.to ? { $lt: filters.to } : {}),
       };

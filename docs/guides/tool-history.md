@@ -83,3 +83,28 @@ The strict query also accepts `bucket=5minute|hour|day`. If omitted, spans up to
 Bucket interiors align to UTC epoch multiples of five minutes, one hour or one day. The first/last reported bounds are clipped to the effective `[from, to)` window; every point exposes UTC `from` inclusive and `to` exclusive. A record exactly on an interior boundary belongs to the following bucket, and a record at the window's `to` is excluded. Every row includes all buckets, with zero counts for inactivity. Each point exposes all nine `outcomes`, attributed `attempts`, `failures` and `timeoutCount`, using the same registration attribution and outcome formulas as the full row. Zero activity means no recorded attempts, without implying healthy service. Legacy/unattributed groups retain their bucket outcomes while attributed attempts/failures stay zero.
 
 The dashboard provides bucket selection and expandable, captioned activity tables with outcome distinctions and focusable horizontal scrolling. Keyboard and 360/768/1440-pixel browser journeys exercise the tables. Changing window/bucket/registration discards superseded results; refresh remains read-only. Audit coverage limits above apply: lost writes, outages, bounded ingress coverage and no backfill make these **recorded** samples, not a complete traffic or availability measure. Deploy rebuilt gateway and dashboard together; there are no new environment variables, storage migrations or Helm changes.
+
+### Linked investigations (#56)
+
+Inspection (`/admin/servers`), observability (`/admin/observability`) and history (`/admin/audit`) exchange `upstreamId` and canonical UTC `from` inclusive / `to` exclusive bounds. Server inspection decodes the API's `registrationId` as that durable identity, resolves the current public name through the authorized list and verifies the returned detail identity before showing it. A removed ID opens a historical-registration panel with activity links; it never opens the replacement by matching a name. Display-name edits leave the ID and historical labels intact. Legacy/name-only and unattributed metrics stay separate and have no registration links.
+
+Opening inspection or metrics without bounds captures the preceding 24 hours once. Choosing a relative preset captures a fresh concrete window in the URL. Refresh, the visible-page timer and switching views keep those bounds fixed. Choose a preset again to advance the window. Metrics require both bounds and at most seven days; history remains able to query wider or open-ended ranges, but asks for a bounded range before offering comparison links. Bucket selection is shareable on observability; linked history uses each trend point's actual clipped bounds, independent of bucket presentation. Back/Forward restores selection, filters and bounds, and changing history filters resets to page 1. Invalid investigation URLs show a recoverable error; invalid metrics URLs issue no metric read.
+
+Metric totals link to matching history at page 1, with no user/tool narrowing:
+
+| Metric link | History population |
+| --- | --- |
+| Attributed attempts | `activity=attempts`: success, tool_error, upstream_error, upstream_unavailable, upstream_timeout |
+| Failures | `activity=failures`: the same population excluding success |
+| Duration samples | `activity=durations`: finite nonnegative duration samples on success and tool_error |
+| Timeouts | `outcome=upstream_timeout` |
+| Outcome count | The exact `outcome` |
+| Trend count | The corresponding population and the point's `[from, to)` |
+
+`GET /api/admin/audit` adds optional `activity=attempts|failures|durations`. Activity filters require durable attribution and combine with **all** other filters using AND, including an exact outcome; an incompatible outcome produces an empty result. Unknown activity values are rejected. Existing authentication, authorization, ordering and pagination are unchanged. A metric link's count may span multiple ten-row history pages.
+
+Metrics remain registration-wide. A link from history preserves exact user/tool/outcome/activity filters as navigation context, explicitly says that those filters do not narrow metrics, and offers **Resume exact history filters**. Selecting a metric total deliberately replaces that context with the metric's population so the linked rows match the displayed number. Inspection preserves the exact context too. URLs carry no credentials or payloads, but IDs and tool names are administrator information.
+
+These are adjacent live reads, not a frozen database snapshot. Fixed bounds prevent the window from moving, but late audit writes can change totals or pages within it; there is no backfill or completeness guarantee. Previously described duration/rate formulas, approximate p95, storage/query limits, diagnostic limits and uncertain-write guidance still apply. Refresh and ordinary navigation never execute tools, reconnect, rediscover, or replay mutations. Authorized stale results and their original bounds remain usable after a read failure. Session generation changes discard protected data and delayed reads; backend administrator checks remain authoritative.
+
+See the [controlled demonstration and reviewed evidence](../evidence/linked-investigations-56/README.md) for exact commands, fixture results and responsive/keyboard review. Rebuild gateway and dashboard together through the existing release procedure. No migration, new environment configuration, deployment, Kubernetes change or real-store mutation is part of this slice.

@@ -1,8 +1,8 @@
 // This page uses native history navigation; only non-secret investigation state goes in URLs.
 export const outcomes = ['unauthenticated', 'rejected', 'success', 'tool_error', 'unauthorized', 'not_found', 'upstream_error', 'upstream_unavailable', 'upstream_timeout'];
-export const filterNames = ['userId', 'upstreamId', 'toolName', 'outcome', 'from', 'to'] as const;
+export const filterNames = ['userId', 'upstreamId', 'toolName', 'outcome', 'activity', 'from', 'to'] as const;
 export type Filters = Record<typeof filterNames[number], string>;
-const empty: Filters = { userId: '', upstreamId: '', toolName: '', outcome: '', from: '', to: '' };
+const empty: Filters = { userId: '', upstreamId: '', toolName: '', outcome: '', activity: '', from: '', to: '' };
 const message = 'Invalid history filters. Use canonical IDs, an exact tool name, a listed outcome and ISO times with timezone (for example 2026-10-17T05:30:00+05:30). From must precede To.';
 function time(value: string) {
   const match = /^(\d{4})-(\d{2})-(\d{2})T([01]\d|2[0-3]):([0-5]\d)(?::([0-5]\d)(?:\.\d+)?)?(Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)$/.exec(value);
@@ -33,6 +33,7 @@ export function parseHistory(search: string) {
     } else throw new Error(message);
   }
   for (const key of ['userId', 'upstreamId'] as const) if (filters[key] && !/^[a-f0-9]{24}$/.test(filters[key])) throw new Error(message);
+  if (filters.activity && !['attempts', 'failures', 'durations'].includes(filters.activity)) throw new Error(message);
   if (filters.toolName.length > 512 || (filters.outcome && !outcomes.includes(filters.outcome))) throw new Error(message);
   for (const key of ['from', 'to'] as const) if (filters[key]) filters[key] = time(filters[key]);
   if (filters.from && filters.to && filters.from >= filters.to) throw new Error(message);
