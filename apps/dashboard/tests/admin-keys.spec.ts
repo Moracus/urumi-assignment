@@ -21,6 +21,8 @@ async function openOwner(page: Page) {
   const restricted = await (await member.request.post('/api/auth/login', { headers: { Origin: origin }, data: { email, password: 'assigned member password' } })).json();
   expect((await member.request.post('/api/auth/change-password', { headers: { Origin: origin, 'X-CSRF-Token': restricted.csrfToken }, data: { currentPassword: 'assigned member password', newPassword: 'final member password' } })).status()).toBe(204);
   const session = await (await member.request.post('/api/auth/login', { headers: { Origin: origin }, data: { email, password: 'final member password' } })).json();
+  const navigation = page.getByRole('button', { name: 'Navigation', exact: true });
+  if (await navigation.isVisible()) await navigation.click();
   await page.getByRole('link', { name: 'Users', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Users', exact: true })).toBeVisible();
   await expect(page.getByText('Loading users…')).toHaveCount(0);
@@ -186,5 +188,154 @@ test('disabling the selected owner clears issued credentials and reloads permane
     const completed = page.waitForResponse(r => new URL(r.url()).pathname === f.path && r.request().method() === 'POST');
     release(); await completed;
     await expect(secret).toHaveCount(0);
+  } finally { await f.member.close(); }
+});
+
+test('loss of administrator permission clears one-time keys and rejects a delayed metadata refresh', async ({ page }) => {
+  const f = await openOwner(page);
+  try {
+    const panel = page.getByRole('region', { name: 'Selected user API keys' });
+    await panel.getByLabel('Key name').fill('Permission transition');
+    await panel.getByRole('button', { name: 'Create key', exact: true }).click();
+    await expect(panel.getByLabel('New API key', { exact: true })).toBeVisible();
+    const rawKey = await panel.getByLabel('New API key', { exact: true }).inputValue();
+    const admin = (await (await page.request.get('/api/auth/me')).json()).user;
+    expect((await page.request.patch(`/api/admin/users/${f.user.id}`, { headers: f.headers, data: { role: 'admin' } })).status()).toBe(200);
+    let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let received!: () => void;
+    const started = new Promise<void>(resolve => { received = resolve; });
+    await page.route(`**${f.path}?**`, async route => {
+      const response = await route.fetch(); received(); await gate; await route.fulfill({ response });
+    });
+    await panel.getByRole('button', { name: 'Refresh metadata' }).click();
+    await started;
+    expect((await f.member.request.patch(`/api/admin/users/${admin.id}`, { headers: f.memberHeaders, data: { role: 'member' } })).status()).toBe(200);
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    await expect(page.getByRole('heading', { name: 'Access denied', exact: true })).toBeVisible();
+    const completed = page.waitForResponse(r => new URL(r.url()).pathname === f.path);
+    release(); await completed;
+    await expect(panel).toHaveCount(0);
+    expect(await page.content()).not.toContain(rawKey);
+    expect(await page.content()).not.toContain('Permission transition');
+    expect((await page.request.get(f.path)).status()).toBe(403);
+    // Restore the fixture administrator for following journeys.
+    expect((await f.member.request.patch(`/api/admin/users/${admin.id}`, { headers: f.memberHeaders, data: { role: 'admin' } })).status()).toBe(200);
+    expect((await f.member.request.patch(`/api/admin/users/${f.user.id}`, { headers: f.memberHeaders, data: { role: 'member' } })).status()).toBe(200);
+  } finally { await f.member.close(); }
+});
+
+for (const width of [360, 768, 1440]) {
+  test(`user details, key tables and keyboard confirmations fit ${width}px`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width, height: 1000 });
+    const f = await openOwner(page);
+    try {
+      const details = page.getByRole('region', { name: 'User details' });
+      const panel = page.getByRole('region', { name: 'Selected user API keys' });
+      const keyName = 'Long gateway client identifier '.repeat(3);
+      await panel.getByLabel('Key name').fill(keyName);
+      await panel.getByRole('button', { name: 'Create key', exact: true }).click();
+      await expect(panel.getByLabel('New API key', { exact: true })).toBeVisible();
+      await panel.getByRole('button', { name: 'Dismiss key' }).click();
+      const scroll = panel.getByRole('region', { name: 'API key metadata', exact: true });
+      await expect(scroll).toContainText(keyName.trim());
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await page.screenshot({ path: testInfo.outputPath(`user-details-${width}.png`), fullPage: true });
+      await scroll.focus(); await page.keyboard.press('End');
+      const revoke = panel.getByRole('button', { name: `Revoke ${keyName.trim()}`, exact: true });
+      await revoke.focus(); await page.keyboard.press('Enter');
+      const dialog = page.getByRole('dialog', { name: 'Confirm revocation', exact: true });
+      await expect(dialog.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused();
+      await page.screenshot({ path: testInfo.outputPath(`key-confirmation-${width}.png`) });
+      await page.keyboard.press('Escape'); await expect(revoke).toBeFocused();
+      await details.getByRole('button', { name: 'Reset password', exact: true }).focus();
+      await page.keyboard.press('Enter');
+      await expect(page.getByRole('dialog')).toContainText(f.email);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await page.screenshot({ path: testInfo.outputPath(`reset-confirmation-${width}.png`) });
+      await page.keyboard.press('Escape');
+      await page.goto('/keys');
+      await page.getByLabel('Key name').fill(keyName);
+      await page.getByRole('button', { name: 'Create key', exact: true }).click();
+      await expect(page.getByLabel('New API key', { exact: true })).toBeVisible();
+      await page.getByRole('button', { name: 'Dismiss key' }).click();
+      await expect(page.getByText('Loading keys…')).toHaveCount(0);
+      while (!(await page.getByRole('row').filter({ hasText: keyName.trim() }).count())) {
+        await page.getByRole('button', { name: 'Next page', exact: true }).click();
+        await expect(page.getByText('Loading keys…')).toHaveCount(0);
+      }
+      await expect(page.getByRole('table')).toContainText(keyName.trim());
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await page.screenshot({ path: testInfo.outputPath(`personal-keys-${width}.png`), fullPage: true });
+    } finally { await f.member.close(); }
+  });
+}
+
+test('failed detail refresh retains account context while clearing the one-time credential', async ({ page }) => {
+  const f = await openOwner(page);
+  try {
+    const details = page.getByRole('region', { name: 'User details' });
+    const panel = page.getByRole('region', { name: 'Selected user API keys' });
+    await panel.getByLabel('Key name').fill('Discard on refresh');
+    await panel.getByRole('button', { name: 'Create key', exact: true }).click();
+    await expect(panel.getByLabel('New API key', { exact: true })).toBeVisible();
+    const rawKey = await panel.getByLabel('New API key', { exact: true }).inputValue();
+    await expect(panel.getByRole('table')).toContainText('Discard on refresh');
+    await page.route(`**${f.path}?**`, route => route.fulfill({ status: 503, json: {} }));
+    await panel.getByRole('button', { name: 'Refresh metadata', exact: true }).click();
+    await expect(panel.getByRole('status').filter({ hasText: 'Stale data' })).toBeVisible();
+    await page.route(`**/api/admin/users/${f.user.id}`, route => route.fulfill({ status: 503, json: {} }));
+    await details.getByRole('button', { name: 'Refresh details', exact: true }).click();
+    await expect(details.getByRole('status').filter({ hasText: 'Stale data' })).toHaveCount(2);
+    await expect(panel.getByRole('table')).toContainText('Discard on refresh');
+    await expect(details).toContainText(f.email);
+    await expect(panel.getByLabel('New API key', { exact: true })).toHaveCount(0);
+    expect(await page.content()).not.toContain(rawKey);
+    await expect(panel.getByRole('button', { name: 'Create key', exact: true })).toBeDisabled();
+  } finally { await f.member.close(); }
+});
+
+test('lost password reset acknowledgement provides investigation guidance without replay', async ({ page }) => {
+  const f = await openOwner(page);
+  try {
+    const details = page.getByRole('region', { name: 'User details' });
+    let submissions = 0;
+    await page.route(`**/api/admin/users/${f.user.id}/reset-password`, async route => {
+      submissions++; await route.fetch(); await route.abort('failed');
+    });
+    await details.getByRole('button', { name: 'Reset password', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: 'Reset password confirmation' });
+    await dialog.getByLabel('Temporary password', { exact: true }).fill('uncertain assigned password');
+    await dialog.getByRole('button', { name: 'Confirm password reset', exact: true }).click();
+    await expect(dialog.getByRole('alert')).toContainText('Reset may have succeeded. Refresh details');
+    await expect(dialog.getByLabel('Temporary password', { exact: true })).toHaveValue('');
+    expect(submissions).toBe(1);
+    await page.keyboard.press('Escape');
+    await details.getByRole('button', { name: 'Refresh details', exact: true }).click();
+    await expect(details.locator('dd').nth(4)).toHaveText('Required');
+    await expect(details.getByRole('button', { name: 'Create key', exact: true })).toHaveCount(0);
+    expect(submissions).toBe(1);
+    expect((await f.member.request.get('/api/auth/me')).status()).toBe(401);
+    const login = await f.member.request.post('/api/auth/login', { headers: { Origin: origin }, data: { email: f.email, password: 'uncertain assigned password' } });
+    expect(login.status()).toBe(200);
+    expect((await login.json()).user.requiredPasswordChange).toBe(true);
+  } finally { await f.member.close(); }
+});
+
+
+test('successful password reset refreshes both account details and the account table', async ({ page }) => {
+  const f = await openOwner(page);
+  try {
+    const row = page.getByRole('region', { name: 'User accounts', exact: true }).getByRole('row').filter({ hasText: f.email });
+    await expect(row).toContainText('Complete');
+    const details = page.getByRole('region', { name: 'User details' });
+    await details.getByRole('button', { name: 'Reset password', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: 'Reset password confirmation' });
+    await dialog.getByLabel('Temporary password', { exact: true }).fill('assigned reset consistency password');
+    await dialog.getByRole('button', { name: 'Confirm password reset', exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(row).toContainText('Required');
+    await expect(details.locator('dd').nth(4)).toHaveText('Required');
+    expect((await f.member.request.get('/api/auth/me')).status()).toBe(401);
   } finally { await f.member.close(); }
 });

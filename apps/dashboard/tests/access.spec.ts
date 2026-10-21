@@ -55,12 +55,12 @@ test('access actions prevent duplicate submissions and show safe validation, fai
   await page.route('**/api/admin/users/*', route => route.request().method() === 'PATCH'
     ? route.fulfill({ status: 503, json: { error: 'mongodb://private:secret@internal' } }) : route.continue());
   await details.getByRole('button', { name: 'Promote to administrator', exact: true }).click();
-  await expect(details.getByRole('alert')).toHaveText('Service unavailable. Try again later.');
+  await expect(details.getByRole('alert')).toContainText('The change may have succeeded. Refresh details and key metadata');
   await page.unroute('**/api/admin/users/*');
   await page.route('**/api/admin/users/*', route => route.request().method() === 'PATCH'
     ? route.fulfill({ json: { user: { role: 'admin' } } }) : route.continue());
   await details.getByRole('button', { name: 'Promote to administrator', exact: true }).click();
-  await expect(details.getByRole('alert')).toHaveText('Service returned an invalid response. Try again later.');
+  await expect(details.getByRole('alert')).toContainText('Service returned an invalid response.');
   await expect(details.locator('dd').nth(2)).toHaveText('member');
   await page.unroute('**/api/admin/users/*');
   await details.getByRole('button', { name: 'Refresh details', exact: true }).click();

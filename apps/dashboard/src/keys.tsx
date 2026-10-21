@@ -1,4 +1,4 @@
-import { Dialog } from './ui.js';
+import { Dialog, ReadState, StatusBadge } from './ui.js';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { flushSync } from 'react-dom';
 import { api, ApiError, type DashboardUser } from './api.js';
@@ -91,14 +91,15 @@ export function PersonalKeys() {
   return <KeyManagement />;
 }
 
-export function UserKeys({ owner }: { owner: DashboardUser }) {
-  return <KeyManagement key={`${owner.id}:${owner.status}:${owner.requiredPasswordChange}`} owner={owner} />;
+export function UserKeys({ owner, credentialRevision }: { owner: DashboardUser; credentialRevision: number }) {
+  return <KeyManagement key={`${owner.id}:${owner.status}:${owner.requiredPasswordChange}`} owner={owner} credentialRevision={credentialRevision} />;
 }
 
-function KeyManagement({ owner }: { owner?: DashboardUser }) {
+function KeyManagement({ owner, credentialRevision = 0 }: { owner?: DashboardUser; credentialRevision?: number }) {
   const path = owner ? `/api/admin/users/${owner.id}/keys` : '/api/keys';
   const eligible = !owner || (owner.status === 'active' && !owner.requiredPasswordChange);
   const [keys, setKeys] = useState<KeyMetadata[]>([]);
+  const [loadedPage, setLoadedPage] = useState<number | null>(null);
   const [page, setPage] = useState(1);
   const [revision, setRevision] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -111,6 +112,11 @@ function KeyManagement({ owner }: { owner?: DashboardUser }) {
   const [confirm, setConfirm] = useState<KeyMetadata | null>(null);
   const lifetime = useRef(0);
   const secretRevision = useRef(0);
+  // Refreshing owner details discards only the one-time secret, preserving safe
+  // key metadata if either read subsequently fails. Late issuance stays discarded.
+  useEffect(() => {
+    ++secretRevision.current; setIssued(null); setCopyStatus('');
+  }, [credentialRevision]);
   useEffect(() => {
     const clear = () => {
       ++secretRevision.current;
@@ -121,9 +127,9 @@ function KeyManagement({ owner }: { owner?: DashboardUser }) {
   }, []);
   useEffect(() => {
     let active = true;
-    setLoading(true); setListError(''); setKeys([]);
+    setLoading(true); setListError('');
     void api.request(`${path}?page=${page}&limit=10`, 'GET', undefined, value => keyPage(value, page))
-      .then(result => { if (active) setKeys(result); })
+      .then(result => { if (active) { setKeys(result); setLoadedPage(page); } })
       .catch(error => { if (active) setListError(message(error)); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
@@ -165,7 +171,7 @@ function KeyManagement({ owner }: { owner?: DashboardUser }) {
       await api.request(`${path}/${confirm.id}`, 'DELETE');
       if (current !== lifetime.current) return;
       setConfirm(null); setNotice('Key revoked.'); setRevision(value => value + 1);
-    } catch (error) { if (current === lifetime.current) setError(message(error)); }
+    } catch (error) { if (current === lifetime.current) setError(`${message(error)} Revocation may have succeeded. Refresh metadata before deciding whether to submit again.`); }
     finally { if (current === lifetime.current) setPending(false); }
   }
   return <section aria-label={owner ? 'Selected user API keys' : undefined}>
@@ -179,7 +185,7 @@ function KeyManagement({ owner }: { owner?: DashboardUser }) {
       <button onClick={() => void copy()}>Copy key</button>
       <button onClick={() => { ++secretRevision.current; setIssued(null); setCopyStatus(''); }}>Dismiss key</button>
       {copyStatus && <p role="status">{copyStatus}</p>}
-    </section> : !eligible ? <p>Issuance requires an active user who has completed password replacement. Existing metadata and revocation remain available.</p> : <form onSubmit={create} aria-busy={pending}>
+    </section> : !eligible ? <p>Issuance requires an active user who has completed password replacement. Existing metadata and revocation remain available.</p> : <form className="access-form" onSubmit={create} aria-busy={pending}>
       <label>Key name<input name="name" maxLength={100} required disabled={pending} /></label>
       <button disabled={pending}>{pending ? 'Creating key…' : 'Create key'}</button>
     </form>}
@@ -190,18 +196,18 @@ function KeyManagement({ owner }: { owner?: DashboardUser }) {
     </Dialog>}
     <h2>{owner ? 'User key metadata' : 'Your key metadata'}</h2>
     <button disabled={loading || pending} onClick={() => setRevision(value => value + 1)}>Refresh metadata</button>
-    {loading ? <p role="status">Loading keys…</p> : listError ? <><p role="alert">{listError}</p>
-      <button onClick={() => setRevision(value => value + 1)}>Retry keys</button></>
-      : keys.length === 0 ? <p>No keys on this page.</p> : <div className="table-scroll" role="region" aria-label="API key metadata" tabIndex={0}><table>
+    {listError && <button disabled={loading} onClick={() => setRevision(value => value + 1)}>Retry keys</button>}
+    <ReadState loading={loading} error={listError} hasData={loadedPage === page} loadingMessage="Loading keys…" empty={keys.length === 0} emptyMessage="No keys on this page.">
+      <div className="table-scroll" role="region" aria-label="API key metadata" tabIndex={0}><table className="access-table key-table">
         <thead><tr>{['Identifier', 'Name', 'Prefix', 'Created', 'Last used', 'Revoked', 'Action'].map(label => <th key={label}>{label}</th>)}</tr></thead>
-        <tbody>{keys.map(key => <tr key={key.id}><td>{key.id}</td><td>{key.name ?? 'Unnamed key'}</td><td>{key.prefix}</td>
+        <tbody>{keys.map(key => <tr key={key.id}><td><code className="identifier">{key.id}</code></td><td>{key.name ?? 'Unnamed key'}</td><td>{key.prefix}</td>
           <td>{date(key.createdAt)}</td><td>{date(key.lastUsedAt)}</td><td>{date(key.revokedAt)}</td>
-          <td>{key.revokedAt ? 'Revoked' : <button disabled={pending} onClick={() => { setConfirm(key); setError(''); }}>Revoke {key.name ?? key.prefix}</button>}</td>
-        </tr>)}</tbody></table></div>}
+          <td>{key.revokedAt ? <StatusBadge>Revoked</StatusBadge> : <button disabled={pending || loading || !!listError} onClick={() => { setConfirm(key); setError(''); }} aria-label={`Revoke ${key.name ?? key.prefix}`}>Revoke</button>}</td>
+        </tr>)}</tbody></table></div></ReadState>
     <div className="pagination" aria-label="Key pages">
-      <button disabled={page === 1 || loading || pending || !!confirm} onClick={() => setPage(value => value - 1)}>Previous page</button>
+      <button disabled={page === 1 || loading || pending || !!confirm} onClick={() => { setLoading(true); setPage(value => value - 1); }}>Previous page</button>
       <span>Page {page}</span>
-      <button disabled={loading || pending || !!confirm || !!listError || keys.length < 10} onClick={() => setPage(value => value + 1)}>Next page</button>
+      <button disabled={loading || pending || !!confirm || !!listError || keys.length < 10} onClick={() => { setLoading(true); setPage(value => value + 1); }}>Next page</button>
     </div>
     {!owner && <ConnectionInstructions />}
   </section>;

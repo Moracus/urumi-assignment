@@ -82,3 +82,18 @@ table { min-width: 680px; }
 input[type="checkbox"] { width: 22px; min-height: 22px; justify-self: start; }
 .skip-link { top: 12px; transform: translateY(-200%); clip-path: inset(100%); }
 .skip-link:focus { transform: none; clip-path: none; }
+
+/* Access forms share the same surface and spacing at every viewport width. */
+.access-form { max-width: 640px; padding: 20px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+.access-form p { margin: 0; color: var(--muted); }
+.access-details dl { display: grid; grid-template-columns: minmax(100px, 160px) minmax(0, 1fr); gap: 12px 20px; padding: 16px; background: var(--subtle); border-radius: 6px; }
+.access-details dt, .access-details dd { margin: 0; }
+.identifier { white-space: nowrap; }
+@media (max-width: 480px) {
+  .access-form { padding: 16px; }
+  .access-details dl { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .access-details dd { margin-bottom: 12px; }
+}
+.access-table td:last-child button { white-space: nowrap; }
+.key-table { min-width: 1080px; }
+.key-table td:nth-child(2) { min-width: 180px; }

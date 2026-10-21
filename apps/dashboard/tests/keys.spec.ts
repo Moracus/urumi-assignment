@@ -234,3 +234,57 @@ test('account replacement while a key is displayed clears the creation view', as
   await expect(secret).toHaveCount(0);
   expect(await page.content()).not.toContain(rawKey);
 });
+
+async function findKeyPage(page: Page, name: string) {
+  await expect(page.getByText('Loading keys…')).toHaveCount(0);
+  while (!(await page.getByRole('row').filter({ hasText: name }).count())) {
+    await page.getByRole('button', { name: 'Next page', exact: true }).click();
+    await expect(page.getByText('Loading keys…')).toHaveCount(0);
+    await expect(page.getByText('Refreshing data…')).toHaveCount(0);
+  }
+}
+
+test('refresh failure retains key metadata with an explicit stale status', async ({ page }) => {
+  await openKeys(page);
+  await page.getByLabel('Key name').fill('Retained client');
+  await page.getByRole('button', { name: 'Create key', exact: true }).click();
+  await expect(page.getByLabel('New API key', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Dismiss key' }).click();
+  await findKeyPage(page, 'Retained client');
+  await expect(page.getByRole('table')).toContainText('Retained client');
+  await page.route('**/api/keys?**', route => route.fulfill({ status: 503, json: {} }));
+  await page.getByRole('button', { name: 'Refresh metadata' }).click();
+  await expect(page.getByRole('alert')).toContainText('Service unavailable');
+  await expect(page.getByRole('status').filter({ hasText: 'Stale data' })).toBeVisible();
+  await expect(page.getByRole('table')).toContainText('Retained client');
+  await page.unroute('**/api/keys?**');
+  await page.getByRole('button', { name: 'Retry keys' }).click();
+  await expect(page.getByRole('status').filter({ hasText: 'Stale data' })).toHaveCount(0);
+});
+
+test('lost revocation acknowledgement explains uncertainty and never replays the mutation', async ({ page }) => {
+  await openKeys(page);
+  await page.getByLabel('Key name').fill('Uncertain revoke');
+  await page.getByRole('button', { name: 'Create key', exact: true }).click();
+  await expect(page.getByLabel('New API key', { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Dismiss key' }).click();
+  let submissions = 0;
+  await page.route('**/api/keys/*', async route => {
+    submissions++; await route.fetch(); await route.abort('failed');
+  });
+  await findKeyPage(page, 'Uncertain revoke');
+  const trigger = page.getByRole('button', { name: 'Revoke Uncertain revoke', exact: true });
+  await trigger.click();
+  const dialog = page.getByRole('dialog', { name: 'Confirm revocation', exact: true });
+  await expect(dialog.getByRole('button', { name: 'Cancel', exact: true })).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(dialog.getByRole('button', { name: 'Confirm revoke', exact: true })).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(dialog.getByRole('alert')).toContainText('Revocation may have succeeded. Refresh metadata');
+  expect(submissions).toBe(1);
+  await page.keyboard.press('Escape');
+  await expect(trigger).toBeFocused();
+  await page.getByRole('button', { name: 'Refresh metadata' }).click();
+  await expect(page.getByRole('row').filter({ hasText: 'Uncertain revoke' })).toContainText('Revoked');
+  expect(submissions).toBe(1);
+});

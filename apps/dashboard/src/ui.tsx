@@ -42,12 +42,12 @@ export function Dialog({ label, pending, close, children }: {
 
 // Callers retain only data from the current authorized view; session changes
 // unmount that view. A read failure never turns a previous result into zeroes.
-export function ReadState({ loading, error, hasData, empty = false, emptyMessage = 'No results.', children }: {
+export function ReadState({ loading, error, hasData, empty = false, emptyMessage = 'No results.', loadingMessage = 'Loading summary…', children }: {
   loading: boolean; error: string; hasData: boolean; empty?: boolean;
-  emptyMessage?: string; children: ReactNode;
+  emptyMessage?: string; loadingMessage?: string; children: ReactNode;
 }) {
   return <>
-    {loading && <p role="status">{hasData ? 'Refreshing data…' : 'Loading summary…'}</p>}
+    {loading && <p role="status">{hasData ? 'Refreshing data…' : loadingMessage}</p>}
     {error && <p role="alert">{error}</p>}
     {hasData && (loading || error) && <p role="status">Stale data — showing the last successful read. {error ? 'Refresh failed.' : 'Refresh in progress.'}</p>}
     {hasData && (empty ? <p>{emptyMessage}</p> : children)}
