@@ -3,6 +3,7 @@ import type { AuditLogger, AuditRecord } from "./logger.js";
 
 export interface AuditFilters {
   userId?: string;
+  upstreamId?: string;
   toolName?: string;
   outcome?: AuditRecord["outcome"];
   from?: string;
@@ -44,6 +45,7 @@ export async function createAuditStorage(connection: Connection) {
     async page(page: number, limit: number, filters: AuditFilters = {}) {
       const query: QueryFilter<AuditRecord> = {};
       if (filters.userId) query.userId = filters.userId;
+      if (filters.upstreamId) query.upstreamId = filters.upstreamId;
       if (filters.toolName) query.toolName = filters.toolName;
       if (filters.outcome) query.outcome = filters.outcome;
       if (filters.from || filters.to) query.timestamp = {

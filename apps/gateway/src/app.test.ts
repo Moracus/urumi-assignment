@@ -2972,3 +2972,48 @@ test("normalized and bounded public names invoke native tools and historical aud
   assert.equal(history.json().records.length, 1);
   assert.equal(history.json().records[0].toolName, "calculator.calculate");
 });
+
+
+test("history filters durable registration instances and UTC boundaries without assigning unresolved attempts", async t => {
+  const calculator = await calculatorUpstream(t);
+  const f = await fixture(t, { upstreams: [calculator.config] });
+  await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
+  const client = await f.connect();
+  await client.callTool({ name: "calculator_calculate", arguments: { a: 6, b: 7 } });
+  const read = (query = "") => f.app.inject({ url: `/api/admin/audit?${query}`, headers: f.headers });
+  const original = (await read()).json().records[0];
+  assert.equal((await f.app.inject({ method: "DELETE", url: "/api/admin/servers/calculator", headers: f.headers })).statusCode, 204);
+  const recreated = await f.app.inject({ method: "POST", url: "/api/admin/servers", headers: f.headers, payload: {
+    serverId: "calculator", displayName: "Replacement calculator", url: calculator.config.url,
+    transport: "streamable-http", enabled: true, authentication: { type: "none" },
+  } });
+  assert.equal(recreated.statusCode, 201, recreated.body);
+  await client.callTool({ name: "calculator_calculate", arguments: { a: 2, b: 3 } });
+  await f.app.inject({ method: "POST", url: "/mcp", payload: { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "calculator_calculate" } } });
+  const rows = (await read()).json().records;
+  const replacement = rows.find((row: AuditRecord) => row.upstreamDisplayName === "Replacement calculator");
+  assert.notEqual(replacement.upstreamId, original.upstreamId);
+  // Fix attempt times to make inclusive/exclusive boundaries independent of wall-clock speed.
+  await f.db.collection("tool_audit").updateMany({}, { $set: { timestamp: "2026-10-17T00:00:00.000Z" } });
+  const filters = new URLSearchParams({ upstreamId: original.upstreamId, userId: f.userId,
+    toolName: "calculator_calculate", outcome: "success", from: "2026-10-17T05:30:00+05:30", to: "2026-10-17T01:00:00Z", limit: "1" });
+  const response = await read(filters.toString());
+  assert.equal(response.statusCode, 200, response.body);
+  assert.equal(response.headers["cache-control"], "no-store");
+  assert.equal(response.json().records.length, 1);
+  assert.equal(response.json().records[0].id, original.id);
+  assert.equal(response.json().hasMore, false);
+  assert.equal(response.json().records[0].upstreamDisplayName, "calculator");
+  for (const query of [`upstreamId=${replacement.upstreamId}`, `upstreamId=${original.upstreamId}`]) {
+    const result = (await read(query)).json();
+    assert.equal(result.records.length, 1);
+    assert.ok(result.records[0].upstreamId);
+  }
+  for (const query of [`upstreamId=${original.upstreamId}&to=2026-10-17T00:00:00Z`, "upstreamId=000000000000000000000000"]) {
+    assert.deepEqual((await read(query)).json().records, []);
+  }
+  for (const query of ["upstreamId=", "upstreamId=null", "upstreamId=calculator", `upstreamId=${original.upstreamId}&upstreamId=${replacement.upstreamId}`,
+    "from=2026-02-30T00:00:00Z", "outcome=success&outcome=success", "unknown=value"]) {
+    assert.equal((await read(query)).statusCode, 400, query);
+  }
+});
