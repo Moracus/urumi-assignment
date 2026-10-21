@@ -2,6 +2,7 @@ import type { LookupAddress, LookupAllOptions } from "node:dns";
 import { lookup } from "node:dns/promises";
 import { BlockList, isIP } from "node:net";
 import { Agent, buildConnector } from "undici";
+import { networkFailure, SafeUpstreamFailure } from "./diagnostics.js";
 import { z } from "zod/v4";
 
 const ruleSchema = z.object({
@@ -103,15 +104,15 @@ export class DestinationPolicy {
           addresses = isIP(host) ? [{ address: host, family: isIP(host) }] : await Promise.race([
             (network.lookup ?? lookup)(host, { all: true, verbatim: true }),
             new Promise<never>((_resolve, reject) => {
-              timer = setTimeout(() => reject(denied()), 4_500);
+              timer = setTimeout(() => reject(new SafeUpstreamFailure("timeout")), 4_500);
               timer.unref();
             }),
           ]);
         } finally { clearTimeout(timer); }
         if (!addresses.length) throw denied();
         for (const answer of addresses) this.validateAddress(url, answer.address);
-        dial({ ...options, hostname: addresses[0].address, servername: isIP(host) ? undefined : host }, callback);
-      })().catch(() => callback(denied(), null));
+        dial({ ...options, hostname: addresses[0].address, servername: isIP(host) ? undefined : host }, (error, socket) => { if (error) callback(networkFailure(error), null); else callback(null, socket); });
+      })().catch(error => callback(error instanceof SafeUpstreamFailure ? error : networkFailure(error), null));
     } });
   }
 }

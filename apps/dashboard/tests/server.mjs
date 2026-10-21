@@ -54,14 +54,44 @@ const replacementHandler = createMcpHandler(() => {
 const replacementNodeHandler = toNodeHandler(replacementHandler);
 // Test-only public boundary for changing a controlled upstream without touching registry internals.
 const upstreamModes = new Map();
+const diagnosticHandlers = new Map();
+const diagnosticCalls = new Map();
+function diagnosticHandler(namespace) {
+  if (diagnosticHandlers.has(namespace)) return diagnosticHandlers.get(namespace).node;
+  const handler = createMcpHandler(() => {
+    const server = new McpServer({ name: 'diagnostic-controlled', version: '1' });
+    server.registerTool('calculate', {}, async () => ({ content: [] }));
+    server.server.setRequestHandler('tools/list', async () => {
+      if (upstreamModes.get(namespace) === 'discovery_error') throw new Error('ENOTFOUND TLS timeout synthetic-diagnostic-secret https://private.example/diagnostic');
+      return { tools: [{ name: 'calculate', inputSchema: { type: 'object' } }] };
+    });
+    server.server.setRequestHandler('tools/call', async () => {
+      const mode = upstreamModes.get(namespace);
+      const key = `${namespace}:${mode}`;
+      diagnosticCalls.set(key, (diagnosticCalls.get(key) ?? 0) + 1);
+      if (mode === 'invocation_error') throw new Error('synthetic-diagnostic-secret https://private.example/diagnostic');
+      if (mode === 'timeout') await new Promise(resolve => setTimeout(resolve, 11000));
+      return { content: [], ...(mode === 'tool_error' ? { isError: true, structuredContent: { reason: 'valid tool error' } } : {}) };
+    });
+    return server;
+  });
+  const node = toNodeHandler(handler);
+  diagnosticHandlers.set(namespace, { handler, node });
+  return node;
+}
+upstream.get('/control/:namespace', async request => ({ timeoutCalls: diagnosticCalls.get(`${request.params.namespace}:timeout`) ?? 0 }));
+
 upstream.post('/control/:namespace', async (request, reply) => {
   const mode = request.body?.mode;
-  if (!['valid', 'changed', 'offline'].includes(mode)) return reply.code(400).send();
+  if (!['valid', 'changed', 'offline', 'auth', 'discovery_error', 'tool_error', 'invocation_error', 'invalid', 'timeout'].includes(mode)) return reply.code(400).send();
   upstreamModes.set(request.params.namespace, mode);
   return reply.code(204).send();
 });
 upstream.all('/controlled/:namespace', (request, reply) => {
   const mode = upstreamModes.get(request.params.namespace) ?? 'valid';
+  if (mode === 'invalid' && request.body?.method === 'tools/call') return reply.send({ jsonrpc: '2.0', id: request.body.id, result: { resultType: 'complete', content: 'synthetic-diagnostic-secret https://private.example/diagnostic' } });
+  if (mode === 'auth') return reply.code(401).send({ error: 'synthetic-diagnostic-secret https://private.example/diagnostic' });
+  if (request.params.namespace.startsWith('diagnostic_')) return diagnosticHandler(request.params.namespace)(request.raw, reply.raw, request.body);
   if (mode === 'offline') return reply.code(503).send({ error: 'private upstream diagnostic with synthetic-browser-one' });
   return (mode === 'changed' ? replacementNodeHandler : nodeHandler)(request.raw, reply.raw, request.body);
 });
@@ -141,6 +171,7 @@ upstream.addHook('onClose', () => handler.close());
 upstream.addHook('onClose', () => calculatorHandler.close());
 upstream.addHook('onClose', () => timeHandler.close());
 upstream.addHook('onClose', () => replacementHandler.close());
+upstream.addHook('onClose', () => Promise.all([...diagnosticHandlers.values()].map(value => value.handler.close())));
 const upstreamAddress = await upstream.listen({ host: '127.0.0.1', port: 0 });
 const commerce = await commerceFixture();
 const gateway = await createGatewayApp({ mongodbUri: uri.toString(),

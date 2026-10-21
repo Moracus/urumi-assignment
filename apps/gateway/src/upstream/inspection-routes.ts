@@ -28,6 +28,7 @@ export function registerServerInspectionRoutes(
       lastDiscoveredAt: state?.lastDiscoveredAt ?? null,
       // Do not serialize raw diagnostics, even if the registry's error convention changes.
       lastError: state?.lastError ? "Upstream unavailable" : null,
+      diagnostic: server.enabled && state?.status === "unreachable" ? state.diagnostic ?? null : null,
     };
   }
   function detail(server: StoredRegistration) {

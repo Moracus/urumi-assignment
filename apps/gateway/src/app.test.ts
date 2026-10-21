@@ -3017,3 +3017,150 @@ test("history filters durable registration instances and UTC boundaries without 
     assert.equal((await read(query)).statusCode, 400, query);
   }
 });
+
+test("server diagnostics distinguish HTTP authentication, discovery and credentials without leaking upstream evidence", async t => {
+  let mode: "auth" | "discovery" | "valid" = "auth";
+  const upstream = await controlledUpstream(t, "diagnostic", server => {
+    server.registerTool("echo", {}, async () => ({ content: [], isError: true, structuredContent: { reason: "valid tool error" } }));
+    server.server.setRequestHandler("tools/list", async () => {
+      if (mode === "discovery") throw new Error("ENOTFOUND TLS timeout synthetic-private-token https://private.example/secret");
+      return { tools: [{ name: "echo", inputSchema: { type: "object" } }] };
+    });
+  }, app => app.addHook("onRequest", async (_request, reply) => {
+    if (mode === "auth") return reply.code(401).send({ error: "synthetic-private-token https://private.example/secret" });
+  }));
+  const ref = { namespace: "urumi", name: "diagnostic", key: "token" };
+  let secretAvailable = false;
+  const f = await fixture(t, { upstreams: [upstream.config], approvedSecrets: [ref],
+    secretReader: { async read() { if (!secretAvailable) throw new Error("synthetic-private-token https://private.example/secret"); return "synthetic-private-token"; } } });
+  await f.db.collection("users").updateOne({ _id: new mongoose.Types.ObjectId(f.userId) }, { $set: { role: "admin" } });
+  const inspect = async () => {
+    const response = await f.app.inject({ url: "/api/admin/servers/diagnostic", headers: f.headers });
+    assert.equal(response.statusCode, 200);
+    for (const value of ["synthetic-private-token", "https://private.example/secret", "ENOTFOUND", "stack", "headers"])
+      assert.ok(!response.body.includes(value), response.body);
+    return response.json().server;
+  };
+  const assertDiagnostic = async (stage: string, code: string) => {
+    const server = await inspect();
+    assert.equal(server.status, "unreachable");
+    assert.equal(server.lastError, "Upstream unavailable");
+    assert.deepEqual(Object.keys(server.diagnostic).sort(), ["code", "observedAt", "stage"]);
+    assert.equal(server.diagnostic.stage, stage);
+    assert.equal(server.diagnostic.code, code);
+    assert.ok(Number.isFinite(Date.parse(server.diagnostic.observedAt)));
+  };
+  await assertDiagnostic("connection", "http_authentication");
+  mode = "discovery";
+  const refresh = () => f.app.inject({ method: "POST", url: "/api/admin/servers/diagnostic/refresh", headers: f.headers });
+  await refresh();
+  // Remote prose must not be promoted into DNS/TLS/timeout evidence.
+  await assertDiagnostic("discovery", "discovery_failed");
+  const edit = (payload: object) => f.app.inject({ method: "PATCH", url: "/api/admin/servers/diagnostic", headers: f.headers, payload });
+  await edit({ authentication: { type: "bearer", secretRef: ref } });
+  await assertDiagnostic("credentials", "credentials_unavailable");
+  secretAvailable = true; mode = "valid";
+  await refresh();
+  assert.equal((await inspect()).diagnostic, null);
+  const client = await f.connect();
+  const result = await client.callTool({ name: "diagnostic_echo" });
+  assert.equal(result.isError, true);
+  assert.deepEqual(result.structuredContent, { reason: "valid tool error" });
+  assert.equal((await inspect()).status, "connected");
+  assert.equal((await inspect()).diagnostic, null);
+  mode = "auth";
+  await refresh();
+  await assertDiagnostic("discovery", "http_authentication");
+  await edit({ displayName: "New label" });
+  assert.equal((await inspect()).diagnostic, null);
+  await f.app.inject({ method: "POST", url: "/api/admin/servers/diagnostic/disable", headers: f.headers });
+  assert.equal((await inspect()).diagnostic, null);
+  assert.equal((await inspect()).status, "disabled");
+});
+
+test("registry diagnostics accept only structured DNS and socket evidence", async t => {
+  const { UpstreamRegistry } = await import("./upstream/registry.js");
+  const { DestinationPolicy } = await import("./upstream/destination-policy.js");
+  for (const [code, expected] of [["ENOTFOUND", "dns_failed"], ["EAI_AGAIN", "dns_failed"],
+    ["ECONNREFUSED", "connection_refused"], ["ERR_TLS_CERT_ALTNAME_INVALID", "tls_failed"],
+    ["CERT_HAS_EXPIRED", "tls_failed"], ["ETIMEDOUT", "timeout"], ["UNKNOWN", "connection_failed"]]) {
+    await t.test(code, async t => {
+      const failure = Object.assign(new Error("timeout TLS ENOTFOUND synthetic-secret https://private.example/secret"), { code });
+      const registry = new UpstreamRegistry(new DestinationPolicy({ rules: [{ origin: "https://tools.example.test", cidrs: ["203.0.113.10/32"] }] }), {
+        async lookup() { if (code === "ENOTFOUND" || code === "EAI_AGAIN") throw failure; return [{ address: "203.0.113.10", family: 4 }]; },
+        dial(_options, callback) { callback(failure, null); },
+      });
+      t.after(() => registry.close());
+      registry.register({ name: "diagnostic", url: "https://tools.example.test/mcp", enabled: true });
+      await registry.connect("diagnostic");
+      const diagnostic = registry.getState("diagnostic")?.diagnostic;
+      assert.equal(diagnostic?.stage, "connection");
+      assert.equal(diagnostic?.code, expected);
+      assert.ok(diagnostic?.observedAt instanceof Date);
+      assert.ok(!JSON.stringify(diagnostic).includes("synthetic-secret"));
+      assert.ok(!JSON.stringify(diagnostic).includes("private.example"));
+    });
+  }
+});
+
+test("late discovery diagnostics cannot repopulate after a metadata revision or disable barrier", async t => {
+  const { UpstreamRegistry } = await import("./upstream/registry.js");
+  const { DestinationPolicy } = await import("./upstream/destination-policy.js");
+  for (const action of ["metadata", "disable"] as const) {
+    await t.test(action, async t => {
+      const pending = barrier();
+      let delayed = false;
+      const upstream = await controlledUpstream(t, "diagnostic", server => {
+        server.registerTool("echo", {}, async () => ({ content: [] }));
+        server.server.setRequestHandler("tools/list", async () => {
+          if (delayed) { pending.enter(); await pending.blocked; throw new Error("synthetic-stale-secret https://private.example/stale"); }
+          return { tools: [{ name: "echo", inputSchema: { type: "object" } }] };
+        });
+      });
+      const registry = new UpstreamRegistry(new DestinationPolicy({ allowLoopback: true,
+        rules: [{ origin: new URL(upstream.config.url).origin, cidrs: ["127.0.0.1/32"] }] }));
+      t.after(() => registry.close()); t.after(pending.release);
+      registry.register({ ...upstream.config, configurationRevision: 1 });
+      await registry.connect("diagnostic");
+      delayed = true;
+      const refreshing = registry.refresh("diagnostic");
+      await pending.entered;
+      const changing = action === "metadata" ? registry.reconfigure({ ...upstream.config, configurationRevision: 2 })
+        : registry.disable("diagnostic", 2);
+      pending.release(); await refreshing; await changing;
+      assert.equal(registry.getState("diagnostic")?.config.configurationRevision, 2);
+      assert.equal(registry.getState("diagnostic")?.diagnostic, null);
+      delayed = false;
+      await registry.enable("diagnostic", 3);
+      assert.equal(registry.getState("diagnostic")?.status, "connected");
+      assert.equal(registry.getState("diagnostic")?.diagnostic, null);
+    });
+  }
+});
+
+test("connection and discovery diagnostic timeouts retain their five-second bounds", async t => {
+  const { UpstreamRegistry } = await import("./upstream/registry.js");
+  const { DestinationPolicy } = await import("./upstream/destination-policy.js");
+  for (const stage of ["connection", "discovery"] as const) {
+    await t.test(stage, async t => {
+      const upstream = await controlledUpstream(t, "diagnostic", server => {
+        server.registerTool("echo", {}, async () => ({ content: [] }));
+        if (stage === "discovery") server.server.setRequestHandler("tools/list", async () => {
+          await new Promise(resolve => setTimeout(resolve, 6000));
+          return { tools: [] };
+        });
+      }, app => app.addHook("onRequest", async request => {
+        if (stage === "connection" && request.method === "POST") await new Promise(resolve => setTimeout(resolve, 6000));
+      }));
+      const registry = new UpstreamRegistry(new DestinationPolicy({ allowLoopback: true,
+        rules: [{ origin: new URL(upstream.config.url).origin, cidrs: ["127.0.0.1/32"] }] }));
+      t.after(() => registry.close());
+      registry.register(upstream.config);
+      const started = Date.now();
+      await registry.connect("diagnostic");
+      assert.ok(Date.now() - started < 6000, "connection/discovery must retain its five-second timeout");
+      assert.equal(registry.getState("diagnostic")?.diagnostic?.stage, stage);
+      assert.equal(registry.getState("diagnostic")?.diagnostic?.code, "timeout");
+    });
+  }
+});

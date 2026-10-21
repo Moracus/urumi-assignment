@@ -1,3 +1,4 @@
+import { diagnose, SafeUpstreamFailure, type FailureStage, type UpstreamDiagnostic } from "./diagnostics.js";
 import { isDeepStrictEqual } from "node:util";
 import { UpstreamCredentials } from "./credentials.js";
 import { DestinationPolicy, type DestinationNetwork } from "./destination-policy.js";
@@ -54,6 +55,7 @@ export class UpstreamRegistry {
       lastConnectedAt: null,
       lastDiscoveredAt: null,
       lastError: null,
+      diagnostic: null,
     });
   }
 
@@ -131,6 +133,8 @@ export class UpstreamRegistry {
     if (state.config.url === config.url && isDeepStrictEqual(state.config.authentication, config.authentication)) {
       // Metadata revisions do not invalidate a callable catalog or reconnect.
       state.config = { ...config };
+      state.diagnostic = null;
+      state.lastError = null;
       return;
     }
     // Persisted replacement is authoritative even when cleanup or discovery fails.
@@ -143,6 +147,7 @@ export class UpstreamRegistry {
     state.lastConnectedAt = null;
     state.lastDiscoveredAt = null;
     state.lastError = null;
+    state.diagnostic = null;
     await this.runMaintenance(config.name, async () => {
       await this.closeConnection(config.name);
       if (config.enabled) await this.connectInternal(config.name);
@@ -159,6 +164,7 @@ export class UpstreamRegistry {
     state.tools = [];
     state.client = null;
     state.lastError = null;
+    state.diagnostic = null;
     await this.runMaintenance(name, () => this.closeConnection(name));
   }
 
@@ -195,6 +201,7 @@ export class UpstreamRegistry {
       return;
     }
 
+    const configurationRevision = state.config.configurationRevision;
     const generation = state.generation = ++this.nextGeneration;
     const current = () => !this.closed && this.upstreams.get(name) === state && state.generation === generation;
 
@@ -204,14 +211,18 @@ export class UpstreamRegistry {
     if (!current()) return;
     state.status = "connecting";
     state.lastError = null;
+    state.diagnostic = null;
 
     let connection: UpstreamConnection | null = null;
+    let stage: FailureStage = "credentials";
 
     try {
       const headers = await this.credentials.resolve(state.config.authentication);
       if (!current()) return;
+      stage = "connection";
       connection = await connectToUpstream(name, state.config.url, this.policy, this.network, headers);
 
+      stage = "discovery";
       // Discover tools before marking the upstream healthy.
       const result = await connection.client.listTools(undefined, {
         timeout: 5_000,
@@ -241,13 +252,14 @@ export class UpstreamRegistry {
       state.lastDiscoveredAt = new Date();
 
       console.info(`[Registry] ${name}: discovered ${tools.length} tools`);
-    } catch {
+    } catch (error) {
       if (!current()) {
         if (connection) await this.retireConnection(name, connection);
         return;
       }
       state.status = "unreachable";
       state.lastError = "Connection or tool discovery failed";
+      state.diagnostic = state.config.configurationRevision === configurationRevision ? diagnose(stage, error) : null;
 
       if (connection) {
         await this.retireConnection(name, connection);
@@ -262,7 +274,7 @@ export class UpstreamRegistry {
 
   private validateTools(tools: DiscoveredTool[]): void {
     if (new Set(tools.map(tool => tool.name)).size !== tools.length) {
-      throw new Error("Duplicate upstream tool names");
+      throw new SafeUpstreamFailure("invalid_mcp_response");
     }
   }
 
@@ -278,6 +290,7 @@ export class UpstreamRegistry {
       return;
     }
 
+    const configurationRevision = state.config.configurationRevision;
     const generation = state.generation;
     const client = state.client;
     const current = () => !this.closed && this.upstreams.get(name) === state && state.generation === generation && state.client === client;
@@ -298,10 +311,12 @@ export class UpstreamRegistry {
       state.generation = ++this.nextGeneration;
       state.lastDiscoveredAt = new Date();
       state.lastError = null;
-    } catch {
+      state.diagnostic = null;
+    } catch (error) {
       if (!current()) return;
       state.status = "unreachable";
       state.lastError = "Tool discovery failed";
+      state.diagnostic = state.config.configurationRevision === configurationRevision ? diagnose("discovery", error) : null;
 
       await this.closeConnection(name);
 
@@ -331,6 +346,8 @@ export class UpstreamRegistry {
     name: string,
     reason = "Upstream request failed",
     failedClient?: Client,
+    diagnostic?: UpstreamDiagnostic,
+    configurationRevision?: number,
   ): Promise<void> {
     await this.runMaintenance(name, async () => {
       const state = this.upstreams.get(name);
@@ -347,6 +364,8 @@ export class UpstreamRegistry {
 
       state.status = "unreachable";
       state.lastError = reason;
+      state.diagnostic = state.config.configurationRevision === configurationRevision
+        ? diagnostic ?? diagnose("invocation", undefined) : null;
 
       await this.closeConnection(name);
 
@@ -386,6 +405,7 @@ export class UpstreamRegistry {
     return {
       ...state,
       config: { ...state.config },
+      diagnostic: state.diagnostic ? { ...state.diagnostic } : null,
       tools: state.tools.map((tool) => ({ ...tool })),
     };
   }

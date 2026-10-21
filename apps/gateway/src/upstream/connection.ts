@@ -1,3 +1,4 @@
+import { diagnose, SafeUpstreamFailure } from "./diagnostics.js";
 import { DestinationPolicy, type DestinationNetwork } from "./destination-policy.js";
 import {
   Client,
@@ -30,7 +31,17 @@ export async function connectToUpstream(
       const requested = new URL(input);
       if (requested.href !== approved.href) throw new Error("Upstream destination denied");
       const guardedInit = { ...init, dispatcher, redirect: "manual" as const };
-      const response = await fetch(requested, guardedInit);
+      let response: Response;
+      try { response = await fetch(requested, guardedInit); }
+      catch (error) {
+        // fetch wraps socket errors; accept only our own sanitized adapter evidence.
+        if (error instanceof Error && error.cause instanceof SafeUpstreamFailure) throw error.cause;
+        throw error;
+      }
+      if (response.status === 401 || response.status === 403) {
+        await response.body?.cancel();
+        throw new SafeUpstreamFailure("http_authentication");
+      }
       if (response.status >= 300 && response.status < 400) {
         await response.body?.cancel();
         throw new Error("Upstream redirect denied");
@@ -51,11 +62,11 @@ export async function connectToUpstream(
       transport,
       closeNetwork: () => dispatcher.destroy(),
     };
-  } catch {
+  } catch (error) {
     await client.close().catch(() => {});
     await dispatcher.destroy();
 
-    throw new Error(`Unable to connect to upstream: ${name}`);
+    throw new SafeUpstreamFailure(diagnose("connection", error).code);
   }
 }
 

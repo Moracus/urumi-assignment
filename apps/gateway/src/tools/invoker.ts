@@ -1,3 +1,4 @@
+import { diagnose, SafeUpstreamFailure } from "../upstream/diagnostics.js";
 import type {
   ResolvedTool,
   ToolExecutionResult,
@@ -90,12 +91,8 @@ export class McpUpstreamInvoker
         },
       ));
     } catch (error) {
-      const timedOut =
-        error instanceof Error &&
-        (
-          error.name === "TimeoutError" ||
-          /timed out|timeout/i.test(error.message)
-        );
+      const diagnostic = diagnose("invocation", error);
+      const timedOut = diagnostic.code === "timeout";
 
       // The connection might be unhealthy.
       // Use a generic reason rather than logging
@@ -106,6 +103,8 @@ export class McpUpstreamInvoker
           ? "Tool request timed out"
           : "MCP request failed",
         client,
+        diagnostic,
+        upstream.config.configurationRevision,
       );
 
       if (timedOut) {
@@ -137,6 +136,8 @@ export class McpUpstreamInvoker
         tool.upstreamName,
         "Invalid MCP response",
         client,
+        diagnose("invocation", new SafeUpstreamFailure("invalid_mcp_response")),
+        upstream.config.configurationRevision,
       );
 
       throw new UpstreamCallError(

@@ -3,6 +3,29 @@ import { useEffect, useState } from 'react';
 import { api, ApiError } from './api.js';
 import { ServerForm, type ServerInput } from './server-form.js';
 
+const stages = { credentials: 'Credential resolution', connection: 'Connection / handshake', discovery: 'Tool discovery', invocation: 'Tool invocation' };
+const guidance = {
+  credentials_unavailable: 'Ask an operator to check the approved credential reference, Secret availability and access permissions. Secret values are never shown here.',
+  connection_failed: 'Check the approved registration and endpoint with an operator. Inspect operator logs for connection or handshake details.',
+  discovery_failed: 'The tools could not be discovered. Ask an operator to check MCP compatibility and logs.',
+  invocation_failed: 'A tool request failed. Inspect operator logs and the operation outcome before a deliberate retry.',
+  dns_failed: 'The approved hostname could not be resolved. Ask an operator to check DNS and the registration.',
+  tls_failed: 'TLS verification failed. Ask an operator to check the certificate and approved hostname.',
+  connection_refused: 'The connection was refused. Ask an operator to check that the approved service is listening.',
+  http_authentication: 'The upstream rejected HTTP authentication. Ask an operator to check the approved credential reference and upstream access policy.',
+  timeout: 'The request timed out. Writes may have completed. Investigate the operation outcome before any explicit retry; no mutation is automatically replayed.',
+  invalid_mcp_response: 'The upstream returned an invalid MCP response. Ask an operator to check MCP compatibility and logs.',
+};
+function knownStage(value: string): value is keyof typeof stages { return Object.hasOwn(stages, value); }
+function knownCode(value: string): value is keyof typeof guidance { return Object.hasOwn(guidance, value); }
+interface Diagnostic { stage: keyof typeof stages; code: keyof typeof guidance; observedAt: string }
+function diagnostic(value: unknown): Diagnostic | null {
+  if (value === undefined || value === null) return null;
+  if (!record(value) || typeof value.stage !== 'string' || !knownStage(value.stage)
+    || typeof value.code !== 'string' || !knownCode(value.code)
+    || typeof value.observedAt !== 'string' || !Number.isFinite(Date.parse(value.observedAt))) return invalid();
+  return { stage: value.stage, code: value.code, observedAt: value.observedAt };
+}
 interface ServerSummary {
   serverId: string;
   displayName: string;
@@ -12,6 +35,7 @@ interface ServerSummary {
   lastConnectedAt: string | null;
   lastDiscoveredAt: string | null;
   lastError: string | null;
+  diagnostic: Diagnostic | null;
 }
 interface ServerDetail extends ServerSummary {
   url: string;
@@ -36,7 +60,7 @@ function summary(value: unknown): ServerSummary {
     || (value.lastError !== null && typeof value.lastError !== 'string')) return invalid();
   return { serverId: value.serverId, displayName: value.displayName, enabled: value.enabled,
     status: value.status, toolCount: value.toolCount, lastConnectedAt: value.lastConnectedAt,
-    lastDiscoveredAt: value.lastDiscoveredAt, lastError: value.lastError ? 'Upstream unavailable' : null };
+    lastDiscoveredAt: value.lastDiscoveredAt, diagnostic: diagnostic(value.diagnostic), lastError: value.lastError ? 'Upstream unavailable' : null };
 }
 function serverList(value: unknown) {
   if (!record(value) || !Array.isArray(value.servers)) return invalid();
@@ -63,14 +87,24 @@ function tools(value: unknown): Tool[] {
 }
 function message(error: unknown) { return error instanceof Error ? error.message : 'The request failed. Try again.'; }
 function ServerState({ server }: { server: ServerSummary }) {
-  return <dl>
+  return <><dl>
     <dt>Configured state</dt><dd><StatusBadge>{server.enabled ? 'Enabled' : 'Disabled'}</StatusBadge></dd>
     <dt>Runtime status</dt><dd><StatusBadge>{server.status}</StatusBadge></dd>
     <dt>Available tool count</dt><dd>{server.toolCount}</dd>
     <dt>Last connected</dt><dd>{server.lastConnectedAt ?? 'Never'}</dd>
     <dt>Last discovered</dt><dd>{server.lastDiscoveredAt ?? 'Never'}</dd>
     <dt>Last failure</dt><dd>{server.lastError ?? 'None'}</dd>
-  </dl>;
+  </dl>
+    {!server.enabled ? <p>This registration is disabled. Enable it deliberately to connect and discover tools.</p>
+      : server.status === 'unreachable' && <section aria-label="Current server failure">
+        <h3>Current server failure</h3>
+        {server.diagnostic ? <><p>Failure stage: {stages[server.diagnostic.stage]}</p>
+          <p>Observed: <time dateTime={server.diagnostic.observedAt}>{server.diagnostic.observedAt}</time></p>
+          <p>{guidance[server.diagnostic.code]}</p></>
+          : <p>The upstream is unavailable. Ask an operator to inspect the approved registration and logs.</p>}
+        <p>Refresh details reads the current observation. After investigation, use Refresh discovery deliberately to check recovery; it does not retry a tool call.</p>
+      </section>}
+  </>;
 }
 function ServerDetails({ id, refreshVersion, close, changed, edit, busy }: { id: string; refreshVersion: number; close: () => void;
   changed: (notice: string, removed?: boolean) => void; edit: (server: ServerDetail) => void; busy: (value: boolean) => void }) {

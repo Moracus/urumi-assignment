@@ -1,3 +1,4 @@
+import type { UpstreamDiagnostic } from "./diagnostics.js";
 import type { Client } from "@modelcontextprotocol/client";
 import type { UpstreamRegistration } from "./registrations.js";
 
@@ -42,4 +43,5 @@ export interface UpstreamState {
   lastDiscoveredAt: Date | null;
 
   lastError: string | null;
+  diagnostic?: UpstreamDiagnostic | null;
 }
