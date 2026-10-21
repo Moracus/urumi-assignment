@@ -56,7 +56,7 @@ export function Observability() {
   });
   function metricLink(row: Report['rows'][number], count: number, activity: string, label: string, outcome = '', window: { from: string; to: string } | null = data) {
     if (!row.upstreamId || !window) return count;
-    return <a aria-label={label} href={investigationLink('audit', { ...view.filters, upstreamId: row.upstreamId,
+    return <a aria-label={`${label}: ${count}`} href={investigationLink('audit', { ...view.filters, upstreamId: row.upstreamId,
       from: window.from, to: window.to, userId: '', toolName: '', outcome, activity })}>{count}</a>;
   }
   const activeTrend = rows.find(row => rowKey(row) === expanded);

@@ -1,12 +1,13 @@
 import { Schema, type Connection, type QueryFilter } from "mongoose";
 import type { AuditLogger, AuditRecord } from "./logger.js";
+import { activityOutcomes, type Activity } from "./activity.js";
 
 export interface AuditFilters {
   userId?: string;
   upstreamId?: string;
   toolName?: string;
   outcome?: AuditRecord["outcome"];
-  activity?: "attempts" | "failures" | "durations";
+  activity?: Activity;
   from?: string;
   to?: string;
 }
@@ -59,7 +60,7 @@ export async function createAuditStorage(connection: Connection) {
       const identity = { upstreamId: { $ifNull: ["$upstreamId", null] },
         name: { $cond: ["$upstreamId", null, { $ifNull: ["$upstreamName", null] }] },
         displayName: { $cond: ["$upstreamId", null, { $ifNull: ["$upstreamDisplayName", null] }] } };
-      const sample = { $cond: [{ $and: [{ $in: ["$outcome", ["success", "tool_error"]] },
+      const sample = { $cond: [{ $and: [{ $in: ["$outcome", activityOutcomes.durations] },
         { $isNumber: "$durationMs" }, { $gte: ["$durationMs", 0] }, { $lte: ["$durationMs", Number.MAX_VALUE] }] }, "$durationMs", null] };
       // All facets consume the same matched audit stream, so totals and buckets agree
       // even while new audit records are being inserted. Limits apply after grouping.
@@ -95,13 +96,8 @@ export async function createAuditStorage(connection: Connection) {
       if (filters.userId) query.userId = filters.userId;
       if (filters.upstreamId) query.upstreamId = filters.upstreamId;
       if (filters.toolName) query.toolName = filters.toolName;
-      const populations: Record<NonNullable<AuditFilters["activity"]>, AuditRecord["outcome"][]> = {
-        attempts: ["success", "tool_error", "upstream_error", "upstream_unavailable", "upstream_timeout"],
-        failures: ["tool_error", "upstream_error", "upstream_unavailable", "upstream_timeout"],
-        durations: ["success", "tool_error"],
-      };
       if (filters.activity) {
-        const population = populations[filters.activity];
+        const population = activityOutcomes[filters.activity];
         query.outcome = { $in: filters.outcome ? population.filter(outcome => outcome === filters.outcome) : population };
         // Metric populations require durable attribution, just as the aggregate does.
         if (!filters.upstreamId) query.upstreamId = { $type: "string" };

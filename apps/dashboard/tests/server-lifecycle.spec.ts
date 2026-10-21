@@ -27,7 +27,9 @@ test.beforeEach(async ({ request }) => {
 
 test('confirmed dashboard disable withdraws cached tools, cancellation preserves access, and enable rediscovers', async ({ page }) => {
   const { details, headers } = await openServer(page, 'lifecycle');
-  const { rawKey } = await (await page.request.post('/api/keys', { headers, data: { name: 'Lifecycle client' } })).json();
+  const issued = await page.request.post('/api/keys', { headers, data: { name: 'Lifecycle client' } });
+  expect(issued.status()).toBe(201);
+  const { rawKey } = await issued.json();
   const client = new Client({ name: 'lifecycle', version: '1' });
   await client.connect(new StreamableHTTPClientTransport(new URL('http://localhost:5174/mcp'), {
     requestInit: { headers: { Authorization: `Bearer ${rawKey}` } },
@@ -58,7 +60,9 @@ test('confirmed dashboard disable withdraws cached tools, cancellation preserves
 
 test('removal confirms its impact, cancellation preserves registration, and a pending removal cannot be duplicated', async ({ page }) => {
   const { details, headers } = await openServer(page, 'remove_lifecycle');
-  const { rawKey } = await (await page.request.post('/api/keys', { headers, data: {} })).json();
+  const issued = await page.request.post('/api/keys', { headers, data: {} });
+  expect(issued.status()).toBe(201);
+  const { rawKey } = await issued.json();
   const client = new Client({ name: 'removal', version: '1' });
   await client.connect(new StreamableHTTPClientTransport(new URL('http://localhost:5174/mcp'), {
     requestInit: { headers: { Authorization: `Bearer ${rawKey}` } },
@@ -101,7 +105,9 @@ test('removal confirms its impact, cancellation preserves registration, and a pe
 
 test('failed enable and refresh show actual outcomes, isolate cached calls, and rediscover a changed catalog on recovery', async ({ page }) => {
   const { details, headers, upstreamOrigin } = await openServer(page, 'recovery_lifecycle');
-  const { rawKey } = await (await page.request.post('/api/keys', { headers, data: {} })).json();
+  const issued = await page.request.post('/api/keys', { headers, data: {} });
+  expect(issued.status()).toBe(201);
+  const { rawKey } = await issued.json();
   const client = new Client({ name: 'recovery', version: '1' });
   await client.connect(new StreamableHTTPClientTransport(new URL('http://localhost:5174/mcp'), {
     requestInit: { headers: { Authorization: `Bearer ${rawKey}` } },

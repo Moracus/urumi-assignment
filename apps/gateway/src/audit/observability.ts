@@ -1,3 +1,4 @@
+import { activityOutcomes } from "./activity.js";
 import { z } from "zod/v4";
 import type { FastifyInstance } from "fastify";
 import type { createAuditStorage } from "./storage.js";
@@ -18,9 +19,9 @@ function empty(kind: Row["kind"], upstreamId: string | null): Row {
 }
 function activityCounts(kind: Row["kind"], outcomes: Row["outcomes"]) {
   // Legacy/unresolved records never enter a registration's denominator.
-  const failures = kind === "registration" ? outcomes.tool_error + outcomes.upstream_error
-    + outcomes.upstream_unavailable + outcomes.upstream_timeout : 0;
-  return { failures, attempts: kind === "registration" ? outcomes.success + failures : 0,
+  const total = (activity: "attempts" | "failures") => kind === "registration"
+    ? activityOutcomes[activity].reduce((sum, outcome) => sum + outcomes[outcome], 0) : 0;
+  return { failures: total("failures"), attempts: total("attempts"),
     timeoutCount: outcomes.upstream_timeout };
 }
 export function registerObservabilityRoutes(admin: FastifyInstance, audit: Awaited<ReturnType<typeof createAuditStorage>>,

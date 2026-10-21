@@ -17,14 +17,19 @@ test.beforeEach(async ({ request }) => {
 test('inspection, metric totals and matching history preserve one concrete window and identity', async ({ page }) => {
   const headers = await login(page);
   const { server } = await (await page.request.get('/api/admin/servers/calculator')).json();
-  const { rawKey } = await (await page.request.post('/api/keys', { headers, data: {} })).json();
+  const issued = await page.request.post('/api/keys', { headers, data: {} });
+  expect(issued.status()).toBe(201);
+  const { rawKey, key } = await issued.json();
   const client = new Client({ name: 'investigation', version: '1' });
   try {
     await client.connect(new StreamableHTTPClientTransport(new URL('http://localhost:5174/mcp'), {
       requestInit: { headers: { Authorization: `Bearer ${rawKey}` } },
     }));
     await client.callTool({ name: 'calculator_calculate', arguments: { operation: 'multiply', a: 6, b: 7 } });
-  } finally { await client.close(); }
+  } finally {
+    try { await client.close(); }
+    finally { expect((await page.request.delete(`/api/keys/${key.id}`, { headers })).status()).toBe(204); }
+  }
   await page.goto('/admin/servers');
   await page.getByRole('button', { name: 'Inspect calculator', exact: true }).click();
   const details = page.getByRole('region', { name: 'Server details', exact: true });
@@ -34,9 +39,9 @@ test('inspection, metric totals and matching history preserve one concrete windo
   const from = metricsUrl.searchParams.get('from')!, to = metricsUrl.searchParams.get('to')!;
   expect(Date.parse(to) - Date.parse(from)).toBe(86400000);
   const row = page.getByRole('row').filter({ hasText: server.registrationId });
-  const total = Number(await row.getByRole('link', { name: 'Matching attributed attempts', exact: true }).textContent());
+  const total = Number(await row.getByRole('link', { name: /^Matching attributed attempts: / }).textContent());
   expect(total).toBeGreaterThan(0);
-  await row.getByRole('link', { name: 'Matching attributed attempts', exact: true }).click();
+  await row.getByRole('link', { name: /^Matching attributed attempts: / }).click();
   const historyUrl = new URL(page.url());
   for (const [key, value] of Object.entries({ upstreamId: server.registrationId, from, to, activity: 'attempts', page: '1' })) expect(historyUrl.searchParams.get(key)).toBe(value);
   const history = await (await page.request.get(`/api/admin/audit?${historyUrl.searchParams}&limit=100`)).json();
@@ -63,12 +68,20 @@ async function fixture(page: Page, id: string) {
   const created = await page.request.post('/api/admin/servers', { headers, data: input });
   expect(created.status()).toBe(201);
   const registration = (await created.json()).server;
-  const { rawKey } = await (await page.request.post('/api/keys', { headers, data: {} })).json();
+  const issued = await page.request.post('/api/keys', { headers, data: {} });
+  expect(issued.status()).toBe(201);
+  const { rawKey, key } = await issued.json();
   const client = new Client({ name: 'linked-investigation', version: '1' });
-  await client.connect(new StreamableHTTPClientTransport(new URL('http://localhost:5174/mcp'), {
-    requestInit: { headers: { Authorization: `Bearer ${rawKey}` } },
-  }));
-  return { headers, input, registration, client, mode: async (mode: string) => {
+  const cleanup = async () => {
+    try { await client.close(); }
+    finally { expect((await page.request.delete(`/api/keys/${key.id}`, { headers })).status()).toBe(204); }
+  };
+  try {
+    await client.connect(new StreamableHTTPClientTransport(new URL('http://localhost:5174/mcp'), {
+      requestInit: { headers: { Authorization: `Bearer ${rawKey}` } },
+    }));
+  } catch (error) { await cleanup(); throw error; }
+  return { headers, input, registration, client, cleanup, mode: async (mode: string) => {
     expect((await page.request.post(`${origin}/control/${id}`, { data: { mode } })).status()).toBe(204);
   } };
 }
@@ -76,7 +89,7 @@ async function fixture(page: Page, id: string) {
 test('controlled success, tool error, timeout, healthy isolation and recovery link to exact populations and UTC buckets', async ({ page }) => {
   test.setTimeout(60000);
   const id = `diagnostic_journey_${Date.now()}`;
-  const { headers, registration, client, mode } = await fixture(page, id);
+  const { headers, registration, client, cleanup, mode } = await fixture(page, id);
   const from = new Date(Date.now() - 1000).toISOString();
   try {
     await mode('valid');
@@ -99,8 +112,9 @@ test('controlled success, tool error, timeout, healthy isolation and recovery li
       ['Matching duration samples', 3, 'durations', ''], ['Matching timeouts', 1, '', 'upstream_timeout'],
       ['Matching tool_error', 1, '', 'tool_error'],
     ] as const) {
-      await expect(row.getByRole('link', { name: label, exact: true })).toHaveText(String(expected));
-      await row.getByRole('link', { name: label, exact: true }).click();
+      await expect(row.getByRole('link', { name: new RegExp(`^${label}: `) })).toHaveText(String(expected));
+      await expect(row.getByRole('link', { name: new RegExp(`^${label}: `) })).toHaveAccessibleName(`${label}: ${expected}`);
+      await row.getByRole('link', { name: new RegExp(`^${label}: `) }).click();
       await expect(page.getByRole('row')).toHaveCount(expected + 1);
       expect(new URL(page.url()).searchParams.get('activity') ?? '').toBe(population);
       expect(new URL(page.url()).searchParams.get('outcome') ?? '').toBe(outcome);
@@ -109,8 +123,8 @@ test('controlled success, tool error, timeout, healthy isolation and recovery li
     }
     await row.getByRole('button', { name: 'Show activity trend for Investigation calculator', exact: true }).click();
     const region = page.getByRole('region', { name: 'Activity trend for Investigation calculator', exact: true });
-    await expect(region.getByRole('link', { name: 'Matching bucket attempts', exact: true })).toHaveText('4');
-    await region.getByRole('link', { name: 'Matching bucket failures', exact: true }).click();
+    await expect(region.getByRole('link', { name: /^Matching bucket attempts: / })).toHaveText('4');
+    await region.getByRole('link', { name: /^Matching bucket failures: / }).click();
     await expect(page.getByRole('row')).toHaveCount(3);
     expect(new URL(page.url()).searchParams.get('from')).toBe(from);
     expect(new URL(page.url()).searchParams.get('to')).toBe(to);
@@ -123,6 +137,8 @@ test('controlled success, tool error, timeout, healthy isolation and recovery li
       expect(response.status()).toBe(200);
       expect((await response.json()).records).toEqual([]);
     }
+    expect((await page.request.get(`/api/admin/audit?${query}&activity=all`)).status()).toBe(400);
+    expect((await page.request.get(`/api/admin/audit?${query}&activity=attempts&activity=failures`)).status()).toBe(400);
     let mutations = 0;
     page.on('request', request => { if (request.method() !== 'GET' && !request.url().includes('/api/auth/')) mutations++; });
     await page.getByRole('link', { name: 'Registration observability', exact: true }).click();
@@ -132,14 +148,16 @@ test('controlled success, tool error, timeout, healthy isolation and recovery li
     await page.getByRole('button', { name: 'Refresh details', exact: true }).click();
     await expect(page.getByRole('button', { name: 'Refresh details', exact: true })).toBeEnabled();
     expect(mutations).toBe(0);
-  } finally { await mode('valid'); await client.close(); }
+  } finally {
+    try { await mode('valid'); } finally { await cleanup(); }
+  }
 });
 
 test('rename and removal/recreation retain historical identity, exact filters and browser navigation', async ({ page }) => {
   const id = `linked_${Date.now()}`;
-  const { headers, input, registration, client } = await fixture(page, id);
+  const { headers, input, registration, client, cleanup } = await fixture(page, id);
   try { await client.callTool({ name: `${id}_calculate`, arguments: { operation: 'multiply', a: 3, b: 4 } }); }
-  finally { await client.close(); }
+  finally { await cleanup(); }
   const me = await (await page.request.get('/api/auth/me')).json();
   const query = new URLSearchParams({ upstreamId: registration.registrationId, from: new Date(Date.now() - 60000).toISOString(),
     to: new Date().toISOString(), userId: me.user.id, toolName: `${id}_calculate`, outcome: 'success' });
@@ -166,7 +184,7 @@ test('rename and removal/recreation retain historical identity, exact filters an
   await page.getByRole('link', { name: 'Registration observability', exact: true }).click();
   await expect(row).toContainText('Removed registration');
   await expect(page.getByRole('table')).not.toContainText(replacementId);
-  await row.getByRole('link', { name: 'Matching attributed attempts', exact: true }).click();
+  await row.getByRole('link', { name: /^Matching attributed attempts: / }).click();
   await expect(page.getByRole('row')).toHaveCount(2);
   await page.getByLabel('Exact public tool', { exact: true }).fill('unknown_tool');
   await page.getByRole('button', { name: 'Apply filters', exact: true }).click();
@@ -183,7 +201,7 @@ test('fixed links survive refresh, stale and empty reads, with keyboard trends a
   const query = new URLSearchParams({ upstreamId: server.registrationId, from: new Date(Date.now() - 3600000).toISOString(), to: new Date().toISOString() });
   await page.goto(`/admin/observability?${query}`);
   const row = page.getByRole('row').filter({ hasText: server.registrationId });
-  const link = row.getByRole('link', { name: 'Matching attributed attempts', exact: true });
+  const link = row.getByRole('link', { name: /^Matching attributed attempts: / });
   await expect(link).toBeVisible();
   const url = page.url(), target = await link.getAttribute('href');
   await row.getByRole('button', { name: 'Show activity trend for calculator', exact: true }).focus();
@@ -246,7 +264,7 @@ test('invalid investigation URLs issue no metrics reads and Back/Forward restore
   const { servers } = await (await page.request.get('/api/admin/servers')).json();
   let reads = 0;
   await page.route('**/api/admin/observability?**', route => { reads++; return route.continue(); });
-  for (const query of ['upstreamId=calculator', 'from=2026-10-20T00:00:00Z', 'bucket=', 'bucket=hour&bucket=day', 'toolName=%ZZ', 'page=1&page=2',
+  for (const query of ['upstreamId=calculator', 'from=2026-10-20T00:00:00Z', 'bucket=', 'bucket=hour&bucket=day', 'activity=all', 'toolName=%ZZ', 'page=1&page=2',
     'from=2026-10-01T00:00:00Z&to=2026-10-20T00:00:00Z']) {
     await page.goto(`/admin/observability?${query}`);
     await expect(page.getByRole('alert')).toBeVisible();
