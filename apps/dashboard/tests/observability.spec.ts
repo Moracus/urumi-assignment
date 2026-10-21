@@ -14,6 +14,13 @@ test('real registration metrics, sortable rows, presets and safe stale reads', a
   await page.getByRole('link', { name: 'Observability', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Observability', exact: true })).toBeVisible();
   await expect(page.getByRole('table')).toContainText('calculator');
+  await expect(page.getByRole('columnheader', { name: 'Average duration (ms)', exact: true })).toBeVisible();
+  await expect(page.getByRole('columnheader', { name: 'Approximate p95 (ms)', exact: true })).toBeVisible();
+  await expect(page.getByRole('columnheader', { name: 'Duration samples', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Show activity trend for calculator', exact: true }).click();
+  await expect(page.getByRole('table', { name: 'Activity trend for calculator', exact: true })).toBeVisible();
+  await expect(page.getByRole('columnheader', { name: 'Timeouts', exact: true }).last()).toBeVisible();
+  await page.getByRole('button', { name: 'Show activity trend for calculator', exact: true }).click();
   await expect(page.getByText('Effective window (UTC):', { exact: false })).toBeVisible();
   await page.getByRole('button', { name: 'Attributed attempts', exact: true }).click();
   await expect(page.getByRole('columnheader', { name: 'Attributed attempts' })).toHaveAttribute('aria-sort', 'ascending');
@@ -61,6 +68,10 @@ test('both authentication origins contribute once and members never request metr
   const observed = after.rows.find((row: { upstreamId: string }) => row.upstreamId === calculator.upstreamId);
   expect(observed.attempts - calculator.attempts).toBe(102);
   expect(observed.outcomes.success - calculator.outcomes.success).toBe(102);
+  expect(observed.durationSampleCount - calculator.durationSampleCount).toBe(102);
+  expect(observed.averageDurationMs).toBeGreaterThanOrEqual(0);
+  expect(observed.p95DurationMs).toBeGreaterThanOrEqual(0);
+  expect(observed.trend.reduce((sum: number, point: { attempts: number }) => sum + point.attempts, 0)).toBe(observed.attempts);
   await page.getByRole('link', { name: 'Observability', exact: true }).click();
   const row = page.getByRole('row').filter({ hasText: calculator.upstreamId });
   await expect(row).toContainText(String(observed.attempts));
@@ -212,9 +223,15 @@ test('runtime contract rejects arrays in enum fields', async ({ page }) => {
   const response = await page.request.get('/api/admin/observability');
   expect(response.status()).toBe(200);
   const report = await response.json();
-  for (const field of ['kind', 'status']) {
+  for (const field of ['kind', 'status', 'duration', 'sampleCount', 'bucket', 'trend', 'trendBoundary', 'trendCount']) {
     const invalid = structuredClone(report);
     if (field === 'kind') invalid.rows[0].kind = ['registration'];
+    else if (field === 'duration') invalid.rows[0].averageDurationMs = -1;
+    else if (field === 'sampleCount') invalid.rows[0].durationSampleCount = '0';
+    else if (field === 'bucket') invalid.bucket = ['hour'];
+    else if (field === 'trend') invalid.rows[0].trend = [];
+    else if (field === 'trendBoundary') invalid.rows[0].trend[0].from = 'invalid';
+    else if (field === 'trendCount') invalid.rows[0].trend[0].timeoutCount = -1;
     else {
       const current = invalid.rows.find((row: { current: unknown }) => row.current !== null);
       expect(current).toBeTruthy();
@@ -226,4 +243,46 @@ test('runtime contract rejects arrays in enum fields', async ({ page }) => {
     await expect(page.getByRole('table')).toHaveCount(0);
     await page.unroute('**/api/admin/observability?**');
   }
+});
+
+
+test('duration and UTC trend tables support keyboard scrolling at target widths', async ({ page }, testInfo) => {
+  await login(page);
+  const me = await (await page.request.get('/api/auth/me')).json();
+  const existing = await (await page.request.get('/api/admin/servers/calculator')).json();
+  const fixtureId = `idle_${Date.now()}`;
+  const created = await page.request.post('/api/admin/servers', {
+    headers: { Origin: 'http://localhost:5174', 'X-CSRF-Token': me.csrfToken },
+    data: { serverId: fixtureId, displayName: 'Idle duration fixture', url: new URL(`/controlled/${fixtureId}`, existing.server.url).href,
+      transport: 'streamable-http', enabled: false, authentication: { type: 'none' } },
+  });
+  expect(created.status()).toBe(201);
+  const report = await (await page.request.get('/api/admin/observability?preset=hour')).json();
+  const idle = report.rows.find((row: { current: { displayName: string } | null }) => row.current?.displayName === 'Idle duration fixture');
+  expect(idle.durationSampleCount).toBe(0);
+  expect(idle.averageDurationMs).toBeNull();
+  await page.goto('/admin/observability');
+  await page.getByLabel('Historical window').selectOption('hour');
+  const row = page.getByRole('row').filter({ hasText: idle.upstreamId });
+  await expect(row.getByRole('cell', { name: '—', exact: true })).toHaveCount(3);
+  const toggle = row.getByRole('button', { name: 'Show activity trend for Idle duration fixture', exact: true });
+  await toggle.focus();
+  await page.keyboard.press('Enter');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  const region = page.getByRole('region', { name: 'Activity trend for Idle duration fixture', exact: true });
+  await expect(region.getByRole('table')).toContainText('UTC start (inclusive)');
+  await expect(region.getByRole('row')).toHaveCount(idle.trend.length + 1);
+  for (const width of [360, 768, 1440]) {
+    await page.setViewportSize({ width, height: 900 });
+    await region.focus();
+    await expect(region).toBeFocused();
+    await page.keyboard.press('ArrowRight');
+    await expect.poll(() => region.evaluate(node => node.scrollLeft)).toBeGreaterThan(0);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath(`observability-${width}.png`), fullPage: true });
+  }
+  await page.getByLabel('Activity bucket').selectOption('hour');
+  await expect(page.getByText('Loading observability…')).toHaveCount(0);
+  await expect(region.getByRole('row')).toHaveCount(3);
+  expect((await page.request.delete(`/api/admin/servers/${fixtureId}`, { headers: { Origin: 'http://localhost:5174', 'X-CSRF-Token': me.csrfToken } })).status()).toBe(204);
 });

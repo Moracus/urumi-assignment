@@ -247,6 +247,9 @@ Resource names and default service URLs are fixed with the `urumi-` prefix; some
 
 ## Audit and observability
 
+Administrator observability also aggregates recorded execution-duration averages, approximate p95 and duration sample counts per durable registration, with separate timeout counts and bounded UTC activity buckets. A single MongoDB facet input feeds counts, durations and trends. Only success/tool_error execution durations enter the primary population; waiting for audit insertion is excluded. See [tool history and observability](../guides/tool-history.md#recorded-execution-durations-and-activity-trends-54) for formulas, query limits, MongoDB compatibility and coverage caveats.
+
+
 The default audit logger persists execution records through the existing MongoDB lifecycle. Records carry server-owned attempt identity, request ID, verified user/email snapshot, actual authentication origin, real gateway API-key ID only for bearer calls, stable registration document ID/name/display snapshot when known, public tool, UTC timestamp, duration and classified outcome. Outcomes distinguish success, valid MCP `isError`, unauthorized execution, not found, unavailable upstream, timeout and other upstream errors. Explicit dashboard-session identities have null key IDs. See [tool history](../guides/tool-history.md) for the contract.
 
 Audit records omit arguments, credentials, result bodies, internal URLs and stacks. Audit-write failure emits only a sanitized `audit_write_failed` event with attempt ID, preserves the already determined result/error, and never repeats upstream execution. There is no durable queue or backfill: storage outages can lose rows.

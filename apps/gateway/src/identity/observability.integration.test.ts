@@ -36,9 +36,9 @@ test("observability aggregates complete windows with lifecycle attribution and s
     upstreamName: "same_name", upstreamDisplayName: "Historical name", outcome, timestamp: "2026-10-20T00:00:00.000Z",
     authenticationOrigin: i % 2 ? "dashboard_session" : "gateway_api_key", toolName: "same_name_tool", durationMs: 1 }));
   await db.collection("tool_audit").insertMany([...rows,
-    { ...rows[0], attemptId: randomUUID(), upstreamId: null, upstreamName: "same_name", outcome: "success" },
-    { ...rows[0], attemptId: randomUUID(), upstreamId: null, upstreamName: null, upstreamDisplayName: null, outcome: "unauthenticated" },
-    { ...rows[0], attemptId: randomUUID(), timestamp: "2026-10-21T00:00:00.000Z" }]);
+    { ...rows[0], _id: new mongoose.Types.ObjectId(), attemptId: randomUUID(), upstreamId: null, upstreamName: "same_name", outcome: "success" },
+    { ...rows[0], _id: new mongoose.Types.ObjectId(), attemptId: randomUUID(), upstreamId: null, upstreamName: null, upstreamDisplayName: null, outcome: "unauthenticated" },
+    { ...rows[0], _id: new mongoose.Types.ObjectId(), attemptId: randomUUID(), timestamp: "2026-10-21T00:00:00.000Z" }]);
   const now = new Date();
   const replacement = await db.collection("upstream_registrations").insertOne({ serverId: "same_name", displayName: "Replacement",
     url: "http://unused.invalid/mcp", enabled: false, configurationRevision: 1, createdAt: now, updatedAt: now });
@@ -49,19 +49,78 @@ test("observability aggregates complete windows with lifecycle attribution and s
   assert.equal(data.from, "2026-10-20T00:00:00.000Z");
   const old = data.rows.find((row: { upstreamId: string }) => row.upstreamId === upstreamId);
   assert.equal(old.attempts, 105); assert.equal(old.failures, 4); assert.equal(old.errorRate, 4 / 105);
+  assert.equal(old.durationSampleCount, 102);
+  assert.equal(old.averageDurationMs, 1);
+  assert.equal(old.p95DurationMs, 1);
+  assert.equal(old.timeoutCount, 1);
+  assert.equal(data.bucket, "hour");
+  assert.equal(data.percentileMethod, "approximate");
+  assert.equal(old.trend.length, 24);
+  assert.equal(old.trend[0].from, "2026-10-20T00:00:00.000Z");
+  assert.equal(old.trend[0].to, "2026-10-20T01:00:00.000Z");
+  assert.equal(old.trend[0].attempts, 105);
+  assert.equal(old.trend[0].timeoutCount, 1);
+  assert.equal(old.trend[23].attempts, 0);
   assert.equal(old.current, null); assert.equal(old.outcomes.rejected, 1);
   assert.deepEqual(old.historicalNames, [{ name: "same_name", displayName: "Historical name" }]);
   const current = data.rows.find((row: { upstreamId: string }) => row.upstreamId === replacement.insertedId.toHexString());
+  assert.equal(current.durationSampleCount, 0); assert.equal(current.averageDurationMs, null); assert.equal(current.p95DurationMs, null);
+  assert.equal(current.timeoutCount, 0);
   assert.equal(current.attempts, 0); assert.equal(current.errorRate, null); assert.equal(current.current.status, "disabled");
   assert.equal(data.rows.find((row: { kind: string }) => row.kind === "legacy").attempts, 0);
   assert.equal(data.rows.find((row: { kind: string }) => row.kind === "unattributed").outcomes.unauthenticated, 1);
-  for (const query of ["preset=no", "preset=hour&preset=day", "limit=2", "upstreamId=null", "from=2026-10-01T00:00:00Z", "from=2026-10-21T00:00:00Z&to=2026-10-20T00:00:00Z"]) {
+  for (const query of ["bucket=", "bucket=minute", "bucket=hour&bucket=day", "preset=week&bucket=5minute", "preset=week&bucket=hour&limit=1", "preset=no", "preset=hour&preset=day", "limit=2", "upstreamId=null", "from=2026-10-01T00:00:00Z", "from=2026-10-21T00:00:00Z&to=2026-10-20T00:00:00Z"]) {
     assert.equal((await app.inject({ url: `/api/admin/observability?${query}`, headers: { cookie } })).statusCode, 400, query);
   }
   const filtered = (await app.inject({ url: `${url}&upstreamId=${upstreamId}`, headers: { cookie } })).json();
   assert.equal(filtered.rows.length, 1); assert.equal(filtered.rows[0].attempts, 105);
   const empty = (await app.inject({ url: "/api/admin/observability?from=2020-01-01T00:00:00Z&to=2020-01-02T00:00:00Z", headers: { cookie } })).json();
   assert.equal(empty.rows.length, 1); assert.equal(empty.rows[0].attempts, 0);
+  assert.equal(empty.rows[0].durationSampleCount, 0);
+  assert.equal(empty.rows[0].averageDurationMs, null);
+  assert.ok(empty.rows[0].trend.every((point: { attempts: number }) => point.attempts === 0));
+
+  // A known uniform population spans a rename and two exact UTC buckets.
+  // Large rejected/transport durations must not contaminate its mean or p95.
+  const population = Array.from({ length: 1000 }, (_, i) => ({ ...rows[0], _id: new mongoose.Types.ObjectId(), attemptId: randomUUID(),
+    upstreamName: i < 500 ? "old_name" : "new_name", durationMs: i + 1,
+    outcome: i < 500 ? "success" : "tool_error",
+    timestamp: i < 500 ? "2026-10-19T00:02:00.000Z" : "2026-10-19T00:05:00.000Z" }));
+  await db.collection("tool_audit").insertMany([...population,
+    ...["upstream_timeout", "upstream_error", "upstream_unavailable", "rejected", "unauthenticated", "unauthorized", "not_found"].map(outcome =>
+      ({ ...rows[0], _id: new mongoose.Types.ObjectId(), attemptId: randomUUID(), durationMs: 1e9, outcome, timestamp: "2026-10-19T00:10:00.000Z" })),
+    ...["2026-10-19T00:00:59.999Z", "2026-10-19T00:11:00.000Z"].map(timestamp =>
+      ({ ...rows[0], _id: new mongoose.Types.ObjectId(), attemptId: randomUUID(), durationMs: 1e9, timestamp })),
+  ]);
+  const durationResponse = await app.inject({ url: `/api/admin/observability?from=2026-10-19T00:01:00Z&to=2026-10-19T00:11:00Z&bucket=5minute&upstreamId=${upstreamId}`, headers: { cookie } });
+  assert.equal(durationResponse.statusCode, 200);
+  const measured = durationResponse.json().rows[0];
+  assert.equal(measured.durationSampleCount, 1000);
+  assert.equal(measured.averageDurationMs, 500.5);
+  assert.ok(Math.abs(measured.p95DurationMs - 950) <= 20, `approximate p95: ${measured.p95DurationMs}`);
+  assert.equal(measured.attempts, 1003);
+  assert.equal(measured.failures, 503);
+  assert.equal(measured.timeoutCount, 1);
+  assert.deepEqual(measured.trend.map((point: { from: string; to: string; attempts: number; failures: number; timeoutCount: number }) =>
+    [point.from, point.to, point.attempts, point.failures, point.timeoutCount]), [
+    ["2026-10-19T00:01:00.000Z", "2026-10-19T00:05:00.000Z", 500, 0, 0],
+    ["2026-10-19T00:05:00.000Z", "2026-10-19T00:10:00.000Z", 500, 500, 0],
+    ["2026-10-19T00:10:00.000Z", "2026-10-19T00:11:00.000Z", 3, 3, 1],
+  ]);
+  assert.equal(measured.trend[2].outcomes.rejected, 1);
+  // Timeout-only population reports no primary duration, even though durationMs exists.
+  const timeoutOnly = (await app.inject({ url: `/api/admin/observability?from=2026-10-19T00:10:00Z&to=2026-10-19T00:11:00Z&upstreamId=${upstreamId}`, headers: { cookie } })).json().rows[0];
+  assert.equal(timeoutOnly.durationSampleCount, 0);
+  assert.equal(timeoutOnly.averageDurationMs, null);
+  assert.equal(timeoutOnly.p95DurationMs, null);
+  assert.equal(timeoutOnly.timeoutCount, 1);
+  const absentRegistration = await app.inject({ url: `${url}&upstreamId=${new mongoose.Types.ObjectId().toHexString()}`, headers: { cookie } });
+  assert.equal(absentRegistration.statusCode, 200);
+  assert.deepEqual(absentRegistration.json().rows, []);
+  const excessiveBuckets = await app.inject({ url: "/api/admin/observability?from=2026-10-01T00:00:00Z&to=2026-10-08T00:00:00Z&bucket=5minute", headers: { cookie } });
+  assert.equal(excessiveBuckets.statusCode, 400);
+  assert.equal((await app.inject({ url: "/api/admin/observability?from=2026-10-01T00:00:00Z&to=2026-10-08T00:00:00Z&bucket=hour", headers: { cookie } })).json().rows[0].trend.length, 168);
+
 });
 
 test("current health requires the same durable instance and revision; query caps fail safely", async t => {
@@ -100,6 +159,10 @@ test("current health requires the same durable instance and revision; query caps
   const recreated = (await read()).json().rows[0];
   assert.notEqual(recreated.upstreamId, first.upstreamId);
   assert.equal(recreated.current.status, "disconnected");
+  await db.collection("upstream_registrations").insertMany(Array.from({ length: 80 }, (_, i) => ({ ...replacement,
+    _id: new mongoose.Types.ObjectId(), serverId: `bucket_cap_${i}`, url: `${origin}/bucket/${i}` })));
+  assert.equal((await app.inject({ url: "/api/admin/observability?preset=week&bucket=hour", headers })).statusCode, 503);
+  await db.collection("upstream_registrations").deleteMany({ serverId: /^bucket_cap_/ });
   await db.collection("upstream_registrations").insertMany(Array.from({ length: 500 }, (_, i) => ({ ...replacement,
     _id: new mongoose.Types.ObjectId(), serverId: `extra_${i}`, url: `${origin}/extra/${i}` })));
   const capped = await read();

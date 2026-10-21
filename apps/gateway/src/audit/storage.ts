@@ -10,6 +10,15 @@ export interface AuditFilters {
   to?: string;
 }
 
+const auditOutcomes: AuditRecord["outcome"][] = ["unauthenticated", "rejected", "success", "tool_error", "unauthorized",
+  "not_found", "upstream_error", "upstream_unavailable", "upstream_timeout"];
+interface WindowAggregation {
+  groups: { _id: { upstreamId: string | null; name: string | null; displayName: string | null; outcome: string }; count: number }[];
+  durations: { _id: string; durationSampleCount: number; averageDurationMs: number | null; p95: (number | null)[] }[];
+  trends: { _id: { upstreamId: string | null; name: string | null; displayName: string | null; bucket: number };
+    outcomes: Record<AuditRecord["outcome"], number> }[];
+}
+
 const auditSchema = new Schema<AuditRecord>({
   attemptId: { type: String, required: true },
   requestId: { type: String, required: true },
@@ -43,17 +52,42 @@ export async function createAuditStorage(connection: Connection) {
         upstreamId: record.upstreamId, upstreamName: record.upstreamName, upstreamDisplayName: record.upstreamDisplayName,
         toolName: record.toolName, timestamp: record.timestamp, durationMs: record.durationMs, outcome: record.outcome });
     },
-    async aggregateWindow(from: string, to: string, upstreamId?: string) {
-      // Group in MongoDB before imposing a response cap; no raw audit pages are loaded.
-      return records.aggregate<{
-        _id: { upstreamId: string | null; name: string | null; displayName: string | null; outcome: string };
-        count: number;
-      }>([
-        { $match: { timestamp: { $gte: from, $lt: to }, ...(upstreamId ? { upstreamId } : {}) } },
-        { $group: { _id: { upstreamId: { $ifNull: ["$upstreamId", null] }, name: { $ifNull: ["$upstreamName", null] },
-          displayName: { $ifNull: ["$upstreamDisplayName", null] }, outcome: "$outcome" }, count: { $sum: 1 } } },
-        { $limit: 4501 },
+    async aggregateWindow(from: string, to: string, bucketMs: number, upstreamId?: string) {
+      const match = { timestamp: { $gte: from, $lt: to }, ...(upstreamId ? { upstreamId } : {}) };
+      // Registration identity, rather than name snapshots, is the duration population.
+      const identity = { upstreamId: { $ifNull: ["$upstreamId", null] },
+        name: { $cond: ["$upstreamId", null, { $ifNull: ["$upstreamName", null] }] },
+        displayName: { $cond: ["$upstreamId", null, { $ifNull: ["$upstreamDisplayName", null] }] } };
+      const sample = { $cond: [{ $and: [{ $in: ["$outcome", ["success", "tool_error"]] },
+        { $isNumber: "$durationMs" }, { $gte: ["$durationMs", 0] }, { $lte: ["$durationMs", Number.MAX_VALUE] }] }, "$durationMs", null] };
+      // All facets consume the same matched audit stream, so totals and buckets agree
+      // even while new audit records are being inserted. Limits apply after grouping.
+      const [result] = await records.aggregate<WindowAggregation>([
+        { $match: match },
+        { $facet: {
+          groups: [
+            { $group: { _id: { upstreamId: { $ifNull: ["$upstreamId", null] }, name: { $ifNull: ["$upstreamName", null] },
+              displayName: { $ifNull: ["$upstreamDisplayName", null] }, outcome: "$outcome" }, count: { $sum: 1 } } },
+            { $limit: 4501 },
+          ],
+          durations: [
+            { $match: { upstreamId: { $type: "string" } } },
+            { $set: { sample } },
+            { $group: { _id: "$upstreamId", durationSampleCount: { $sum: { $cond: [{ $ne: ["$sample", null] }, 1, 0] } },
+              averageDurationMs: { $avg: "$sample" }, p95: { $percentile: { input: "$sample", p: [0.95], method: "approximate" } } } },
+            { $limit: 501 },
+          ],
+          trends: [
+            { $group: { _id: { ...identity, bucket: { $multiply: [
+              { $floor: { $divide: [{ $toLong: { $toDate: "$timestamp" } }, bucketMs] } }, bucketMs] } },
+              ...Object.fromEntries(auditOutcomes.map(outcome =>
+                [outcome, { $sum: { $cond: [{ $eq: ["$outcome", outcome] }, 1, 0] } }])) } },
+            { $project: { _id: 1, outcomes: Object.fromEntries(auditOutcomes.map(outcome => [outcome, `$${outcome}`])) } },
+            { $limit: 12001 },
+          ],
+        } },
       ]).option({ maxTimeMS: 5000, allowDiskUse: false });
+      return result ?? { groups: [], durations: [], trends: [] };
     },
     async page(page: number, limit: number, filters: AuditFilters = {}) {
       const query: QueryFilter<AuditRecord> = {};

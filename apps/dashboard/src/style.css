@@ -119,3 +119,13 @@ input[type="checkbox"] { width: 22px; min-height: 22px; justify-self: start; }
 .chat-composer p { margin: 0; color: var(--muted); }
 .chat-composer textarea { resize: vertical; min-height: 160px; }
 .chat-text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.7; }
+
+.observability-table { min-width: 1600px; }
+.observability-table td:first-child { min-width: 220px; }
+.observability-table td:nth-last-child(2) { min-width: 200px; }
+.observability-table td:last-child { min-width: 180px; }
+.activity-trend-table { min-width: 1900px; }
+.activity-trend-table th:first-child, .activity-trend-table td:nth-child(2) { min-width: 220px; white-space: nowrap; }
+.observability-table dl { margin: 0; }
+.observability-table dl > div { display: flex; justify-content: space-between; gap: 16px; margin-bottom: 8px; }
+.observability-table dd { margin: 0; }
