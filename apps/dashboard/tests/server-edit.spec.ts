@@ -14,6 +14,23 @@ test.beforeEach(async ({ request }) => {
   expect((await request.post('/api/__test/reset-login-budget')).status()).toBe(204);
 });
 
+test('keyboard editor entry and cancellation restore focus without changing the registration', async ({ page }) => {
+  await openServers(page);
+  const register = page.getByRole('button', { name: 'Register server', exact: true });
+  await register.focus(); await page.keyboard.press('Enter');
+  await expect(page.getByLabel('Server identifier', { exact: true })).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('region', { name: 'Server editor' })).toHaveCount(0);
+  await expect(register).toBeFocused();
+  await page.getByRole('button', { name: 'Inspect calculator', exact: true }).click();
+  const edit = page.getByRole('button', { name: 'Edit server', exact: true });
+  await edit.focus(); await page.keyboard.press('Enter');
+  await expect(page.getByLabel('Display name', { exact: true })).toBeFocused();
+  await page.getByRole('button', { name: 'Cancel editing', exact: true }).click();
+  await expect(edit).toBeFocused();
+  await expect(page.getByRole('heading', { name: 'calculator_calculate', exact: true })).toBeVisible();
+});
+
 test('one continuing administrator client follows dashboard registration, credential edits, disable, enable, refresh and removal', async ({ page }) => {
   const origin = await openServers(page);
   const me = await (await page.request.get('/api/auth/me')).json();
@@ -195,6 +212,8 @@ test('pending saves prevent duplicate actions and late responses cannot restore 
   await expect(page.getByRole('button', { name: 'Saving server…', exact: true })).toBeDisabled();
   await expect(page.getByRole('button', { name: 'Cancel editing' })).toBeDisabled();
   await expect(page.getByLabel('Endpoint', { exact: true })).toBeDisabled();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('region', { name: 'Server editor' })).toBeVisible();
   await page.getByRole('button', { name: 'Log out', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Log in', exact: true })).toBeVisible();
   release();

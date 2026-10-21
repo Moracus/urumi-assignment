@@ -86,6 +86,8 @@ test('removal confirms its impact, cancellation preserves registration, and a pe
     await expect(page.getByRole('button', { name: 'Refresh servers', exact: true })).toBeDisabled();
     await expect(page.getByRole('button', { name: 'Register server', exact: true })).toBeDisabled();
     await expect(page.getByRole('button', { name: 'Inspect calculator', exact: true })).toBeDisabled();
+    await page.keyboard.press('Escape');
+    await expect(dialog).toBeVisible();
     release();
     await expect(details).toHaveCount(0);
     await expect(page.getByRole('status').filter({ hasText: 'Server removed.' })).toBeVisible();

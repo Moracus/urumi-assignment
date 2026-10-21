@@ -5,11 +5,129 @@ async function openServers(page: Page) {
   await page.getByLabel('Email', { exact: true }).fill('admin@example.com');
   await page.getByLabel('Password', { exact: true }).fill('browser administrator password');
   await page.getByRole('button', { name: 'Log in', exact: true }).click();
-  await page.getByRole('link', { name: 'Servers', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
+  await page.goto('/admin/servers');
 }
 test.beforeEach(async ({ request }) => {
   expect((await request.post('/api/__test/reset-login-budget')).status()).toBe(204);
 });
+
+test('read refresh retains the last authorized list and catalog with explicit stale state without discovery', async ({ page }) => {
+  await openServers(page);
+  await page.getByRole('button', { name: 'Inspect calculator', exact: true }).click();
+  const details = page.getByRole('region', { name: 'Server details' });
+  const catalog = details.getByRole('heading', { name: 'calculator_calculate', exact: true });
+  await expect(catalog).toBeVisible();
+  let mutations = 0;
+  page.on('request', request => {
+    if (request.url().includes('/api/admin/servers') && request.method() !== 'GET') mutations++;
+  });
+  await page.route('**/api/admin/servers/calculator/tools', route => route.fulfill({ status: 503, json: { error: 'private diagnostic' } }));
+  await details.getByRole('button', { name: 'Refresh details', exact: true }).click();
+  await expect(details.getByRole('alert')).toHaveText('Service unavailable. Try again later.');
+  await expect(catalog).toBeVisible();
+  await expect(details.getByRole('status').filter({ hasText: 'Stale data' })).toBeVisible();
+  await expect(details.getByRole('button', { name: 'Disable server', exact: true })).toBeDisabled();
+  await expect(details.getByRole('button', { name: 'Edit server', exact: true })).toBeDisabled();
+  await page.route('**/api/admin/servers', route => route.fulfill({ status: 503, json: {} }));
+  await page.getByRole('button', { name: 'Refresh servers', exact: true }).click();
+  await expect(page.getByRole('region', { name: 'Registered servers', exact: true })).toContainText('calculator');
+  await expect(catalog).toBeVisible();
+  await page.unroute('**/api/admin/servers/calculator/tools');
+  await details.getByRole('button', { name: 'Retry details', exact: true }).click();
+  await expect(details.getByRole('status').filter({ hasText: 'Stale data' })).toHaveCount(0);
+  await expect(details.getByRole('button', { name: 'Disable server', exact: true })).toBeEnabled();
+  expect(mutations).toBe(0);
+});
+
+test('permission loss clears retained inspection and discards delayed administrator reads', async ({ page, playwright }) => {
+  await openServers(page);
+  const admin = await playwright.request.newContext({ baseURL: 'http://localhost:5174' });
+  let release = () => {};
+  try {
+    const login = await admin.post('/api/auth/login', { headers: { Origin: 'http://localhost:5174' },
+      data: { email: 'admin@example.com', password: 'browser administrator password' } });
+    const { csrfToken } = await login.json();
+    const headers = { Origin: 'http://localhost:5174', 'X-CSRF-Token': csrfToken };
+    const email = 'server-permission@example.com';
+    const created = await admin.post('/api/admin/users', { headers, data: { email, password: 'assigned server password' } });
+    expect(created.status()).toBe(201);
+    const { user } = await created.json();
+    await page.getByRole('button', { name: 'Log out', exact: true }).click();
+    await page.getByLabel('Email', { exact: true }).fill(email);
+    await page.getByLabel('Password', { exact: true }).fill('assigned server password');
+    await page.getByRole('button', { name: 'Log in', exact: true }).click();
+    await page.getByLabel('Current password').fill('assigned server password');
+    await page.getByLabel('New password').fill('replacement server password');
+    await page.getByRole('button', { name: 'Replace password', exact: true }).click();
+    expect((await admin.patch(`/api/admin/users/${user.id}`, { headers, data: { role: 'admin' } })).status()).toBe(200);
+    await page.getByLabel('Email', { exact: true }).fill(email);
+    await page.getByLabel('Password', { exact: true }).fill('replacement server password');
+    await page.getByRole('button', { name: 'Log in', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Dashboard', exact: true })).toBeVisible();
+    await page.goto('/admin/servers');
+    await page.getByRole('button', { name: 'Inspect calculator', exact: true }).click();
+    const details = page.getByRole('region', { name: 'Server details' });
+    await expect(details.getByRole('heading', { name: 'calculator_calculate', exact: true })).toBeVisible();
+    let started!: () => void;
+    const received = new Promise<void>(resolve => { started = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    await page.route('**/api/admin/servers/calculator/tools', async route => {
+      const response = await route.fetch(); started(); await gate; await route.fulfill({ response });
+    });
+    await details.getByRole('button', { name: 'Refresh details', exact: true }).click();
+    await received;
+    await expect(details.getByRole('status').filter({ hasText: 'Stale data' })).toBeVisible();
+    expect((await admin.patch(`/api/admin/users/${user.id}`, { headers, data: { role: 'member' } })).status()).toBe(200);
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    await expect(page.getByRole('heading', { name: 'Access denied', exact: true })).toBeVisible();
+    const delivered = page.waitForResponse(response => response.url().endsWith('/calculator/tools'));
+    release(); await delivered;
+    await expect(details).toHaveCount(0);
+    await expect(page.getByRole('region', { name: 'Registered servers', exact: true })).toHaveCount(0);
+    expect((await page.request.get('/api/admin/servers/calculator/tools')).status()).toBe(403);
+  } finally { release(); await admin.dispose(); }
+});
+
+for (const width of [360, 768, 1440]) {
+  test(`server inspection and editing fit ${width}px with complete long schemas and keyboard confirmations`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width, height: 1000 });
+    await openServers(page);
+    const longValue = 'LongCatalogValue'.repeat(30);
+    const { tools } = await (await page.request.get('/api/admin/servers/calculator/tools')).json();
+    // Supplement real discovery with a catalog containing unusually long data.
+    const catalog = tools.map((tool: { name: string; description?: string; inputSchema: object }) => tool.name === 'calculator_calculate'
+      ? { ...tool, description: `Multiline description\n${longValue}`, inputSchema: { ...tool.inputSchema,
+        $defs: { nested: { type: 'object', properties: { [longValue]: { type: 'string', enum: [longValue] } } } } } } : tool);
+    await page.route('**/api/admin/servers/calculator/tools', route => route.fulfill({ json: { tools: catalog } }));
+    await page.getByRole('button', { name: 'Inspect calculator', exact: true }).click();
+    const details = page.getByRole('region', { name: 'Server details' });
+    const schema = details.getByRole('region', { name: 'Input schema for calculator_calculate', exact: true });
+    await expect(schema).toHaveText(JSON.stringify(catalog.find((tool: { name: string }) => tool.name === 'calculator_calculate').inputSchema, null, 2));
+    await schema.focus(); await page.keyboard.press('ArrowRight');
+    await expect.poll(() => schema.evaluate(element => element.scrollLeft)).toBeGreaterThan(0);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath(`inspection-${width}.png`), fullPage: true });
+    await details.getByRole('button', { name: 'Edit server', exact: true }).click();
+    await expect(page.getByLabel('Display name', { exact: true })).toBeFocused();
+    await page.getByLabel('Replace authentication').check();
+    await page.getByLabel('Authentication mode').selectOption('header');
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath(`editing-${width}.png`), fullPage: true });
+    await page.keyboard.press('Escape');
+    const disable = details.getByRole('button', { name: 'Disable server', exact: true });
+    await disable.focus(); await page.keyboard.press('Enter');
+    const dialog = page.getByRole('dialog', { name: 'Disable server confirmation' });
+    const cancel = dialog.getByRole('button', { name: 'Cancel', exact: true });
+    await expect(cancel).toBeFocused();
+    await page.keyboard.press('Tab');
+    await expect(dialog.getByRole('button', { name: 'Confirm disable', exact: true })).toBeFocused();
+    await page.keyboard.press('Shift+Tab'); await expect(cancel).toBeFocused();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath(`confirmation-${width}.png`) });
+    await page.keyboard.press('Escape'); await expect(disable).toBeFocused();
+  });
+}
 
 test('inspects real discovered catalogs, preserves schemas and renders hostile descriptions as text', async ({ page }) => {
   await openServers(page);
@@ -134,7 +252,7 @@ test('detail failures retry, pending refresh is bounded in the UI, and logout di
     const response = await route.fetch(); await delay; await route.fulfill({ response });
   });
   await details.getByRole('button', { name: 'Refresh details', exact: true }).click();
-  await expect(page.getByText('Loading server details…')).toBeVisible();
+  await expect(details.getByText('Refreshing data…')).toBeVisible();
   await page.getByRole('button', { name: 'Log out', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Log in', exact: true })).toBeVisible();
   finish();

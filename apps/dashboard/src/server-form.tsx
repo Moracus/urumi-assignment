@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { ApiError } from './api.js';
 
 interface InitialServer { serverId: string; displayName: string; url: string }
@@ -37,6 +37,19 @@ export function ServerForm({ initial, save, close }: {
   const [headerName, setHeaderName] = useState('');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
+  const formRef = useRef<HTMLFormElement>(null);
+  const previousFocus = useRef(document.activeElement);
+  useEffect(() => {
+    const form = formRef.current;
+    form?.querySelector<HTMLInputElement>('input:not(:disabled)')?.focus();
+    const previous = previousFocus.current;
+    return () => { queueMicrotask(() => {
+      // Strict Mode replays effects while the form remains mounted.
+      if (form?.isConnected) return;
+      if (previous instanceof HTMLElement && previous.isConnected && !previous.matches(':disabled')) previous.focus();
+      else document.getElementById('main-content')?.focus();
+    }); };
+  }, []);
   const authenticationIncluded = !initial || replace;
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -66,9 +79,11 @@ export function ServerForm({ initial, save, close }: {
         : error instanceof Error ? error.message : 'Unable to save. Try again.');
     } finally { setPending(false); }
   }
-  return <section aria-label="Server editor"><h2>{initial ? 'Edit server' : 'Register server'}</h2>
+  return <section aria-label="Server editor" onKeyDown={event => {
+    if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); if (!pending) close(); }
+  }}><h2>{initial ? 'Edit server' : 'Register server'}</h2>
     <p>Streamable HTTP only. The identifier is the immutable public tool namespace. New registrations are enabled.</p>
-    <form onSubmit={event => void submit(event)}>
+    <form className="access-form" ref={formRef} aria-busy={pending} onSubmit={event => void submit(event)}>
       <fieldset disabled={pending}>
         <label>Server identifier<input required maxLength={100} pattern="[a-z][a-z0-9_\x2d]*" value={id} disabled={!!initial} onChange={event => setId(event.target.value)} /></label>
         <label>Display name<input required maxLength={200} value={name} onChange={event => setName(event.target.value)} /></label>
@@ -94,6 +109,6 @@ export function ServerForm({ initial, save, close }: {
       <button disabled={pending} type="button" onClick={close}>Cancel editing</button>
     </form>
     {pending && <p role="status">Saving configuration and attempting discovery…</p>}
-    {error && <p role="alert">{error} If the outcome is uncertain, inspect the registration before retrying.</p>}
+    {error && <p role="alert">{error} The save may have succeeded if its response was lost. Cancel editing and inspect the registration before retrying. No save is automatically replayed.</p>}
   </section>;
 }
